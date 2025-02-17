@@ -2,18 +2,27 @@
 import os
 import sys
 sys.path.append('../')
-import numpy as np
-import torch
-from datasets import load_dataset
-from utils import get_entropy, load_model_from_tl_name, filter_entropy_activation_df, get_entropy_activation_df, get_pile_unigram_distribution
-import neel.utils as nutils
-import transformer_lens.utils as utils
-import tqdm
 import pathlib
-import pandas as pd
+
 import hydra
-from omegaconf import DictConfig, OmegaConf
+import neel.utils as nutils
+import numpy as np
+import pandas as pd
+import torch
+import tqdm
+import transformer_lens.utils as utils
+from datasets import load_dataset
+from omegaconf import DictConfig
 from torch.nn.functional import kl_div
+
+from neuron_analyzer import settings
+from neuron_analyzer.utils import (
+    filter_entropy_activation_df,
+    get_entropy,
+    get_entropy_activation_df,
+    get_pile_unigram_distribution,
+    load_model_from_tl_name,
+)
 
 
 def adjust_vectors_3dim(v, u, target_values):
@@ -42,7 +51,7 @@ def mean_ablate_components(components_to_ablate=None,
                             k=10,
                             device='mps',
                             chunk_size=20):
-    
+
     # sample a set of random batch indices
     random_sequence_indices = np.random.choice(entropy_df.batch.unique(), k, replace=False)
 
@@ -60,7 +69,7 @@ def mean_ablate_components(components_to_ablate=None,
 
     unigram_direction_vocab = unigram_distrib.log() - unigram_distrib.log().mean()
     unigram_direction_vocab /= unigram_direction_vocab.norm()
-    
+
     # get neuron indices
     neuron_indices = [int(neuron_name.split('.')[1]) for neuron_name in components_to_ablate]
 
@@ -78,7 +87,7 @@ def mean_ablate_components(components_to_ablate=None,
         logprobs = logits[0, :, :].log_softmax(dim=-1)
 
         res_stream = cache[utils.get_act_name("resid_post", layer_idx)][0]
-        
+
         # get the entropy_df entries for the current sequence
         rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
         assert len(rows) == len(tok_seq), f'len(rows) = {len(rows)}, len(tok_seq) = {len(tok_seq)}'
@@ -186,16 +195,12 @@ def mean_ablate_components(components_to_ablate=None,
             df_to_append[f'kl_divergence_after'] = kl_divergence_after[i]
             df_to_append[f'kl_divergence_after_frozen_unigram'] = kl_divergence_after_frozen_unigram[i]
 
-            if final_df is None:
-                final_df = df_to_append
-            else:
-                final_df = pd.concat([final_df, df_to_append])
+            final_df = df_to_append if final_df is None else pd.concat([final_df, df_to_append])
 
         results[batch_n] = final_df
         final_df = None
 
         pbar.update(1)
-    
     return results
 
 

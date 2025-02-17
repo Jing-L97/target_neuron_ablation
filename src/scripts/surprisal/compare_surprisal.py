@@ -22,7 +22,6 @@ class NeuronAblator:
 
     def __init__(self, model: GPTNeoXForCausalLM, config: AblationConfig) -> None:
         """Initialize ablator with model and config.
-        
         Args:
             model: The transformer model
             config: Ablation configuration
@@ -37,7 +36,6 @@ class NeuronAblator:
         """Set up forward hooks for neuron ablation."""
         def ablation_hook(module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
             """Forward hook to zero out specified neurons.
-            
             Args:
                 module: The PyTorch module
                 input_tensor: Input tensor tuple
