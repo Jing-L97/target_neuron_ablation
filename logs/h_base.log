@@ -1,0 +1,159 @@
+2025-02-17 10:32:47,013 - INFO - Generated 154 checkpoint steps
+2025-02-17 10:32:47,043 - INFO - Processing step 0
+2025-02-17 10:32:47,043 - INFO - Loading model for step 0
+/home/jliu/.conda/envs/vllm/lib/python3.10/site-packages/huggingface_hub/file_download.py:795: FutureWarning: `resume_download` is deprecated and will be removed in version 1.0.0. Downloads always resume when possible. If you want to force a new download, use `force_download=True`.
+  warnings.warn(
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:33:31,623 - INFO - Processing step 1
+2025-02-17 10:33:31,623 - INFO - Loading model for step 1
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:34:16,607 - INFO - Processing step 2
+2025-02-17 10:34:16,607 - INFO - Loading model for step 2
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:35:03,462 - INFO - Processing step 4
+2025-02-17 10:35:03,463 - INFO - Loading model for step 4
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:35:50,849 - INFO - Processing step 8
+2025-02-17 10:35:50,849 - INFO - Loading model for step 8
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:36:47,885 - INFO - Processing step 16
+2025-02-17 10:36:47,886 - INFO - Loading model for step 16
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:37:49,080 - INFO - Processing step 32
+2025-02-17 10:37:49,080 - INFO - Loading model for step 32
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:38:40,441 - INFO - Processing step 64
+2025-02-17 10:38:40,441 - INFO - Loading model for step 64
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:39:28,483 - INFO - Processing step 128
+2025-02-17 10:39:28,483 - INFO - Loading model for step 128
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:40:21,824 - INFO - Processing step 256
+2025-02-17 10:40:21,825 - INFO - Loading model for step 256
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:41:12,423 - INFO - Processing step 512
+2025-02-17 10:41:12,424 - INFO - Loading model for step 512
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:41:59,593 - INFO - Processing step 1000
+2025-02-17 10:41:59,594 - INFO - Loading model for step 1000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:42:55,730 - INFO - Processing step 2000
+2025-02-17 10:42:55,731 - INFO - Loading model for step 2000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:43:47,478 - INFO - Processing step 3000
+2025-02-17 10:43:47,479 - INFO - Loading model for step 3000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:44:49,414 - INFO - Processing step 4000
+2025-02-17 10:44:49,414 - INFO - Loading model for step 4000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:45:43,851 - INFO - Processing step 5000
+2025-02-17 10:45:43,851 - INFO - Loading model for step 5000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:46:30,555 - INFO - Processing step 6000
+2025-02-17 10:46:30,555 - INFO - Loading model for step 6000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:47:21,924 - INFO - Processing step 7000
+2025-02-17 10:47:21,925 - INFO - Loading model for step 7000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:48:05,706 - INFO - Processing step 8000
+2025-02-17 10:48:05,706 - INFO - Loading model for step 8000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:48:49,733 - INFO - Processing step 9000
+2025-02-17 10:48:49,733 - INFO - Loading model for step 9000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:49:47,063 - INFO - Processing step 10000
+2025-02-17 10:49:47,063 - INFO - Loading model for step 10000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:50:44,222 - INFO - Processing step 11000
+2025-02-17 10:50:44,222 - INFO - Loading model for step 11000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:51:35,927 - INFO - Processing step 12000
+2025-02-17 10:51:35,927 - INFO - Loading model for step 12000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:52:20,034 - INFO - Processing step 13000
+2025-02-17 10:52:20,034 - INFO - Loading model for step 13000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:53:14,143 - INFO - Processing step 14000
+2025-02-17 10:53:14,143 - INFO - Loading model for step 14000
+2025-02-17 10:53:28,303 - ERROR - Error loading model for step 14000: (ReadTimeoutError("HTTPSConnectionPool(host='huggingface.co', port=443): Read timed out. (read timeout=10)"), '(Request ID: 36fa98b3-b9af-4942-8ec1-10bc5cf97479)')
+2025-02-17 10:53:28,303 - ERROR - Error processing step 14000: (ReadTimeoutError("HTTPSConnectionPool(host='huggingface.co', port=443): Read timed out. (read timeout=10)"), '(Request ID: 36fa98b3-b9af-4942-8ec1-10bc5cf97479)')
+2025-02-17 10:53:28,303 - INFO - Processing step 15000
+2025-02-17 10:53:28,303 - INFO - Loading model for step 15000
+2025-02-17 10:53:38,471 - ERROR - Error loading model for step 15000: (ReadTimeoutError("HTTPSConnectionPool(host='huggingface.co', port=443): Read timed out. (read timeout=10)"), '(Request ID: 92a5f4d6-58de-4b4a-92d9-30031f689a71)')
+2025-02-17 10:53:38,471 - ERROR - Error processing step 15000: (ReadTimeoutError("HTTPSConnectionPool(host='huggingface.co', port=443): Read timed out. (read timeout=10)"), '(Request ID: 92a5f4d6-58de-4b4a-92d9-30031f689a71)')
+2025-02-17 10:53:38,471 - INFO - Processing step 16000
+2025-02-17 10:53:38,471 - INFO - Loading model for step 16000
+2025-02-17 10:53:48,644 - ERROR - Error loading model for step 16000: (ReadTimeoutError("HTTPSConnectionPool(host='huggingface.co', port=443): Read timed out. (read timeout=10)"), '(Request ID: c03979bb-ff89-4787-8277-dc085fa0c34a)')
+2025-02-17 10:53:48,644 - ERROR - Error processing step 16000: (ReadTimeoutError("HTTPSConnectionPool(host='huggingface.co', port=443): Read timed out. (read timeout=10)"), '(Request ID: c03979bb-ff89-4787-8277-dc085fa0c34a)')
+2025-02-17 10:53:48,644 - INFO - Processing step 17000
+2025-02-17 10:53:48,644 - INFO - Loading model for step 17000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:54:47,744 - INFO - Processing step 18000
+2025-02-17 10:54:47,744 - INFO - Loading model for step 18000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:55:45,308 - INFO - Processing step 19000
+2025-02-17 10:55:45,309 - INFO - Loading model for step 19000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:56:35,208 - INFO - Processing step 20000
+2025-02-17 10:56:35,209 - INFO - Loading model for step 20000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:57:32,893 - INFO - Processing step 21000
+2025-02-17 10:57:32,893 - INFO - Loading model for step 21000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:58:24,247 - INFO - Processing step 22000
+2025-02-17 10:58:24,248 - INFO - Loading model for step 22000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 10:59:26,942 - INFO - Processing step 23000
+2025-02-17 10:59:26,942 - INFO - Loading model for step 23000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:00:23,285 - INFO - Processing step 24000
+2025-02-17 11:00:23,286 - INFO - Loading model for step 24000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:01:08,509 - INFO - Processing step 25000
+2025-02-17 11:01:08,510 - INFO - Loading model for step 25000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:02:05,153 - INFO - Processing step 26000
+2025-02-17 11:02:05,153 - INFO - Loading model for step 26000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:03:00,103 - INFO - Processing step 27000
+2025-02-17 11:03:00,104 - INFO - Loading model for step 27000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:03:52,896 - INFO - Processing step 28000
+2025-02-17 11:03:52,896 - INFO - Loading model for step 28000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:04:43,901 - INFO - Processing step 29000
+2025-02-17 11:04:43,901 - INFO - Loading model for step 29000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:05:28,392 - INFO - Processing step 30000
+2025-02-17 11:05:28,392 - INFO - Loading model for step 30000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:06:27,893 - INFO - Processing step 31000
+2025-02-17 11:06:27,893 - INFO - Loading model for step 31000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:07:31,593 - INFO - Processing step 32000
+2025-02-17 11:07:31,593 - INFO - Loading model for step 32000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:08:35,501 - INFO - Processing step 33000
+2025-02-17 11:08:35,502 - INFO - Loading model for step 33000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:09:26,036 - INFO - Processing step 34000
+2025-02-17 11:09:26,036 - INFO - Loading model for step 34000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:10:23,861 - INFO - Processing step 35000
+2025-02-17 11:10:23,861 - INFO - Loading model for step 35000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:11:11,938 - INFO - Processing step 36000
+2025-02-17 11:11:11,939 - INFO - Loading model for step 36000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:12:10,280 - INFO - Processing step 37000
+2025-02-17 11:12:10,280 - INFO - Loading model for step 37000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:13:13,989 - INFO - Processing step 38000
+2025-02-17 11:13:13,989 - INFO - Loading model for step 38000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:14:16,909 - INFO - Processing step 39000
+2025-02-17 11:14:16,909 - INFO - Loading model for step 39000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
+2025-02-17 11:15:19,742 - INFO - Processing step 40000
+2025-02-17 11:15:19,742 - INFO - Loading model for step 40000
+Special tokens have been added in the vocabulary, make sure the associated word embeddings are fine-tuned or trained.
