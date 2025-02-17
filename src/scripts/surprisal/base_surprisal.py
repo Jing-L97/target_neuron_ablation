@@ -21,18 +21,6 @@ def parse_args() -> argparse.Namespace:
         )
 
     parser.add_argument(
-        "--model_cache_path", type=Path,
-        default="pretrained", 
-        help="Relative path to the model directory"
-        )
-
-    parser.add_argument(
-        "-o","--out_dir", type=Path,
-        default="surprisal",
-        help="Relative out directory to save the results"
-        )
-
-    parser.add_argument(
         "-m","--model_name", type=str,
         default="EleutherAI/pythia-70m-deduped",
         help="Target model name"
@@ -60,7 +48,7 @@ def main() -> None:
     steps_config = StepConfig()
 
     # Initialize extractor
-    model_cache_dir = settings.PATH.model_dir/args.model_cache_path/args.model_name
+    model_cache_dir = settings.PATH.model_dir/args.model_name
     extractor = StepSurprisalExtractor(
         steps_config,
         model_name = args.model_name,
@@ -72,13 +60,13 @@ def main() -> None:
         results_df = extractor.analyze_steps(contexts=contexts, target_words=target_words, use_bos_only=True)
         # Save results even if some checkpoints failed
         if not results_df.empty:
-            result_folder = settings.PATH.result_dir/args.out_dir/"base"
-            result_folder.mkdir(parents=True,exist_ok=True)
+            result_folder = settings.PATH.result_dir/"surprisal"/"base"
             if args.debug:
-                out_path =result_folder/f"{model_cache_dir.name}.debug"
+                out_path =result_folder/f"{args.model_name}.debug"
+                out_path.parent.mkdir(parents=True, exist_ok=True)
             else:
-                out_path = result_folder/f"{model_cache_dir.name}.csv"
-
+                out_path = result_folder/f"{args.model_name}.csv"
+                out_path.parent.mkdir(parents=True, exist_ok=True)
             results_df.to_csv(out_path, index=False)
             logger.info(f"Results saved to: {out_path}")
             logger.info(f"Processed {len(results_df['step'].unique())} checkpoints successfully")

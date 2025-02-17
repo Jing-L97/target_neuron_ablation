@@ -16,7 +16,7 @@ from omegaconf import DictConfig
 from torch.nn.functional import kl_div
 
 from neuron_analyzer import settings
-from neuron_analyzer.utils import (
+from neuron_analyzer.ablations import (
     filter_entropy_activation_df,
     get_entropy,
     get_entropy_activation_df,
@@ -204,7 +204,7 @@ def mean_ablate_components(components_to_ablate=None,
     return results
 
 
-@hydra.main(config_path='./conf', config_name='config_unigram_ablations')
+@hydra.main(config_path=str(settings.PATH.config_dir), config_name='config_unigram_ablations',version_base=None)
 def run_and_store_ablation_results(args: DictConfig):
 
     torch.manual_seed(args.seed)
@@ -212,15 +212,15 @@ def run_and_store_ablation_results(args: DictConfig):
     torch.set_grad_enabled(False)
 
     os.chdir(args.chdir)
-    save_path = f'./{args.output_dir}/{args.model}/unigram/{args.dataset.replace("/","_")}_{args.data_range_start}-{args.data_range_end}'
+    save_path = settings.PATH.result_dir/args.output_dir/"unigram"/args.model/str(args.data_range_end)
 
     # check if save_path exists, if not create it
     pathlib.Path(save_path).mkdir(parents=True, exist_ok=True)
 
-    with open(args.hf_token_path, 'r') as f:
+    with open(settings.PATH.dataset_root/'src'/args.hf_token_path, 'r') as f:
         hf_token = f.read()
 
-    model, tokenizer = load_model_from_tl_name(args.model, args.device, args.transformers_cache_dir, hf_token=hf_token)
+    model, tokenizer = load_model_from_tl_name(args.model, args.device,step=args.step, cache_dir=settings.PATH.model_dir, hf_token=hf_token)
     model = model.to(args.device)
 
     # Set the model in evaluation mode
@@ -248,10 +248,10 @@ def run_and_store_ablation_results(args: DictConfig):
 
     if 'pythia' in args.model:
         print('loading unigram distribution for pythia...')
-        unigram_distrib = get_pile_unigram_distribution(device=args.device, file_path='../datasets/pythia-unigrams.npy')
+        unigram_distrib = get_pile_unigram_distribution(device=args.device, file_path=settings.PATH.dataset_root/'src/pythia-unigrams.npy')
     elif 'gpt' in args.model:
         print('loading unigram distribution for gpt2...')
-        unigram_distrib = get_pile_unigram_distribution(device=args.device, file_path='../datasets/gpt2-small-unigrams_openwebtext-2M_rows_500000.npy', pad_to_match_W_U=False)
+        unigram_distrib = get_pile_unigram_distribution(device=args.device, file_path=settings.PATH.dataset_root/'src/gpt2-small-unigrams_openwebtext-2M_rows_500000.npy', pad_to_match_W_U=False)
     else:
         raise Exception(f'No unigram distribution for {args.model}')
 

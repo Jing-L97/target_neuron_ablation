@@ -67,6 +67,14 @@ class _MyPathSettings:
     def result_dir(self) -> _Path:
         return self.DATA_DIR / "results"
 
+    @property
+    def script_dir(self) -> _Path:
+        return self.DATA_DIR / "target_neuron_ablation"
+    
+    @property
+    def config_dir(self) -> _Path:
+        return self.DATA_DIR / "target_neuron_ablation"/ "experiments" / "conf"
+
 
 
 #######################################################

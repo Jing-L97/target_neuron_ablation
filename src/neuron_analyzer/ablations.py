@@ -1,28 +1,29 @@
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"  
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
-import numpy as np
-import torch
-import einops
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import transformer_lens
-from transformer_lens import HookedTransformer, ActivationCache
-import transformer_lens.utils as tl_utils
-import re
-import pickle
-import datasets
-from datasets import load_dataset
-import neel.utils as nutils
-from typing import List
-import tqdm
 import math
-from datasets import Dataset
+import pickle
+import re
+from collections import Counter
+from functools import partial
+from pathlib import Path
+from typing import List
+
+import datasets
+import einops
+import neel.utils as nutils
+import numpy as np
 import pandas as pd
 import plotly.express as px
-from functools import partial
 import scipy.stats
+import torch
+import tqdm
+import transformer_lens
+import transformer_lens.utils as tl_utils
+from datasets import Dataset, load_dataset
 from torch.nn.functional import kl_div
-from collections import Counter
+from transformer_lens import ActivationCache, HookedTransformer
+from transformers import AutoModelForCausalLM, AutoTokenizer, GPTNeoXForCausalLM
 
 
 def neuron_str_to_neuron(input_str):
@@ -717,7 +718,7 @@ def tl_name_to_hf_name(model_name):
     return hf_model_name
 
 
-def load_model_from_tl_name(model_name, device='cuda', cache_dir=None, hf_token=None): 
+def load_model_from_tl_name1(model_name, device='cuda', cache_dir=None, hf_token=None): 
     hf_model_name = tl_name_to_hf_name(model_name)
 
     #loading tokenizer
@@ -735,6 +736,30 @@ def load_model_from_tl_name(model_name, device='cuda', cache_dir=None, hf_token=
         model = HookedTransformer.from_pretrained(model_name, device=device, cache_dir=cache_dir, token=hf_token)
 
     return model, tokenizer
+
+
+
+def load_model_from_tl_name(
+    model_name, device='cuda', step=None,cache_dir=None, hf_token=None
+    ) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:
+    """Load model and tokenizer for a specific step."""
+    if "pythia" in model_name.lower():
+        tokenizer = AutoTokenizer.from_pretrained(
+            model_name, revision=f"step{step}", cache_dir=cache_dir/model_name/f"step{step}"
+        )
+
+        hf_model = GPTNeoXForCausalLM.from_pretrained(
+            model_name, revision=f"step{step}", cache_dir=cache_dir/model_name/f"step{step}"
+        )
+        print("HF model has been loaded")
+        print("#################################")
+        model = HookedTransformer.from_pretrained(model_name=model_name, hf_model=hf_model, 
+            tokenizer=tokenizer, device=device, cache_dir=cache_dir/model_name/f"step{step}")
+
+        return model, tokenizer
+    return None
+
+
 
 
 # Induction functions
