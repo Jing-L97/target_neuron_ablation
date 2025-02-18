@@ -1,12 +1,12 @@
 import os
 os.environ["CUDA_DEVICE_ORDER"]="PCI_BUS_ID"  
 os.environ["CUDA_VISIBLE_DEVICES"]="0"
+import logging
 import math
 import pickle
 import re
 from collections import Counter
 from functools import partial
-from pathlib import Path
 from typing import List
 
 import datasets
@@ -24,6 +24,13 @@ from datasets import Dataset, load_dataset
 from torch.nn.functional import kl_div
 from transformer_lens import ActivationCache, HookedTransformer
 from transformers import AutoModelForCausalLM, AutoTokenizer, GPTNeoXForCausalLM
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
 
 
 def neuron_str_to_neuron(input_str):
@@ -751,11 +758,10 @@ def load_model_from_tl_name(
         hf_model = GPTNeoXForCausalLM.from_pretrained(
             model_name, revision=f"step{step}", cache_dir=cache_dir/model_name/f"step{step}"
         )
-        print("HF model has been loaded")
-        print("#################################")
+        logger.info(f"import HF model from {cache_dir}/{model_name}/step{step}")
         model = HookedTransformer.from_pretrained(model_name=model_name, hf_model=hf_model, 
             tokenizer=tokenizer, device=device, cache_dir=cache_dir/model_name/f"step{step}")
-
+        logger.info(f"import hooked model from {cache_dir}/{model_name}/step{step}")
         return model, tokenizer
     return None
 

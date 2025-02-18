@@ -3,7 +3,6 @@ dry_run: false
 seed: 42
 chdir: "."
 model: EleutherAI/pythia-70m-deduped
-step: 0
 dataset: stas/c4-en-10k
 use_log2_entropy: false
 data_range_start: 0
@@ -16,6 +15,7 @@ micro_batch_size: 2  # Add micro-batch processing
 max_gpu_memory: 0.7  # Limit GPU memory usage to 70%
 memory_efficient: true  # Enable memory efficient processing
 process_neurons_in_chunks: 50  # Process neurons in smaller groups
+
 
 k: 10
 neuron_range: null

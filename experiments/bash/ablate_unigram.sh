@@ -2,6 +2,7 @@
 #SBATCH --job-name=ablate_unigram
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
+#SBATCH --exclude=puck5
 #SBATCH --mem=100G
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=20

@@ -1,8 +1,11 @@
 # %% 
+import argparse
 import os
 import sys
 sys.path.append('../')
-import pathlib
+import logging
+from pathlib import Path
+from warnings import simplefilter
 
 import hydra
 import neel.utils as nutils
@@ -23,6 +26,34 @@ from neuron_analyzer.ablations import (
     get_pile_unigram_distribution,
     load_model_from_tl_name,
 )
+from neuron_analyzer.surprisal import StepConfig
+
+simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
+
+logger = logging.getLogger(__name__)
+logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S"
+        )
+
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments for step range."""
+    parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
+    parser.add_argument(
+        "-s", "--start",
+        type=int,
+        default=0,
+        help="Start index of step range"
+    )
+    parser.add_argument(
+        "-e", "--end",
+        type=int,
+        default=155,
+        help="End index of step range"
+    )
+    return parser.parse_args()
+
 
 
 def adjust_vectors_3dim(v, u, target_values):
@@ -55,7 +86,7 @@ def mean_ablate_components(components_to_ablate=None,
     # sample a set of random batch indices
     random_sequence_indices = np.random.choice(entropy_df.batch.unique(), k, replace=False)
 
-    print(f'ablate_components: ablate {components_to_ablate} with k = {k}')
+    logger.info(f'ablate_components: ablate with k = {k}')
     
     pbar = tqdm.tqdm(total=k, file=sys.stdout)
 
@@ -204,98 +235,148 @@ def mean_ablate_components(components_to_ablate=None,
     return results
 
 
-@hydra.main(config_path=str(settings.PATH.config_dir), config_name='config_unigram_ablations',version_base=None)
-def run_and_store_ablation_results(args: DictConfig):
 
+def process_single_step(args: DictConfig, step: int) -> None:
+    """Process a single step with the given configuration."""
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     torch.set_grad_enabled(False)
 
     os.chdir(args.chdir)
-    save_path = settings.PATH.result_dir/args.output_dir/"unigram"/args.model/str(args.data_range_end)
+    save_path = settings.PATH.result_dir/args.output_dir/"unigram"/args.model/str(step)/str(args.data_range_end)
 
     # check if save_path exists, if not create it
-    pathlib.Path(save_path).mkdir(parents=True, exist_ok=True)
+    Path(save_path).mkdir(parents=True, exist_ok=True)
 
     with open(settings.PATH.dataset_root/'src'/args.hf_token_path, 'r') as f:
         hf_token = f.read()
 
-    model, tokenizer = load_model_from_tl_name(args.model, args.device,step=args.step, cache_dir=settings.PATH.model_dir, hf_token=hf_token)
+    # Load model and tokenizer for specific step
+    model, tokenizer = load_model_from_tl_name(
+        args.model,
+        args.device,
+        step=step,
+        cache_dir=settings.PATH.model_dir,
+        hf_token=hf_token
+    )
     model = model.to(args.device)
-
-    # Set the model in evaluation mode
     model.eval()
 
+    # Load and process dataset
     data = load_dataset(args.dataset, split='train')
     first_1k = data.select([i for i in range(args.data_range_start, args.data_range_end)])
-
-    tokenized_data = utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name='text')
-
+    tokenized_data = utils.tokenize_and_concatenate(
+        first_1k,
+        tokenizer,
+        max_length=256,
+        column_name='text'
+    )
     tokenized_data = tokenized_data.shuffle(args.seed)
     token_df = nutils.make_token_df(tokenized_data['tokens'], model=model)
 
+    logger.info("Finished tokenizing data")
+
+    # Setup neuron indices
     entropy_neuron_layer = model.cfg.n_layers - 1
     if args.neuron_range is not None:
-        start = args.neuron_range.split('-')[0]
-        end = args.neuron_range.split('-')[1]
-        all_neuron_indices = list(range(int(start), int(end)))
+        start, end = map(int, args.neuron_range.split('-'))
+        all_neuron_indices = list(range(start, end))
     else:
         all_neuron_indices = list(range(0, model.cfg.d_mlp))
+    
     all_neurons = [f"{entropy_neuron_layer}.{i}" for i in all_neuron_indices]
+
+    logger.info("Lodded all the neurons")
 
     if args.dry_run:
         all_neurons = all_neurons[:10]
 
+    # Load unigram distribution
     if 'pythia' in args.model:
-        print('loading unigram distribution for pythia...')
-        unigram_distrib = get_pile_unigram_distribution(device=args.device, file_path=settings.PATH.dataset_root/'src/pythia-unigrams.npy')
+        logger.info('Loading unigram distribution for pythia...')
+        unigram_distrib = get_pile_unigram_distribution(
+            device=args.device,
+            file_path=settings.PATH.dataset_root/'src/pythia-unigrams.npy'
+        )
     elif 'gpt' in args.model:
-        print('loading unigram distribution for gpt2...')
-        unigram_distrib = get_pile_unigram_distribution(device=args.device, file_path=settings.PATH.dataset_root/'src/gpt2-small-unigrams_openwebtext-2M_rows_500000.npy', pad_to_match_W_U=False)
+        logger.info('Loading unigram distribution for gpt2...')
+        unigram_distrib = get_pile_unigram_distribution(
+            device=args.device,
+            file_path=settings.PATH.dataset_root/'src/gpt2-small-unigrams_openwebtext-2M_rows_500000.npy',
+            pad_to_match_W_U=False
+        )
     else:
         raise Exception(f'No unigram distribution for {args.model}')
 
-    # =============================================================================
     # Compute entropy and activation for each neuron
-    # =============================================================================
     entropy_dim_layer = model.cfg.n_layers - 1
-    entropy_df = get_entropy_activation_df(all_neurons,
-                                                    tokenized_data,
-                                                    token_df,
-                                                    model,
-                                                    batch_size=args.batch_size,
-                                                    device=args.device,
-                                                    cache_residuals=False,
-                                                    cache_pre_activations=False,
-                                                    compute_kl_from_bu=False,
-                                                    residuals_layer=entropy_dim_layer,
-                                                    residuals_dict={},)
+    entropy_df = get_entropy_activation_df(
+        all_neurons,
+        tokenized_data,
+        token_df,
+        model,
+        batch_size=args.batch_size,
+        device=args.device,
+        cache_residuals=False,
+        cache_pre_activations=False,
+        compute_kl_from_bu=False,
+        residuals_layer=entropy_dim_layer,
+        residuals_dict={},
+    )
+    logger.info("finished computing all the entropy")
 
-
-    # =============================================================================
     # Ablate the dimensions
-    # =============================================================================
     model.set_use_attn_result(False)
-    results = mean_ablate_components(components_to_ablate=all_neurons,
-                                    tokenized_data=tokenized_data,
-                                    entropy_df=entropy_df,
-                                    model=model,
-                                    k=args.k,
-                                    device=args.device,
-                                    unigram_distrib=unigram_distrib)
-    
-    # concatenate the results
+    results = mean_ablate_components(
+        components_to_ablate=all_neurons,
+        tokenized_data=tokenized_data,
+        entropy_df=entropy_df,
+        model=model,
+        k=args.k,
+        device=args.device,
+        unigram_distrib=unigram_distrib
+    )
+    logger.info("finished ablations!")
+
+    # Process and save results
     final_df = pd.concat(results.values())
+    final_df = filter_entropy_activation_df(
+        final_df.reset_index(),
+        model_name=args.model,
+        tokenizer=tokenizer,
+        start_pos=3,
+        end_pos=-1
+    )
 
-    final_df = filter_entropy_activation_df(final_df.reset_index(), model_name=args.model, tokenizer=tokenizer, start_pos=3, end_pos=-1)
 
-    # store the final_df as a feather file
+    # Save results
     final_df = final_df.reset_index(drop=True)
     final_df.to_feather(f'{save_path}/k{args.k}.feather')
+    logger.info(f"Saved results for step {step} to {save_path}/k{args.k}.feather")
 
+@hydra.main(config_path=str(settings.PATH.config_dir), config_name='config_unigram_ablations', version_base=None)
+def hydra_wrapper(hydra_args: DictConfig) -> None:
+    """Wrapper function to handle Hydra configuration and process multiple steps."""
+    # Get command line arguments for step range
+    cli_args = parse_args()
 
-# %%
+    # Initialize configuration with all Pythia checkpoints
+    steps_config = StepConfig()
+    
+    logger.info(f"Processing steps {cli_args.start} to {cli_args.end}")
+    
+    # Process each step in range
+    for step in steps_config.steps[cli_args.start:cli_args.end]:
+        logger.info(f"Processing step {step}")
+        try:
+            process_single_step(hydra_args, step)
+        except Exception as e:
+            logger.error(f"Error processing step {step}: {str(e)}")
+            continue
+
 if __name__ == '__main__':
-    print(f'current dir: {os.getcwd()}')
-    run_and_store_ablation_results()
+    logger.info(f'Current directory: {os.getcwd()}')
+    hydra_wrapper()
+
+
 # %%

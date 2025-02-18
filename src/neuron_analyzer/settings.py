@@ -3,22 +3,6 @@ import os as _os
 import warnings as _warnings
 from pathlib import Path as _Path
 
-#######################################################
-# Filters for CHILDES content
-CONTENT_POS = {"ADJ", "NOUN", "VERB", "ADV", "PROPN"}
-CATEGORY = {
-    "connecting_words",
-    "helping_verbs",
-    "pronouns",
-    "quantifiers",
-    "prepositions",
-    "sounds",
-    "locations",
-    "question_words",
-}
-WORD = {"now", "dont", "hi"}
-#######################################################
-
 def cache_dir() -> _Path:
     """Return a directory to use as cache."""
     cache_path = _Path(_os.environ.get("CACHE_DIR", _Path.home() / ".cache" / __package__))
