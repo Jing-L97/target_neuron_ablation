@@ -10,8 +10,8 @@ data_range_end: 500
 
 # Memory optimization parameters
 batch_size: 1  # Keep at 1
-chunk_size: 5  # Add small chunk size for processing
-micro_batch_size: 2  # Add micro-batch processing
+chunk_size: 1  # Add small chunk size for processing
+micro_batch_size: 1  # Add micro-batch processing
 max_gpu_memory: 0.7  # Limit GPU memory usage to 70%
 memory_efficient: true  # Enable memory efficient processing
 process_neurons_in_chunks: 50  # Process neurons in smaller groups

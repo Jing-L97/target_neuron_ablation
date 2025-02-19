@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
         default=155,
         help="End index of step range"
     )
+
     return parser.parse_args()
 
 
@@ -236,17 +237,17 @@ def mean_ablate_components(components_to_ablate=None,
 
 
 
-def process_single_step(args: DictConfig, step: int) -> None:
+def process_single_step(args: DictConfig, step: int,save_path:Path) -> None:
     """Process a single step with the given configuration."""
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
     torch.set_grad_enabled(False)
 
     os.chdir(args.chdir)
-    save_path = settings.PATH.result_dir/args.output_dir/"unigram"/args.model/str(step)/str(args.data_range_end)
+    #save_path = settings.PATH.result_dir/args.output_dir/"unigram"/args.model/str(step)/str(args.data_range_end)
 
     # check if save_path exists, if not create it
-    Path(save_path).mkdir(parents=True, exist_ok=True)
+    save_path.mkdir(parents=True, exist_ok=True)
 
     with open(settings.PATH.dataset_root/'src'/args.hf_token_path, 'r') as f:
         hf_token = f.read()
@@ -362,17 +363,21 @@ def hydra_wrapper(hydra_args: DictConfig) -> None:
 
     # Initialize configuration with all Pythia checkpoints
     steps_config = StepConfig()
-    
     logger.info(f"Processing steps {cli_args.start} to {cli_args.end}")
-    
     # Process each step in range
     for step in steps_config.steps[cli_args.start:cli_args.end]:
-        logger.info(f"Processing step {step}")
-        try:
-            process_single_step(hydra_args, step)
-        except Exception as e:
-            logger.error(f"Error processing step {step}: {str(e)}")
+        save_path = settings.PATH.result_dir/hydra_args.output_dir/"unigram"/hydra_args.model/str(step)/str(hydra_args.data_range_end)/f"k{hydra_args.k}.feather"
+
+        if save_path.is_file():
+            logger.info(f"{step} already exists. Skip!")
             continue
+        else:
+            logger.info(f"Processing step {step}")
+            try:
+                process_single_step(hydra_args, step,save_path)
+            except Exception as e:
+                logger.error(f"Error processing step {step}: {str(e)}")
+                continue
 
 if __name__ == '__main__':
     logger.info(f'Current directory: {os.getcwd()}')
