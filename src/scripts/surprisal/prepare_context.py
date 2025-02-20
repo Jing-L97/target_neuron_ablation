@@ -1,14 +1,22 @@
+import argparse
+import json
+import logging
 import math
 import random
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import List, Dict, Any
 from pathlib import Path
+from typing import Any, Dict, List
 
+import pandas as pd
 import spacy
 from datasets import load_dataset
-import argparse
-import json
+
+from neuron_analyzer import settings
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ContextStats:
@@ -126,8 +134,6 @@ class NGramContextCollector:
         ngram_stats: Dict[str, Any], 
         target_words: List[str], 
         n_contexts: int,
-        min_context_freq: float, 
-        max_context_freq: float,
         mode: str
     ) -> Dict[str, List[Dict[str, Any]]]:
         selected_data: Dict[str, List[Dict[str, Any]]] = {}
@@ -135,10 +141,7 @@ class NGramContextCollector:
         for word in target_words:
             word_contexts = []
             for context_key, stats in ngram_stats["context_stats"].items():
-                if (
-                    word in stats["subsequent_words"]
-                    and min_context_freq <= stats["log_freq_per_million"] <= max_context_freq
-                ):
+                if (word in stats["subsequent_words"]):
                     word_count = stats["subsequent_words"][word]["count"]
                     word_freq = stats["subsequent_words"][word]["frequency"]
                     word_log_freq = stats["subsequent_words"][word]["log_freq_per_million"]
@@ -172,15 +175,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-s", "--window_size", type=int, default=5, help="context window size")
     parser.add_argument("-n", "--n_contexts", type=int, default=5, help="context numbers")
     parser.add_argument("-m", "--mode", type=str, choices=["random", "topk"], default=5, help="topk")
-    parser.add_argument("--min_log_freq", type=float, default=1, help="min_freq of the context")
-    parser.add_argument("--max_log_freq", type=float, default=10, help="max_freq of the context")
     return parser.parse_args()
 
 
 
 def load_target_words(file_path: Path) -> List[str]:
-    with open(file_path, "r", encoding="utf-8") as f:
-        return [line.strip() for line in f]
+    if file_path.suffix==".txt":
+        with open(file_path, "r", encoding="utf-8") as f:
+            return [line.strip() for line in f]
+    if file_path.suffix==".csv":
+        data = pd.read_csv(file_path)
+        print("csv file has been loded")
+        return data["word"].to_list()
+        
+
 
 def save_data(data: Dict[str, Any], file_path: Path) -> None:
     with open(file_path, 'w', encoding='utf-8') as f:
@@ -194,8 +202,16 @@ def load_data(file_path: Path) -> Dict[str, Any]:
 def main():
     args = parse_args()
 
-    args.output_path.mkdir(parents=True, exist_ok=True)
-    ngram_stats_file = args.output_path / "ngram_stats.json"
+    words_file = settings.PATH.dataset_root / args.words_file
+    output_dir = settings.PATH.dataset_root / args.output_path / args.dataset / str(args.window_size)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    ngram_stats_file = output_dir / "ngram_stats.json"
+    selected_contexts_file = output_dir / f"{words_file.stem}.json"
+
+    target_words = load_target_words(words_file)
+    logger.info(f"Loaded {len(target_words)} target words")
+
 
     if ngram_stats_file.exists():
         print(f"Loading existing n-gram statistics from {ngram_stats_file}")
@@ -214,18 +230,15 @@ def main():
         save_data(ngram_stats, ngram_stats_file)
         print(f"Saved n-gram statistics to {ngram_stats_file}")
 
-    target_words = load_target_words(args.words_file)
+    target_words = load_target_words(words_file)
     
     selected_contexts = NGramContextCollector.filter_contexts(
         ngram_stats,
         target_words,
         args.n_contexts,
-        args.min_log_freq,
-        args.max_log_freq,
         args.mode
     )
 
-    selected_contexts_file = args.output_path / "selected_contexts.json"
     save_data(selected_contexts, selected_contexts_file)
     print(f"Saved selected contexts to {selected_contexts_file}")
 

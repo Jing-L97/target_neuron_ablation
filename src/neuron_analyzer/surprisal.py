@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 
+import json
 import logging
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,22 +16,21 @@ logger = logging.getLogger(__name__)
 
 #######################################################
 # Extract surprisal by different steps
-
 def generate_pythia_checkpoints() -> list[int]:
-        """Generate complete list of Pythia checkpoint steps."""
-        # Initial checkpoint
-        checkpoints = [0]
-        # Log-spaced checkpoints (2^0 to 2^9)
-        log_spaced = [2**i for i in range(10)]  # 1, 2, 4, ..., 512
+    """Generate complete list of Pythia checkpoint steps."""
+    # Initial checkpoint
+    checkpoints = [0]
+    # Log-spaced checkpoints (2^0 to 2^9)
+    log_spaced = [2**i for i in range(10)]  # 1, 2, 4, ..., 512
 
-        # Evenly-spaced checkpoints from 1000 to 143000
-        step_size = (143000 - 1000) // 142  # Calculate step size for even spacing
-        linear_spaced = list(range(1000, 143001, step_size))
+    # Evenly-spaced checkpoints from 1000 to 143000
+    step_size = (143000 - 1000) // 142  # Calculate step size for even spacing
+    linear_spaced = list(range(1000, 143001, step_size))
 
-        # Combine all checkpoints
-        checkpoints.extend(log_spaced)
-        checkpoints.extend(linear_spaced)
-        return sorted(list(set(checkpoints)))  # Remove duplicates and sort
+    # Combine all checkpoints
+    checkpoints.extend(log_spaced)
+    checkpoints.extend(linear_spaced)
+    return sorted(list(set(checkpoints)))  # Remove duplicates and sort
 
 
 @dataclass
@@ -45,11 +45,11 @@ class StepSurprisalExtractor:
     """Extracts word surprisal across different training steps."""
 
     def __init__(
-        self, 
+        self,
         config: StepConfig,
         model_name: str,
         model_cache_dir: Path,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu"
+        device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ) -> None:
         """Initialize the surprisal extractor."""
         self.model_name = model_name
@@ -75,14 +75,10 @@ class StepSurprisalExtractor:
         logger.info(f"Loading model for step {step} on {self.device}")
 
         try:
-            model = GPTNeoXForCausalLM.from_pretrained(
-                self.model_name, revision=f"step{step}", cache_dir=cache_dir
-            )
+            model = GPTNeoXForCausalLM.from_pretrained(self.model_name, revision=f"step{step}", cache_dir=cache_dir)
             model = model.to(self.device)  # Move model to specified device
 
-            tokenizer = AutoTokenizer.from_pretrained(
-                self.model_name, revision=f"step{step}", cache_dir=cache_dir
-            )
+            tokenizer = AutoTokenizer.from_pretrained(self.model_name, revision=f"step{step}", cache_dir=cache_dir)
 
             model.eval()
             return model, tokenizer
@@ -124,37 +120,41 @@ class StepSurprisalExtractor:
 
         return surprisal
 
-
     def analyze_steps(
         self,
-        contexts: list[str],
+        contexts: list[list[str]],
         target_words: list[str],
         use_bos_only: bool = True,
+        output_path: Path | str | None = None,
     ) -> pd.DataFrame:
-        """Analyze surprisal across all steps for given words."""
+        """Analyze surprisal across all steps for given words and their contexts."""
+
         results = []
 
         for step in self.config.steps:
             logger.info(f"Processing step {step}")
-
             try:
                 model, tokenizer = self.load_model_for_step(step)
 
-                for context, target in zip(contexts, target_words):
-                    surprisal = self.compute_surprisal(
-                        model, tokenizer, context, target, use_bos_only=use_bos_only
-                    )
+                # Process each word and its contexts
+                for word_contexts, target_word in zip(contexts, target_words):
+                    # Process each context for the current word
+                    for context_idx, context in enumerate(word_contexts):
+                        surprisal = self.compute_surprisal_for_context(
+                            model, tokenizer, context, target_word, use_bos_only=use_bos_only
+                        )
 
-                    results.append(
-                        {
-                            "step": step,
-                            "context": "BOS_ONLY" if use_bos_only else context,
-                            "target_word": target,
-                            "surprisal": surprisal,
-                        }
-                    )
+                        results.append(
+                            {
+                                "step": step,
+                                "target_word": target_word,
+                                "context_id": context_idx,
+                                "context": "BOS_ONLY" if use_bos_only else context,
+                                "surprisal": surprisal,
+                            }
+                        )
 
-                # Clean up
+                # Clean up GPU memory
                 del model
                 del tokenizer
                 if self.device == "cuda":
@@ -170,9 +170,20 @@ class StepSurprisalExtractor:
 #######################################################
 # Util func to load prompt
 
-def load_eval(word_path, word_header="word", BOS_only=True, prompt_header=None):
-    """Load evaluated word and prompt lists."""
-    target_frame = pd.read_csv(word_path)
-    target_words = target_frame[word_header].to_list()
-    contexts = [""] * len(target_words) if BOS_only else target_frame[prompt_header].to_list()
+
+def load_eval(
+    word_path: Path | str, word_header: str = "word", BOS_only: bool = True, prompt_header: str | None = None
+) -> tuple[list[str], list[str]]:
+    """Load word and context lists from a JSON file."""
+
+    with word_path.open("r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    # Extract words and contexts
+    target_words = list(data.keys())
+
+    if BOS_only:
+        contexts = [""] * len(target_words)
+    else:
+        contexts = [context["context"] for word in data.values() for context in word]
     return target_words, contexts

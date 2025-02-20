@@ -16,7 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
     parser.add_argument(
         "-w","--word_path",type=Path,
-        default="matched/cdi_childes.csv",
+        default="context/stas/c4-en-10k/5/cdi_childes.json",
         help="Relative path to the target words"
         )
 
@@ -26,11 +26,18 @@ def parse_args() -> argparse.Namespace:
         help="Target model name"
         )
 
+    parser.add_argument("--use_bos_only", action="store_true",
+        help="use_bos_only if enabled"
+        )
+
     parser.add_argument("--debug", action="store_true",
         help="Compute the first few 5 lines if enabled"
         )
 
     return parser.parse_args()
+
+
+
 
 
 def main() -> None:
@@ -40,6 +47,7 @@ def main() -> None:
     # Load target words
     target_words, contexts = load_eval(settings.PATH.dataset_root/args.word_path)
     logger.info(f"{len(target_words)} target words have been loaded.")
+
     if args.debug:
         target_words, contexts = target_words[:5], contexts[:5]
         logger.info("Entering debugging mode. Loading first 5 words")
@@ -57,7 +65,7 @@ def main() -> None:
 
     try:
         # Analyze steps with BOS only
-        results_df = extractor.analyze_steps(contexts=contexts, target_words=target_words, use_bos_only=True)
+        results_df = extractor.analyze_steps(contexts=contexts, target_words=target_words, use_bos_only=args.use_bos_only)
         # Save results even if some checkpoints failed
         if not results_df.empty:
             result_folder = settings.PATH.result_dir/"surprisal"/"base"
@@ -76,6 +84,7 @@ def main() -> None:
     except Exception as e:
         logger.error(f"Analysis failed: {str(e)}")
         raise
+
 
 
 if __name__ == "__main__":
