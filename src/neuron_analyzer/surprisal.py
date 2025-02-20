@@ -96,29 +96,56 @@ class StepSurprisalExtractor:
         use_bos_only: bool = True,
     ) -> float:
         """Compute surprisal for a target word given a context."""
-        if use_bos_only:
-            bos_token = tokenizer.bos_token
-            input_text = bos_token + target_word
-            context_length = 1  # BOS token length
-        else:
-            input_text = context + target_word
-            context_tokens = tokenizer(context, return_tensors="pt").to(self.device)  # Move to device
-            context_length = context_tokens.input_ids.shape[1]
+        try:
+            if use_bos_only:
+                bos_token = tokenizer.bos_token or "<|endoftext|>"  # Fallback if no BOS token
+                input_text = bos_token + target_word
 
-        # Tokenize input and move to correct device
-        inputs = tokenizer(input_text, return_tensors="pt").to(self.device)
+                # Tokenize just the BOS to get its length
+                bos_tokens = tokenizer(bos_token, return_tensors="pt").to(self.device)
+                context_length = bos_tokens.input_ids.shape[1]
+            else:
+                input_text = context + target_word
+                # Tokenize context
+                context_tokens = tokenizer(context, return_tensors="pt").to(self.device)
+                context_length = context_tokens.input_ids.shape[1]
 
-        with torch.no_grad():
-            outputs = model(**inputs)
-            logits = outputs.logits
+            # Tokenize combined input and move to correct device
+            inputs = tokenizer(input_text, return_tensors="pt").to(self.device)
 
-            target_logits = logits[0, context_length - 1 : context_length]
-            target_token_id = inputs.input_ids[0, context_length]
+            # Safety check to prevent index out of bounds
+            if context_length >= inputs.input_ids.shape[1]:
+                # Fallback: use the last token
+                context_length = inputs.input_ids.shape[1] - 1
 
-            log_prob = torch.log_softmax(target_logits, dim=-1)[0, target_token_id]
-            surprisal = -log_prob.item()
+            with torch.no_grad():
+                outputs = model(**inputs)
+                logits = outputs.logits
 
-        return surprisal
+                # Get logits for predicting the first token of the target word
+                target_logits = logits[0, context_length - 1 : context_length]
+
+                # Get the actual token ID that appears at the position after context
+                if context_length < inputs.input_ids.shape[1]:
+                    target_token_id = inputs.input_ids[0, context_length].item()
+
+                    # Calculate log probability and surprisal
+                    log_prob = torch.log_softmax(target_logits, dim=-1)[0, target_token_id]
+                    surprisal = -log_prob.item()
+                else:
+                    # Fallback if we can't identify the target token
+                    logger.error("Cannot compute surprisal: unable to identify target token")
+                    surprisal = float("nan")  # Return NaN for failed computations
+
+            return surprisal
+
+        except Exception as e:
+            logger.error(f"Error in compute_surprisal: {str(e)}")
+            # Include traceback for debugging
+            import traceback
+
+            logger.error(traceback.format_exc())
+            return float("nan")  # Return NaN for failed computations
 
     def analyze_steps(
         self,
@@ -135,12 +162,11 @@ class StepSurprisalExtractor:
             logger.info(f"Processing step {step}")
             try:
                 model, tokenizer = self.load_model_for_step(step)
-
                 # Process each word and its contexts
                 for word_contexts, target_word in zip(contexts, target_words):
                     # Process each context for the current word
                     for context_idx, context in enumerate(word_contexts):
-                        surprisal = self.compute_surprisal_for_context(
+                        surprisal = self.compute_surprisal(
                             model, tokenizer, context, target_word, use_bos_only=use_bos_only
                         )
 
@@ -153,7 +179,6 @@ class StepSurprisalExtractor:
                                 "surprisal": surprisal,
                             }
                         )
-
                 # Clean up GPU memory
                 del model
                 del tokenizer
@@ -170,20 +195,32 @@ class StepSurprisalExtractor:
 #######################################################
 # Util func to load prompt
 
-
 def load_eval(
-    word_path: Path | str, word_header: str = "word", BOS_only: bool = True, prompt_header: str | None = None
-) -> tuple[list[str], list[str]]:
+    word_path,
+    word_header: str = "word",
+    BOS_only: bool = True,
+    prompt_header = None
+    ) -> tuple[list[str], list[list[str]]]:
     """Load word and context lists from a JSON file."""
-
-    with word_path.open("r", encoding="utf-8") as f:
-        data = json.load(f)
-
-    # Extract words and contexts
+    try:
+        with word_path.open('r', encoding='utf-8') as f:
+            data = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON format in {word_path}: {str(e)}")
+    # Extract words
     target_words = list(data.keys())
-
-    if BOS_only:
-        contexts = [""] * len(target_words)
-    else:
-        contexts = [context["context"] for word in data.values() for context in word]
-    return target_words, contexts
+    words = []
+    contexts = []
+    for word in target_words:
+        word_contexts = []
+        # Handle different JSON structures
+        word_data = data[word]
+        if len(word_data) == 0:
+            continue
+        else:
+            words.append(word)
+            for context_data in word_data:
+                word_contexts.append(context_data["context"])
+        contexts.append(word_contexts)
+    logger.info(f"{len(target_words)-len(words)} words have no context!")
+    return words, contexts

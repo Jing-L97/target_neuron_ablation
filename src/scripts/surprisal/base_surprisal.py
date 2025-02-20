@@ -39,7 +39,6 @@ def parse_args() -> argparse.Namespace:
 
 
 
-
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()

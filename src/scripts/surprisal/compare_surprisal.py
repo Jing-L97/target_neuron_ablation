@@ -1,4 +1,4 @@
-"""Extract word surprisal with comparative neuron ablation analysis."""
+"""TODO: structure the stroed neurons"""
 
 from pathlib import Path
 import typing as t

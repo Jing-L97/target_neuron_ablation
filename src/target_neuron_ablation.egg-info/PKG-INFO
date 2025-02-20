@@ -1,6 +1,6 @@
 Metadata-Version: 2.2
 Name: target_neuron_ablation
-Version: 0.1.dev5+g6a0f352.d20250218
+Version: 0.1.dev9+g5cd38c5.d20250220
 Summary: A detailed comparison between human (CDI) and model performance at the lexical level
 Author-email: Jing Liu <jing.liu@psl.eu>
 License: MIT License
