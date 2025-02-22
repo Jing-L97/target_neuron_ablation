@@ -3,6 +3,7 @@ import json
 import logging
 import math
 import random
+import typing as t
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,41 +46,87 @@ class TextPreprocessor:
             for text in batch:
                 yield self.process_text(text)
 
+
 class NGramStatisticsComputer:
-    def __init__(self, window_size: int):
-        self.window_size = window_size
-        self.context_stats: Dict[str, ContextStats] = defaultdict(
+    """Computes n-gram statistics using beginning-of-sentence context."""
+    
+    def __init__(self, max_context_size: int | None = None):
+        """
+        Initialize the n-gram statistics computer.
+        
+        Args:
+            max_context_size: Optional maximum number of tokens to consider for context.
+                             If None, will use the entire prefix of the sentence.
+        """
+        self.max_context_size = max_context_size
+        self.context_stats: t.Dict[str, ContextStats] = defaultdict(
             lambda: ContextStats(0, 0.0, float("-inf"), Counter())
         )
         self.word_counts = Counter()
         self.total_windows = 0
-
-    def compute_stats(self, processed_sentences: List[List[str]]):
+    
+    def compute_stats(self, processed_sentences: list[list[str]]):
+        """
+        Compute statistics from processed sentences using beginning-of-sentence contexts.
+        
+        Args:
+            processed_sentences: List of tokenized sentences
+        """
         for sentence in processed_sentences:
-            if len(sentence) <= self.window_size:
+            if len(sentence) <= 1:  # Need at least 2 tokens for a context and next word
                 continue
-            for i in range(len(sentence) - self.window_size):
-                context = tuple(sentence[i : i + self.window_size])
-                next_word = sentence[i + self.window_size]
-                context_key = " ".join(context)
+                
+            # For each position, use all preceding tokens as context
+            for i in range(1, len(sentence)):
+                next_word = sentence[i]
+                
+                # Get context from beginning of sentence up to current position
+                context_tokens = sentence[:i]
+                
+                # Optionally limit context size
+                if self.max_context_size is not None and len(context_tokens) > self.max_context_size:
+                    context_tokens = context_tokens[-self.max_context_size:]
+                
+                context_key = " ".join(context_tokens)
+                
+                # Update statistics
                 self.context_stats[context_key].count += 1
                 self.context_stats[context_key].subsequent_words[next_word] += 1
                 self.word_counts[next_word] += 1
                 self.total_windows += 1
-
+    
     def compute_frequencies(self):
+        """Compute frequency statistics for all contexts and words."""
         total_words = sum(self.word_counts.values())
+        
         for stats in self.context_stats.values():
             stats.frequency = stats.count / self.total_windows
             stats.log_freq_per_million = self.compute_log_freq_per_million(stats.count, self.total_windows)
-
+    
     @staticmethod
     def compute_log_freq_per_million(count: int, total: int) -> float:
+        """
+        Compute log frequency per million occurrences.
+        
+        Args:
+            count: Occurrence count
+            total: Total number of occurrences
+            
+        Returns:
+            Log10 of frequency per million, or negative infinity if count is zero
+        """
         freq_per_million = (count / total) * 1_000_000
         return math.log10(freq_per_million) if freq_per_million > 0 else float("-inf")
-
-    def get_all_ngram_stats(self) -> Dict[str, Any]:
+    
+    def get_all_ngram_stats(self):
+        """
+        Get comprehensive statistics for all n-grams.
+        
+        Returns:
+            Dictionary containing context statistics, word statistics, and metadata
+        """
         total_words = sum(self.word_counts.values())
+        
         return {
             "context_stats": {
                 context: {
@@ -111,40 +158,85 @@ class NGramStatisticsComputer:
                     "total_words": total_words,
                     "unique_contexts": len(self.context_stats),
                     "unique_words": len(self.word_counts),
-                    "window_size": self.window_size
+                    "max_context_size": self.max_context_size
                 }
             }
         }
 
 class NGramContextCollector:
-    def __init__(self, window_size: int):
+    """Collects and processes n-gram statistics from datasets."""
+    
+    def __init__(self):
+        """
+        Initialize the n-gram context collector.
+        
+        """
         self.preprocessor = TextPreprocessor()
-        self.computer = NGramStatisticsComputer(window_size)
-
+        self.computer = NGramStatisticsComputer()
+    
     def collect_stats(self, dataset_name: str, split: str, batch_size: int = 1000):
-        for processed_batch in self.preprocessor.load_and_process_dataset(dataset_name, split, batch_size):
+        """
+        Collect statistics from the specified dataset.
+        
+        Args:
+            dataset_name: Name of the dataset to process
+            split: Dataset split to use (e.g., 'train', 'test')
+            batch_size: Number of examples to process in each batch
+        """
+        for processed_batch in self.preprocessor.load_and_process_dataset(
+            dataset_name, split, batch_size
+        ):
             self.computer.compute_stats(processed_batch)
+        
         self.computer.compute_frequencies()
-
-    def get_all_ngram_stats(self):
+    
+    def get_all_ngram_stats(self) -> t.Dict[str, t.Any]:
+        """
+        Get comprehensive n-gram statistics.
+        
+        Returns:
+            Dictionary containing context statistics, word statistics, and metadata
+        """
         return self.computer.get_all_ngram_stats()
-
+    
     @staticmethod
     def filter_contexts(
-        ngram_stats: Dict[str, Any], 
-        target_words: List[str], 
+        ngram_stats: t.Dict[str, t.Any],
+        target_words: list[str],
         n_contexts: int,
-        mode: str
-    ) -> Dict[str, List[Dict[str, Any]]]:
-        selected_data: Dict[str, List[Dict[str, Any]]] = {}
-
+        mode: str = "frequent",
+        min_window_size: int = 1
+    ) -> t.Dict[str, list[t.Dict[str, t.Any]]]:
+        """
+        Filter and select contexts for target words based on specified criteria.
+        
+        Args:
+            ngram_stats: The n-gram statistics dictionary
+            target_words: List of target words to find contexts for
+            n_contexts: Number of contexts to select for each target word
+            mode: Selection mode - "random" or "frequent"
+            min_window_size: Minimum number of tokens required in context
+                            (will be counted by spaces plus one)
+        
+        Returns:
+            Dictionary mapping target words to their selected contexts
+        """
+        selected_data: t.Dict[str, list[t.Dict[str, t.Any]]] = {}
+        
         for word in target_words:
             word_contexts = []
+            
             for context_key, stats in ngram_stats["context_stats"].items():
-                if (word in stats["subsequent_words"]):
+                # Skip contexts that don't meet minimum window size
+                context_tokens = context_key.split()
+                if len(context_tokens) < min_window_size:
+                    continue
+                
+                if word in stats["subsequent_words"]:
                     word_count = stats["subsequent_words"][word]["count"]
                     word_freq = stats["subsequent_words"][word]["frequency"]
                     word_log_freq = stats["subsequent_words"][word]["log_freq_per_million"]
+                    
                     word_contexts.append({
                         "context": context_key,
                         "word_in_context_stats": {
@@ -153,13 +245,31 @@ class NGramContextCollector:
                             "log_freq_per_million": word_log_freq,
                         }
                     })
-
-            sorted_contexts = sorted(word_contexts, key=lambda x: x["word_in_context_stats"]["count"], reverse=True)
+            
+            # Sort contexts by count (frequency of occurrence)
+            sorted_contexts = sorted(
+                word_contexts, 
+                key=lambda x: x["word_in_context_stats"]["count"], 
+                reverse=True
+            )
+            
+            # Select contexts based on mode
             n_select = min(n_contexts, len(sorted_contexts))
-            selected = random.sample(sorted_contexts, n_select) if mode == "random" else sorted_contexts[:n_contexts]
-            selected_data[word] = selected
-
+            
+            # Always return available contexts, even if fewer than requested
+            if n_select == 0:
+                selected_data[word] = []
+            elif mode == "random" and n_select > 0:
+                selected = random.sample(sorted_contexts, n_select)
+                selected_data[word] = selected
+            else:  # mode == "frequent"
+                selected = sorted_contexts[:n_select]
+                selected_data[word] = selected
+        
         return selected_data
+
+
+
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
@@ -172,8 +282,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("-d", "--dataset", type=str, default="stas/c4-en-10k", help="dataset name")
     parser.add_argument("--split", type=str, default="train", help="dataset split")
-    parser.add_argument("-s", "--window_size", type=int, default=5, help="context window size")
-    parser.add_argument("-n", "--n_contexts", type=int, default=5, help="context numbers")
+    parser.add_argument("-s", "--window_size", type=int, default=5, help="min context window size")
+    parser.add_argument("-n", "--n_contexts", type=int, default=20, help="context numbers")
     parser.add_argument("-m", "--mode", type=str, choices=["random", "topk"], default=5, help="topk")
     return parser.parse_args()
 
@@ -207,8 +317,9 @@ def main():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     ngram_stats_file = output_dir / "ngram_stats.json"
-    selected_contexts_file = output_dir / f"{words_file.stem}.json"
-
+    
+    selected_contexts_file = output_dir / f'{Path(args.words_file).stem}.json'
+    print(selected_contexts_file)
     target_words = load_target_words(words_file)
     logger.info(f"Loaded {len(target_words)} target words")
 
@@ -218,7 +329,7 @@ def main():
         ngram_stats = load_data(ngram_stats_file)
     else:
         print("Computing n-gram statistics...")
-        collector = NGramContextCollector(window_size=args.window_size)
+        collector = NGramContextCollector()
         
         try:
             collector.collect_stats(args.dataset, args.split)
@@ -236,7 +347,8 @@ def main():
         ngram_stats,
         target_words,
         args.n_contexts,
-        args.mode
+        args.mode, 
+        args.window_size
     )
 
     save_data(selected_contexts, selected_contexts_file)

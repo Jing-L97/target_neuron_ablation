@@ -10,4 +10,4 @@
 
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
-python $SCRIPT_ROOT/prepare_context.py -w matched/target_words.txt
+python $SCRIPT_ROOT/prepare_context.py
