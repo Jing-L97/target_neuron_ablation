@@ -1,5 +1,5 @@
 #!/usr/bin/env python
-
+import ast
 import json
 import logging
 from dataclasses import dataclass
@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 
 
 #######################################################
-# Extract surprisal by different steps
+# Extract different steps
+
 def generate_pythia_checkpoints() -> list[int]:
     """Generate complete list of Pythia checkpoint steps."""
     # Initial checkpoint
@@ -41,8 +42,67 @@ class StepConfig:
         logger.info(f"Generated {len(self.steps)} checkpoint steps")
 
 
+
+
+#######################################################
+# Neuron manipulation
+
+@dataclass
+class AblationConfig:
+    """Configuration for neuron ablation."""
+
+    layer_name: str = "gpt_neox.layers.5.mlp.dense_h_to_4h"  # Last MLP layer
+    neurons: list[str] = None  # List of neuron indices to ablate
+    k: int = 10  # Number of iterations for ablation analysis
+
+
+class NeuronAblator:
+    """Handles neuron ablation in transformer models."""
+
+    def __init__(self, model: GPTNeoXForCausalLM, config: AblationConfig) -> None:
+        """Initialize ablator with model and config."""
+        self.model = model
+        self.config = config
+        self.is_ablated = False
+        self.hook_handle = None
+        self._setup_hooks()
+
+    def _setup_hooks(self) -> None:
+        """Set up forward hooks for neuron ablation."""
+
+        def ablation_hook(module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
+            """Forward hook to zero out specified neurons."""
+            if self.is_ablated and self.config.neurons:
+                # Zero out activations for specified neurons
+                for neuron_idx in self.config.neurons:
+                    output[:, :, int(neuron_idx)] = 0
+            return output
+
+        # Get the MLP layer
+        layer = dict(self.model.named_modules())[self.config.layer_name]
+
+        # Register the forward hook
+        self.hook_handle = layer.register_forward_hook(ablation_hook)
+
+    def enable_ablation(self) -> None:
+        """Enable neuron ablation."""
+        self.is_ablated = True
+
+    def disable_ablation(self) -> None:
+        """Disable neuron ablation."""
+        self.is_ablated = False
+
+    def cleanup(self) -> None:
+        """Remove the forward hook."""
+        if self.hook_handle:
+            self.hook_handle.remove()
+
+
+#######################################################
+# Extract surprisal by different steps
+
 class StepSurprisalExtractor:
-    """Extracts word surprisal across different training steps."""
+    """Extracts word surprisal across different training steps with neuron ablation."""
 
     def __init__(
         self,
@@ -50,12 +110,16 @@ class StepSurprisalExtractor:
         model_name: str,
         model_cache_dir: Path,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
+        step_ablations: dict[int, list] | None = None,
     ) -> None:
         """Initialize the surprisal extractor."""
         self.model_name = model_name
         self.model_cache_dir = model_cache_dir
         self.config = config
         self.device = device
+        self.step_ablations = step_ablations
+        self.ablator = None
+        self.current_step = None
         logger.info(f"Using device: {self.device}")
         self._validate_config()
 
@@ -66,8 +130,35 @@ class StepSurprisalExtractor:
 
         if isinstance(self.model_cache_dir, str):
             self.model_cache_dir = Path(self.model_cache_dir)
+
         if self.device not in ["cpu", "cuda"]:
             raise ValueError(f"Invalid device: {self.device}. Use 'cpu' or 'cuda'")
+
+        if self.step_ablations:
+            invalid_steps = set(self.step_ablations.keys()) - set(self.config.steps)
+            if invalid_steps:
+                raise ValueError(f"Ablation config contains invalid steps: {invalid_steps}")
+
+    def _setup_ablator(self, model: GPTNeoXForCausalLM, step: int) -> None:
+        """Setup ablator for current step with specified neurons.
+
+        Args:
+            model: Model to apply ablation to
+            step: Current training step
+        """
+        # Clean up existing ablator
+        if self.ablator:
+            self.ablator.cleanup()
+            self.ablator = None
+
+        # Only proceed with ablation setup if step_ablations exists and contains the step
+        if self.step_ablations is not None and step in self.step_ablations:
+            logger.info(f"Found step {step} in the step_ablations")
+            config = AblationConfig(neurons=self.step_ablations[step])
+            self.ablator = NeuronAblator(model, config)
+            logger.info(f"Created ablator for step {step} with neurons {self.step_ablations[step]}")
+            logger.info("Activated ablation!")
+
 
     def load_model_for_step(self, step: int) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:
         """Load model and tokenizer for a specific step."""
@@ -76,11 +167,14 @@ class StepSurprisalExtractor:
 
         try:
             model = GPTNeoXForCausalLM.from_pretrained(self.model_name, revision=f"step{step}", cache_dir=cache_dir)
-            model = model.to(self.device)  # Move model to specified device
-
+            model = model.to(self.device)
             tokenizer = AutoTokenizer.from_pretrained(self.model_name, revision=f"step{step}", cache_dir=cache_dir)
-
             model.eval()
+
+            # Setup ablator for this step
+            self._setup_ablator(model, step)
+            self.current_step = step
+
             return model, tokenizer
 
         except Exception as e:
@@ -94,92 +188,98 @@ class StepSurprisalExtractor:
         context: str,
         target_word: str,
         use_bos_only: bool = True,
+        ablated: bool = False,
     ) -> float:
         """Compute surprisal for a target word given a context."""
         try:
+            # Handle ablation if configured
+            if self.ablator and ablated:
+                self.ablator.enable_ablation()
+            elif self.ablator:
+                self.ablator.disable_ablation()
+            # Rest of the compute_surprisal implementation remains the same
             if use_bos_only:
-                bos_token = tokenizer.bos_token or "<|endoftext|>"  # Fallback if no BOS token
+                bos_token = tokenizer.bos_token
                 input_text = bos_token + target_word
-
-                # Tokenize just the BOS to get its length
                 bos_tokens = tokenizer(bos_token, return_tensors="pt").to(self.device)
                 context_length = bos_tokens.input_ids.shape[1]
             else:
                 input_text = context + target_word
-                # Tokenize context
                 context_tokens = tokenizer(context, return_tensors="pt").to(self.device)
                 context_length = context_tokens.input_ids.shape[1]
 
-            # Tokenize combined input and move to correct device
             inputs = tokenizer(input_text, return_tensors="pt").to(self.device)
 
-            # Safety check to prevent index out of bounds
             if context_length >= inputs.input_ids.shape[1]:
-                # Fallback: use the last token
                 context_length = inputs.input_ids.shape[1] - 1
 
             with torch.no_grad():
                 outputs = model(**inputs)
                 logits = outputs.logits
-
-                # Get logits for predicting the first token of the target word
                 target_logits = logits[0, context_length - 1 : context_length]
 
-                # Get the actual token ID that appears at the position after context
                 if context_length < inputs.input_ids.shape[1]:
                     target_token_id = inputs.input_ids[0, context_length].item()
-
-                    # Calculate log probability and surprisal
                     log_prob = torch.log_softmax(target_logits, dim=-1)[0, target_token_id]
                     surprisal = -log_prob.item()
                 else:
-                    # Fallback if we can't identify the target token
                     logger.error("Cannot compute surprisal: unable to identify target token")
-                    surprisal = float("nan")  # Return NaN for failed computations
+                    surprisal = float("nan")
 
             return surprisal
 
         except Exception as e:
             logger.error(f"Error in compute_surprisal: {str(e)}")
-            # Include traceback for debugging
-            import traceback
-
-            logger.error(traceback.format_exc())
-            return float("nan")  # Return NaN for failed computations
+            return float("nan")
 
     def analyze_steps(
         self,
         contexts: list[list[str]],
         target_words: list[str],
         use_bos_only: bool = True,
-        output_path: Path | str | None = None,
     ) -> pd.DataFrame:
-        """Analyze surprisal across all steps for given words and their contexts."""
-
+        """Analyze surprisal across steps with optional neuron ablation."""
         results = []
 
         for step in self.config.steps:
             logger.info(f"Processing step {step}")
             try:
                 model, tokenizer = self.load_model_for_step(step)
-                # Process each word and its contexts
-                for word_contexts, target_word in zip(contexts, target_words):
-                    # Process each context for the current word
-                    for context_idx, context in enumerate(word_contexts):
-                        surprisal = self.compute_surprisal(
-                            model, tokenizer, context, target_word, use_bos_only=use_bos_only
-                        )
 
-                        results.append(
-                            {
+                for word_contexts, target_word in zip(contexts, target_words):
+                    for context_idx, context in enumerate(word_contexts):
+                        # If we have neurons to ablate for this step, compute only ablated surprisal
+                        if self.ablator and step in self.step_ablations:
+                            surprisal = self.compute_surprisal(
+                                model, tokenizer, context, target_word,
+                                use_bos_only=use_bos_only,
+                                ablated=True
+                            )
+                            result = {
+                                "step": step,
+                                "target_word": target_word,
+                                "context_id": context_idx,
+                                "context": "BOS_ONLY" if use_bos_only else context,
+                                "surprisal": surprisal,
+                                "ablated_neurons": str(self.step_ablations[step]),
+                            }
+                        else:
+                            # If no neurons to ablate, compute normal surprisal
+                            surprisal = self.compute_surprisal(
+                                model, tokenizer, context, target_word,
+                                use_bos_only=use_bos_only,
+                                ablated=False
+                            )
+                            result = {
                                 "step": step,
                                 "target_word": target_word,
                                 "context_id": context_idx,
                                 "context": "BOS_ONLY" if use_bos_only else context,
                                 "surprisal": surprisal,
                             }
-                        )
-                # Clean up GPU memory
+                        results.append(result)
+
+                # Cleanup
                 del model
                 del tokenizer
                 if self.device == "cuda":
@@ -190,6 +290,14 @@ class StepSurprisalExtractor:
                 continue
 
         return pd.DataFrame(results)
+
+
+
+    def cleanup(self) -> None:
+        """Clean up resources."""
+        if self.ablator:
+            self.ablator.cleanup()
+
 
 
 #######################################################
@@ -224,3 +332,27 @@ def load_eval(
         contexts.append(word_contexts)
     logger.info(f"{len(target_words)-len(words)} words have no context!")
     return words, contexts
+
+
+def load_neuron_dict(
+    file_path: Path,
+    key_col: str = "step",
+    value_col: str = "top_neurons",
+) -> dict[int, list[int]]:
+    """Load a DataFrame and convert neuron values to integers."""
+    df = pd.read_csv(file_path)
+
+    result = {}
+    for _, row in df.iterrows():
+        try:
+            # Parse the string to list of floats
+            float_neurons = ast.literal_eval(row[value_col])
+            # Extract the decimal part as integer; Converts '5.2021' format to 2021.
+            neurons = [int(str(float(x)).split('.')[1]) for x in float_neurons]
+            result[row[key_col]] = neurons
+        except (ValueError, SyntaxError) as e:
+            print(f"Error parsing neuron list for step {row[key_col]}: {e}")
+            result[row[key_col]] = []
+
+    return result
+
