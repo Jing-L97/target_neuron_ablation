@@ -2,7 +2,7 @@ device: cuda
 dry_run: false
 seed: 42
 chdir: "."
-model: EleutherAI/pythia-410m-deduped
+model: EleutherAI/pythia-70m-deduped
 dataset: stas/c4-en-10k
 use_log2_entropy: false
 data_range_start: 0

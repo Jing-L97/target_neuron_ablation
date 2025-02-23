@@ -1,98 +1,169 @@
-import sys
-sys.path.append('../')
-import pandas as pd
-import plotly.express as px
-from neuron_analyzer.ablations import *
+#!/usr/bin/env python
+import argparse
+import logging
+from pathlib import Path
+
 import numpy as np
-import plotly.graph_objects as go
-from plotly.express.colors import qualitative
+import pandas as pd
+
+from neuron_analyzer import settings
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
-def load_result(
-    model_name:str,
-    dataset:str = 'stas/c4-en-10k',
-    data_range_start:int = 0,
-    data_range_end:int = 500,
-    k = 10
-    ):
-    save_path = f'./{output_dir}/{model_name}/unigram/{dataset.replace("/","_")}_{data_range_start}-{data_range_end}/k{k}.feather'
-    final_df = pd.read_feather(save_path)
-    # %%
-    final_df['delta_loss'] = final_df['loss_post_ablation'] - final_df['loss']
-    final_df['delta_loss_with_frozen_unigram'] = final_df['loss_post_ablation_with_frozen_unigram'] - final_df['loss']
-    final_df['abs_delta_loss_post_ablation'] = np.abs(final_df['loss_post_ablation'] - final_df['loss'])
-    final_df['abs_delta_loss_post_ablation_with_frozen_unigram'] = np.abs(final_df['loss_post_ablation_with_frozen_unigram'] - final_df['loss'])
-    final_df['delta_entropy'] = final_df['entropy_post_ablation'] - final_df['entropy']
-    if 'kl_divergence_before' in final_df.columns:
-        print('kl_divergence_before found')
-        final_df['kl_from_unigram_diff'] = final_df['kl_divergence_after'] - final_df['kl_divergence_before']
-        final_df['kl_from_unigram_diff_with_frozen_unigram'] = final_df['kl_divergence_after_frozen_unigram'] - final_df['kl_divergence_before']
-        final_df['abs_kl_from_unigram_diff'] = final_df['kl_from_unigram_diff'].abs()
-    final_df['abs_kl_from_unigram_diff'] = final_df['kl_from_unigram_diff'].abs()
 
-    return final_df
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments."""
+    parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
 
+    parser.add_argument(
+        "-m","--model", type=str,
+        default="EleutherAI/pythia-70m-deduped",
+        help="Target model name"
+        )
+    parser.add_argument("--top_n", type=int,
+        default=10,help="use_bos_only if enabled"
+        )
+    parser.add_argument("--data_range_end", type=int,
+        default=500,help="use_bos_only if enabled"
+        )
+    parser.add_argument("--k", type=int,
+        default=10,help="use_bos_only if enabled"
+        )
+    return parser.parse_args()
+
+
+
+def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int) -> pd.DataFrame:
+    if not feather_path.is_file():
+        return
+
+    final_df = pd.read_feather(feather_path)
+    logger.info(f"Analyzing file from {feather_path}")
+    final_df["abs_delta_loss_post_ablation"] = np.abs(final_df["loss_post_ablation"] - final_df["loss"])
+    final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
+        final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
+    )
+    if "kl_divergence_before" in final_df.columns:
+        final_df["kl_from_unigram_diff"] = final_df["kl_divergence_after"] - final_df["kl_divergence_before"]
+    # filter the neurons that push towards the unigram freq
+    final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
+
+    # Calculate the mediation effect
+    final_df["mediation_effect"] = (
+        1 - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / final_df["abs_delta_loss_post_ablation"]
+    )
+
+    ranked_neurons = final_df.sort_values(by=["mediation_effect", "kl_from_unigram_diff"], ascending=[False, False])
+    # Select top N neurons, preserving the original sorting
+    top_neurons = ranked_neurons["component_name"].head(top_n).tolist()
+    med_effect = ranked_neurons["mediation_effect"].head(top_n).tolist()
+    kl_diff = ranked_neurons["kl_from_unigram_diff"].head(top_n).tolist()
+
+    return pd.DataFrame([step,top_neurons,med_effect,kl_diff]).T
 
 
 def select_top_token_frequency_neurons(
-    final_df: pd.DataFrame, 
-    unigram_kl_threshold: float = 2.0, 
-    unigram_mediation_threshold: float = 0.5, 
-    top_n: int = 10
-) -> dict[str, list[str]]:
+    feather_path: Path,
+    top_n: int,
+    step: int,
+    model_dim: int  # Add model dimension parameter
+) -> pd.DataFrame:
     """
-    Correctly select top token frequency neurons based on multiple criteria.
+    Select neurons based on token frequency effects.
+    
+    Args:
+        feather_path: Path to feather file containing analysis
+        top_n: Number of top neurons to select
+        step: Training step being analyzed
+        model_dim: Model's layer dimension size
+        
+    Returns:
+        DataFrame with selected neurons and their effects
     """
-    # Calculate the mediation effect
-    final_df['mediation_effect'] = (
-        1 - final_df['abs_delta_loss_post_ablation_with_frozen_unigram'] 
-        / final_df['abs_delta_loss_post_ablation']
+    if not feather_path.is_file():
+        return None
+        
+    final_df = pd.read_feather(feather_path)
+    logger.info(f"Analyzing file from {feather_path}")
+    
+    # Calculate metrics
+    final_df["abs_delta_loss_post_ablation"] = np.abs(
+        final_df["loss_post_ablation"] - final_df["loss"]
     )
-
+    final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
+        final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
+    )
+    
+    # Handle KL divergence if present
+    if "kl_divergence_before" in final_df.columns:
+        final_df["kl_from_unigram_diff"] = (
+            final_df["kl_divergence_after"] - final_df["kl_divergence_before"]
+        )
+        # Filter neurons that push towards unigram freq
+        final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
+    
+    # Calculate mediation effect
+    final_df["mediation_effect"] = (
+        1 - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / 
+        final_df["abs_delta_loss_post_ablation"]
+    )
+    
+    # Validate neuron indices
+    def validate_neuron_index(component_name: str) -> bool:
+        try:
+            layer, neuron = map(int, component_name.split('.'))
+            return neuron < model_dim
+        except (ValueError, IndexError):
+            return False
+            
+    # Filter out invalid neurons
+    final_df = final_df[final_df["component_name"].apply(validate_neuron_index)]
+    
+    # Rank and select neurons
     ranked_neurons = final_df.sort_values(
-        by='mediation_effect', 
-        ascending=False
+        by=["mediation_effect", "kl_from_unigram_diff"], 
+        ascending=[False, False]
     )
     
-    # Select top N neurons, preserving the original sorting
-    top_neurons = ranked_neurons['component_name'].head(top_n).tolist()
-
-    return {
-        model_name: top_neurons
-    }
-
-def aggregate_result(final_df:pd.DataFrame,unigram_neurons_dict:dict)->pd.DataFrame:
-
-    unigram_neurons = unigram_neurons_dict.get(model_name, [])
-    final_df['is_unigram'] = final_df['component_name'].isin(unigram_neurons).astype(bool)
+    # Select top N neurons
+    top_neurons = ranked_neurons["component_name"].head(top_n).tolist()
+    med_effect = ranked_neurons["mediation_effect"].head(top_n).tolist()
+    kl_diff = ranked_neurons["kl_from_unigram_diff"].head(top_n).tolist()
     
-    columns_to_aggregate =list(final_df.columns[8:]) + ['loss']
-    print(columns_to_aggregate)
-    agg_results = final_df[columns_to_aggregate].groupby('component_name').mean().reset_index()
+    return pd.DataFrame({
+        "step": [step],
+        "top_neurons": [top_neurons],
+        "mediation_effect": [med_effect],
+        "kl_divergence_diff": [kl_diff]
+    })
 
-    # make scatter plot of delta_loss and delta_loss_with_frozen_unigram for each neuron
-    agg_results['delta_loss-delta_loss_with_frozen_unigram'] = agg_results['delta_loss'] - agg_results['delta_loss_with_frozen_unigram']
-    agg_results['abs_delta_loss-abs_delta_loss_with_frozen_unigram'] = agg_results['abs_delta_loss_post_ablation'] - agg_results['abs_delta_loss_post_ablation_with_frozen_unigram']
-    # %%
-    # make scatter plot of delta_loss and delta_loss_with_frozen_unigram for each neuron
-    agg_results['delta_loss-delta_loss_with_frozen_unigram'] = agg_results['delta_loss'] - agg_results['delta_loss_with_frozen_unigram']
-    agg_results['abs_delta_loss-abs_delta_loss_with_frozen_unigram'] = agg_results['abs_delta_loss_post_ablation'] - agg_results['abs_delta_loss_post_ablation_with_frozen_unigram']
-    agg_results['1-abs_delta_loss_with_frozen_unigram/abs_delta_loss'] = 1 - agg_results['abs_delta_loss_post_ablation_with_frozen_unigram'] / agg_results['abs_delta_loss_post_ablation']
 
-    return agg_results
-    
-def plot_top_token_frequency_neurons(
-    agg_results: pd.DataFrame, 
-    unigram_neurons: list[str], 
-    model_name: str
-):  # Consider specifying the exact return type of your plotting library
-    """Create a scatter plot highlighting top token frequency neurons."""
-    
 
-    # Prepare neuron type column
-    conditions = [(agg_results['is_unigram'] == True)]
-    choices = ['Token Frequency']
-    agg_results['Neuron Type'] = np.select(conditions, choices, default='Normal')
 
-    return fig
+def main() -> None:
+    """Main function demonstrating usage."""
+    args = parse_args()
 
+    # loop over different steps
+    abl_path = settings.PATH.result_dir/ "ablations" / "unigram" / args.model
+    save_path = settings.PATH.result_dir / "token_freq" / args.model / f"{args.data_range_end}_{args.top_n}.csv"
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    if save_path.is_file():
+        logger.info(f"{save_path} already exists, skip!")
+    else:
+        neuron_df = pd.DataFrame()
+        # check whether the target file has been created
+        for step in abl_path.iterdir():
+            feather_path = abl_path / str(step)/ str(args.data_range_end)/ f"k{args.k}.feather"
+            frame = select_top_token_frequency_neurons(feather_path, args.top_n, step.name)
+            neuron_df = pd.concat([neuron_df,frame])
+        # assign col headers
+        neuron_df.columns = ["step","top_neurons","med_effect","kl_diff"]
+        neuron_df.to_csv(save_path)
+        logger.info(f"Save file to {save_path}")
+
+if __name__ == "__main__":
+    main()

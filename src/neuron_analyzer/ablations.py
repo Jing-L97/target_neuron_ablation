@@ -38,12 +38,7 @@ def neuron_str_to_neuron(input_str):
 
 # from logits
 def get_entropy(logits, use_log2=False):
-    '''
-    logits (batch seq d_vocab)
-    
-    return 
-    entropy (batch seq)
-    ''' 
+    '''logits (batch seq d_vocab)''' 
     entropy = logits.softmax(dim=-1) * logits.log_softmax(dim=-1)
 
     if use_log2: 
@@ -109,7 +104,7 @@ def get_entropy_activation_df(neuron_names,
     for attn_head_name in bos_attn_heads_list:
         if attn_head_name not in attention_to_bos_dict.keys():
             attention_to_bos_dict.update({attn_head_name:[]})
-    
+
     num_batches = math.ceil(len(tokenized_data) / batch_size)
     for i in tqdm.tqdm(range(num_batches)): 
         start = i * batch_size 
@@ -125,7 +120,6 @@ def get_entropy_activation_df(neuron_names,
         preds.append(logits.argmax(dim=-1).cpu().numpy())
         top_p.append(np.log(logits.softmax(dim=-1).max(dim=-1).values.cpu().numpy()))
 
-        
         # Get the ranking of the logits
         logits_ranking = logits.argsort(dim=-1, descending=True).cpu()
 
@@ -283,7 +277,6 @@ def filter_entropy_activation_df(entropy_df, model_name=None, tokenizer=None, st
     removes tokens at start and end of sequence
     removes BOS tokens
     removes tokens where next prediction is BOS
-
     '''
     #filtering token_ids
     newline_token_id = None
@@ -295,10 +288,10 @@ def filter_entropy_activation_df(entropy_df, model_name=None, tokenizer=None, st
     if 'pythia' in model_name.lower(): 
         assert(bos_token_id==0 and eos_token_id==0)
 
-    if 'stanford' in model_name.lower(): 
+    if 'stanford' in model_name.lower():
         newline_token_id = tokenizer.encode("\n")[0]
         assert(bos_token_id==50256 and eos_token_id==50256)
-    elif 'gpt' in model_name.lower(): 
+    elif 'gpt' in model_name.lower():
         newline_token_id = tokenizer.encode("\n")[0]
 
     bos_mask = entropy_df['token_id'] == bos_token_id
@@ -332,7 +325,7 @@ def filter_resid_stack(resid_stack, filtered_entropy_df):
         for key in resid_stack.keys():
             resid_stack[key] = resid_stack[key][filtered_indices]
 
-    else: 
+    else:
         # assumes resid_dict is numpy array 
         resid_stack = resid_stack[filtered_indices]
 
@@ -514,7 +507,7 @@ def bos_ablate_attn_heads(attn_head_names,
             single_token_probs = logits[0, position, :].softmax(dim=-1).cpu()
             kl_divergence = kl_div(single_token_abl_probs, single_token_probs, reduction='none') # this is element-wise 
             kl_before_after.append(kl_divergence.sum().item())
-            
+
             # compute KL divergence between the ablated distribution and the distribution from the model.b_U
             b_U_probs = model.b_U.softmax(dim=0).cpu()
             kl_divergence_after = kl_div(single_token_abl_probs, b_U_probs, reduction='none').sum().item()
@@ -598,7 +591,6 @@ def mean_ablate_attn_heads(attn_head_names,
         #currently hard-coded to do "final_layer".resid_post_norm 
         print("Reminder: resid_norm change is currently hardcoded for final layer resid post only")
         assert(f"{model.cfg.n_layers - 1}.resid_post_norm" in entropy_df.columns), "To compute resid norm change, entropy_df must have column final_layer.resid_post_norm in entropy_df"
-
 
 
     neuron_names = []
@@ -732,14 +724,14 @@ def load_model_from_tl_name1(model_name, device='cuda', cache_dir=None, hf_token
     if "qwen" in model_name.lower():
         tokenizer = AutoTokenizer.from_pretrained(hf_model_name, trust_remote_code=True, pad_token='<|extra_0|>', eos_token='<|endoftext|>', cache_dir=cache_dir)
         # following the example given in their github repo: https://github.com/QwenLM/Qwen
-    else: 
+    else:
         tokenizer = AutoTokenizer.from_pretrained(hf_model_name, trust_remote_code=True, cache_dir=cache_dir, token=hf_token)
 
     #loading model 
     if "llama" in model_name.lower() or "gemma" in model_name.lower() or "mistral" in model_name.lower(): 
         hf_model = AutoModelForCausalLM.from_pretrained(hf_model_name, token=hf_token, cache_dir=cache_dir)
         model = HookedTransformer.from_pretrained(model_name=model_name, hf_model=hf_model, tokenizer=tokenizer, device=device, cache_dir=cache_dir)
-    else: 
+    else:
         model = HookedTransformer.from_pretrained(model_name, device=device, cache_dir=cache_dir, token=hf_token)
 
     return model, tokenizer
