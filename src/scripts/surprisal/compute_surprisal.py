@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
         "-w",
         "--word_path",
         type=Path,
-        default="context/stas/c4-en-10k/5/cdi_childes.json",
+        default="context/stas/c4-en-10k/5/oxford-understand.json",
         help="Relative path to the target words",
     )
 
@@ -39,15 +39,25 @@ def parse_args() -> argparse.Namespace:
 
 
 
+def get_count(filename:str)->str:
+    return filename.split(".")[0].split("_")[1]
 
 
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
 
+    ###################################
+    # load materials and paths
+    ###################################
+
     # Load target words
     target_words, contexts = load_eval(settings.PATH.dataset_root / args.word_path)
-    logger.info(f"{len(target_words)} target words have been loaded.")
+    if args.debug:
+        target_words, contexts = target_words[:5], contexts[:5]
+        logger.info("Entering debugging mode. Loading first 5 words")
+    else:
+        logger.info(f"{len(target_words)} target words have been loaded.")
 
     # load neuron indices
     if args.ablate == "zero":
@@ -56,13 +66,20 @@ def main() -> None:
             key_col = "step",
             value_col = "top_neurons"
             )
+        neuron_count = get_count(args.neuron_file)
+        filename = f"{args.model_name}_{neuron_count}.debug" if args.debug else f"{args.model_name}_{neuron_count}.csv"
+
     elif args.ablate == "base":
         step_ablations = None
-        logger.info("Compute base surprisal")
+        filename = f"{args.model_name}.debug" if args.debug else f"{args.model_name}.csv"
 
-    if args.debug:
-        target_words, contexts = target_words[:5], contexts[:5]
-        logger.info("Entering debugging mode. Loading first 5 words")
+    logger.info(f"Compute {args.ablate} surprisal")
+
+
+
+    ###################################
+    # Initialize classes
+    ###################################
 
     # Initialize configuration with all Pythia checkpoints
     steps_config = StepConfig()
@@ -76,18 +93,23 @@ def main() -> None:
         step_ablations = step_ablations
     )
 
+    ###################################
+    # Save the target results
+    ###################################
+
     try:
         results_df = extractor.analyze_steps(
             contexts=contexts, target_words=target_words, use_bos_only=args.use_bos_only
         )
         # Save results even if some checkpoints failed
         if not results_df.empty:
-            result_folder = settings.PATH.result_dir / "surprisal" / args.ablate
-            result_folder.mkdir(parents=True, exist_ok=True)
-            filename = f"{args.model_name}.debug" if args.debug else f"{args.model_name}.csv"
-            results_df.to_csv(result_folder /filename, index=False)
-            logger.info(f"Results saved to: {result_folder /filename}")
-            logger.info(f"Processed {len(results_df['step'].unique())} checkpoints successfully")
+            result_file = settings.PATH.result_dir / "surprisal" / args.ablate / Path(args.word_path).stem/filename
+            result_file.parent.mkdir(parents=True, exist_ok=True)
+            results_df.to_csv(result_file, index=False)
+            logger.info(
+                f"Results saved to: {result_file}"
+                f"Processed {len(results_df['step'].unique())} checkpoints successfully"
+                )
         else:
             logger.warning("No results were generated")
 

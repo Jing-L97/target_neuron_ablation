@@ -247,7 +247,7 @@ def process_single_step(args: DictConfig, step: int,save_path:Path) -> None:
     #save_path = settings.PATH.result_dir/args.output_dir/"unigram"/args.model/str(step)/str(args.data_range_end)
 
     # check if save_path exists, if not create it
-    save_path.mkdir(parents=True, exist_ok=True)
+    save_path.parent.mkdir(parents=True, exist_ok=True)
 
     with open(settings.PATH.dataset_root/'src'/args.hf_token_path, 'r') as f:
         hf_token = f.read()
@@ -352,7 +352,7 @@ def process_single_step(args: DictConfig, step: int,save_path:Path) -> None:
 
     # Save results
     final_df = final_df.reset_index(drop=True)
-    final_df.to_feather(f'{save_path}/k{args.k}.feather')
+    final_df.to_feather(save_path)
     logger.info(f"Saved results for step {step} to {save_path}/k{args.k}.feather")
 
 @hydra.main(config_path=str(settings.PATH.config_dir), config_name='config_unigram_ablations', version_base=None)

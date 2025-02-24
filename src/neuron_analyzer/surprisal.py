@@ -153,11 +153,9 @@ class StepSurprisalExtractor:
 
         # Only proceed with ablation setup if step_ablations exists and contains the step
         if self.step_ablations is not None and step in self.step_ablations:
-            logger.info(f"Found step {step} in the step_ablations")
             config = AblationConfig(neurons=self.step_ablations[step])
             self.ablator = NeuronAblator(model, config)
             logger.info(f"Created ablator for step {step} with neurons {self.step_ablations[step]}")
-            logger.info("Activated ablation!")
 
 
     def load_model_for_step(self, step: int) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:

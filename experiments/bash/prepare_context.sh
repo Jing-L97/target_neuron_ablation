@@ -5,7 +5,7 @@
 #SBATCH --mem=70G
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
-#SBATCH --time=2-00:00:00
+#SBATCH --time=10:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/preprocess.log
 
 

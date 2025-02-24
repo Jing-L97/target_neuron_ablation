@@ -18,7 +18,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="collect n-gram contexts from a corpus.")
     parser.add_argument(
-        "-w", "--words_file", type=Path, default="matched/cdi_childes.csv", help="Relative path to the target words"
+        "-w", "--words_file", type=Path, default="matched/oxford-understand.csv", help="Relative path to the target words"
     )
     parser.add_argument(
         "-o", "--output_path", type=Path, default="context", help="Relative path to the extracted context"
