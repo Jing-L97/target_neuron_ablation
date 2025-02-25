@@ -2,6 +2,7 @@
 import ast
 import json
 import logging
+import random
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,7 +13,7 @@ from transformers import AutoTokenizer, GPTNeoXForCausalLM
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
+random.seed(42)
 
 #######################################################
 # Extract different steps
@@ -47,14 +48,14 @@ class StepConfig:
 #######################################################
 # Neuron manipulation
 
-@dataclass
 class AblationConfig:
     """Configuration for neuron ablation."""
 
-    layer_name: str = "gpt_neox.layers.5.mlp.dense_h_to_4h"  # Last MLP layer
-    neurons: list[str] = None  # List of neuron indices to ablate
-    k: int = 10  # Number of iterations for ablation analysis
-
+    def __init__(self, layer_num: str, neurons: list[int] | None = None, k: int = 10) -> None:
+        """Initialize ablation configuration."""
+        self.layer_name: str = f"gpt_neox.layers.{layer_num}.mlp.dense_h_to_4h"
+        self.neurons: list[int] | None = neurons
+        self.k: int = k
 
 class NeuronAblator:
     """Handles neuron ablation in transformer models."""
@@ -109,12 +110,14 @@ class StepSurprisalExtractor:
         config: StepConfig,
         model_name: str,
         model_cache_dir: Path,
+        layer_num:int,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
-        step_ablations: dict[int, list] | None = None,
+        step_ablations: dict[int, list[int]] | None = None,
     ) -> None:
         """Initialize the surprisal extractor."""
         self.model_name = model_name
         self.model_cache_dir = model_cache_dir
+        self.layer_num = layer_num
         self.config = config
         self.device = device
         self.step_ablations = step_ablations
@@ -122,6 +125,7 @@ class StepSurprisalExtractor:
         self.current_step = None
         logger.info(f"Using device: {self.device}")
         self._validate_config()
+
 
     def _validate_config(self) -> None:
         """Validate configuration."""
@@ -140,12 +144,7 @@ class StepSurprisalExtractor:
                 raise ValueError(f"Ablation config contains invalid steps: {invalid_steps}")
 
     def _setup_ablator(self, model: GPTNeoXForCausalLM, step: int) -> None:
-        """Setup ablator for current step with specified neurons.
-
-        Args:
-            model: Model to apply ablation to
-            step: Current training step
-        """
+        """Setup ablator for current step with specified neurons."""
         # Clean up existing ablator
         if self.ablator:
             self.ablator.cleanup()
@@ -153,7 +152,12 @@ class StepSurprisalExtractor:
 
         # Only proceed with ablation setup if step_ablations exists and contains the step
         if self.step_ablations is not None and step in self.step_ablations:
-            config = AblationConfig(neurons=self.step_ablations[step])
+            # Create ablation config with the correct layer number (as string) and neurons list
+            layer_num:str
+            config = AblationConfig(
+                layer_num=self.layer_num,
+                neurons=self.step_ablations[step]
+            )
             self.ablator = NeuronAblator(model, config)
             logger.info(f"Created ablator for step {step} with neurons {self.step_ablations[step]}")
 
@@ -332,10 +336,12 @@ def load_eval(
     return words, contexts
 
 
+
 def load_neuron_dict(
     file_path: Path,
     key_col: str = "step",
     value_col: str = "top_neurons",
+    random_base: bool= False
 ) -> dict[int, list[int]]:
     """Load a DataFrame and convert neuron values to integers."""
     df = pd.read_csv(file_path)
@@ -347,10 +353,32 @@ def load_neuron_dict(
             float_neurons = ast.literal_eval(row[value_col])
             # Extract the decimal part as integer; Converts '5.2021' format to 2021.
             neurons = [int(str(float(x)).split('.')[1]) for x in float_neurons]
+            # generate the random indices excluded the 
+            if random_base:
+                neurons = generate_nerons(neurons)
             result[row[key_col]] = neurons
         except (ValueError, SyntaxError) as e:
             print(f"Error parsing neuron list for step {row[key_col]}: {e}")
             result[row[key_col]] = []
+    layer_num = [int(str(float(x)).split('.')[0]) for x in float_neurons][0]
+    return result, layer_num
 
+
+
+def generate_nerons(exclude_list: list[str], min_val: int = 1, max_val: int = 2048) -> list[int]:
+    """Generate a list of non-repeating random integers with the same length as the input list."""
+    # Convert all strings to integers for comparison
+    excluded_ints = set(int(x) for x in exclude_list)
+    # Calculate how many numbers we need
+    count_needed = len(exclude_list)
+    # Ensure the range is large enough to generate required unique numbers
+    available_range = max_val - min_val + 1 - len(excluded_ints)
+    if available_range < count_needed:
+        max_val = min_val + count_needed + len(excluded_ints) - 1
+    # Generate the list of non-repeating random integers
+    result = []
+    while len(result) < count_needed:
+        rand_int = random.randint(min_val, max_val)
+        if rand_int not in excluded_ints and rand_int not in result:
+            result.append(str(rand_int))
     return result
-

@@ -1,16 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=h410r_cdi
+#SBATCH --job-name=h70r_ox
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
-#SBATCH --mem=160G
-#SBATCH --cpus-per-task=16
+#SBATCH --mem=80G
+#SBATCH --cpus-per-task=8
 #SBATCH --time=2-00:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/h410r_cdi.log
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/h_70_random.log
 
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
-MODEL="EleutherAI/pythia-410m-deduped"
-WORD="context/stas/c4-en-10k/5/cdi_childes.json"
+MODEL="EleutherAI/pythia-70m-deduped"
+WORD="context/stas/c4-en-10k/5/oxford-understand.json"
 
 python $SCRIPT_ROOT/compute_surprisal.py -m $MODEL -w $WORD -n 500_10.csv -a random
 python $SCRIPT_ROOT/compute_surprisal.py -m $MODEL -w $WORD -n 500_50.csv -a random
