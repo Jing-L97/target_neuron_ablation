@@ -29,12 +29,13 @@ def parse_args() -> argparse.Namespace:
         help="Target model name"
     )
     parser.add_argument(
-        "-a","--ablate", type=str, default="zero", 
+        "-a","--ablate", type=str, default="base", 
         choices=["base", "zero", "random"],
         help="Neuron options for computing surprisal"
         )
     parser.add_argument("--use_bos_only", action="store_true", help="use_bos_only if enabled")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
+    parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
 
 
@@ -70,11 +71,10 @@ def main() -> None:
             )
         neuron_count = get_count(args.neuron_file)
         filename = f"{args.model_name}_{neuron_count}.debug" if args.debug else f"{args.model_name}_{neuron_count}.csv"
-
     elif args.ablate == "base":
         step_ablations = None
         filename = f"{args.model_name}.debug" if args.debug else f"{args.model_name}.csv"
-
+        layer_num = None
     logger.info(f"Compute {args.ablate} surprisal")
 
 
@@ -83,8 +83,12 @@ def main() -> None:
     # Initialize classes
     ###################################
 
+    result_file = settings.PATH.result_dir / "surprisal" / args.ablate / Path(args.word_path).stem/filename
+    resume_file = settings.PATH.result_dir / "surprisal" / args.ablate / Path(args.word_path).stem/"resume"/filename
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    resume_file.parent.mkdir(parents=True, exist_ok=True)
     # Initialize configuration with all Pythia checkpoints
-    steps_config = StepConfig()
+    steps_config = StepConfig(args.resume, file_path = resume_file )
 
     # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model_name
@@ -93,21 +97,21 @@ def main() -> None:
         model_name=args.model_name,
         model_cache_dir=model_cache_dir,  # note here we use the relative path
         layer_num=layer_num,
-        step_ablations = step_ablations
+        step_ablations = step_ablations,
     )
 
     ###################################
     # Save the target results
     ###################################
-
     try:
         results_df = extractor.analyze_steps(
-            contexts=contexts, target_words=target_words, use_bos_only=args.use_bos_only
+            contexts=contexts, 
+            target_words=target_words, 
+            use_bos_only=args.use_bos_only,
+            resume_path=resume_file
         )
         # Save results even if some checkpoints failed
         if not results_df.empty:
-            result_file = settings.PATH.result_dir / "surprisal" / args.ablate / Path(args.word_path).stem/filename
-            result_file.parent.mkdir(parents=True, exist_ok=True)
             results_df.to_csv(result_file, index=False)
             logger.info(
                 f"Results saved to: {result_file}"
