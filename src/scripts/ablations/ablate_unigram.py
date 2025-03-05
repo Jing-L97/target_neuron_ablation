@@ -383,5 +383,3 @@ if __name__ == '__main__':
     logger.info(f'Current directory: {os.getcwd()}')
     hydra_wrapper()
 
-
-# %%
