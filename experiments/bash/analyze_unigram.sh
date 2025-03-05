@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=abl_analysis
 #SBATCH --export=ALL
-#SBATCH --partition=cpu
-#SBATCH --mem=200G
-#SBATCH --cpus-per-task=24
-#SBATCH --time=20:00:00
+#SBATCH --partition=gpu
+#SBATCH --mem=70G
+#SBATCH --gres=gpu:1
+#SBATCH --exclude=puck5
+#SBATCH --cpus-per-task=10
+#SBATCH --time=2-00:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/50_100.log
 
 
