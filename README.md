@@ -1,9 +1,5 @@
 # Confidence Regulation Neurons in Language Models
 
-This repository contains the code for the NeurIPS 2024 paper “Confidence Regulation Neurons in Language Models.”
-
-![Sample Figure](./assets/)
-
 ## Setup
 
 To install the required packages, run:
