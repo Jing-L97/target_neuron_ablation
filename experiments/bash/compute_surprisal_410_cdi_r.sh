@@ -16,4 +16,3 @@ WORD="context/stas/c4-en-10k/5/cdi_childes.json"
 
 python $SCRIPT_ROOT/compute_surprisal.py -m $MODEL -w $WORD -n 500_500.csv -a random --resume
 
-python $SCRIPT_ROOT/compute_surprisal.py -m $MODEL -w $WORD -n 500_100.csv -a random --resume

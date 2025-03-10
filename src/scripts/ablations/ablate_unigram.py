@@ -284,7 +284,7 @@ def process_single_step(args: DictConfig, step: int,save_path:Path) -> None:
         all_neuron_indices = list(range(start, end))
     else:
         all_neuron_indices = list(range(0, model.cfg.d_mlp))
-    
+
     all_neurons = [f"{entropy_neuron_layer}.{i}" for i in all_neuron_indices]
 
     logger.info("Lodded all the neurons")
@@ -382,4 +382,3 @@ def hydra_wrapper(hydra_args: DictConfig) -> None:
 if __name__ == '__main__':
     logger.info(f'Current directory: {os.getcwd()}')
     hydra_wrapper()
-

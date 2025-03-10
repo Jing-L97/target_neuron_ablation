@@ -13,5 +13,5 @@ SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/
 MODEL="EleutherAI/pythia-410m-deduped"
 WORD="context/stas/c4-en-10k/5/oxford-understand.json"
 
-
+python $SCRIPT_ROOT/compute_surprisal.py -m $MODEL -w $WORD -a base --resume
 python $SCRIPT_ROOT/compute_surprisal.py -m $MODEL -w $WORD -n 500_1000.csv -a random --resume
