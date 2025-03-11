@@ -1,4 +1,4 @@
-# Confidence Regulation Neurons in Language Models
+# Neuron intervention for long-tail lifting
 
 ## Setup
 
@@ -10,13 +10,18 @@ For accessing gated repositories (e.g., LLaMA), add your HuggingFace token to `.
 
 ## Ablation Experiments
 
-The `ablations/` folder contains code for performing neuron ablation experiments to identify entropy and token frequency neurons. We use Hydra for parameter configuration. The config files are available in ablations/config/. These scripts should be executed from the `ablations` folder.
+The `scripts/ablations/` folder contains code for performing neuron ablation experiments to identify token frequency neurons. We use Hydra for parameter configuration. The config files are available in `experiments/config/`
+
+- `ablate_unigram.py`: Runs mean ablations to quantify the total vs direct effect for token frequency neurons.
+- `analyze_unigram.py`: Select the token frequency neurons based on the mediation effect and KL divergence. 
+- `scale_neuron/`: Analyze null space of common tokens and the neuron scaling effect
 
 
-- `run_and_store_ablation_results.py`: Runs mean ablations to quantify the total vs direct effect for entropy neurons.
-- `run_and_store_unigram_results.py`: Runs mean ablations to quantify the total vs direct effect for token frequency neurons.
-- `load_results.py` and `load_unigram_results.py`: For visualizing the results of the mean ablation experiments.
-- `datasets/`: Contains `.npy` files with token counts for OpenWebText and The Pile, used to compute the token frequency distribution.
+## Metric
+The `scripts/surprisal/` folder contains code for computing the target surprisal-based metrics. 
+- `prepare_context.py`: Extract the target context of the given  word list
+- `compute_surprisal.py`: Compute surprisal conditioned on the given text, across differnt training steps. 
+
 
 ## Citing this Work
 If you find this work useful in your research, please consider citing our paper:
