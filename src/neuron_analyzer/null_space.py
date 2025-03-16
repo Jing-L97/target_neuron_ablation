@@ -281,7 +281,6 @@ class NullSpaceScaler:
 
         return self.analysis_results
 
-    
     def evaluate_token_prob(self, tokenized_data=None) -> pd.DataFrame:
         """
         Evaluate the change in token probabilities after scaling the null space.
@@ -289,37 +288,37 @@ class NullSpaceScaler:
         """
         if self.modified_weights is None:
             self.scale_rare_token_weights()
-            
+
         # Find rare tokens
         rare_token_mask = self.token_frequencies < self.rare_threshold
         rare_token_indices = torch.where(rare_token_mask)[0].to(self.device)
-        
+
         # Fix: Move CUDA tensor to CPU before converting to numpy
         rare_token_set = set(rare_token_indices.cpu().numpy())
-        
+
         # Get the tokenized data if not provided
         if tokenized_data is None:
             tokenized_data = self._tokenize_dataset()
-        
+
         print(f"Type of tokenized_data: {type(tokenized_data)}")
-        
+
         # Extract token sequences based on tokenized_data format
-        if hasattr(tokenized_data, 'input_ids'):
+        if hasattr(tokenized_data, "input_ids"):
             token_sequences = tokenized_data.input_ids
-        elif isinstance(tokenized_data, dict) and 'input_ids' in tokenized_data:
-            token_sequences = tokenized_data['input_ids']
+        elif isinstance(tokenized_data, dict) and "input_ids" in tokenized_data:
+            token_sequences = tokenized_data["input_ids"]
         else:
             print(f"Unexpected format for tokenized_data: {type(tokenized_data)}")
-            if hasattr(tokenized_data, '__getitem__') and 'tokens' in tokenized_data:
-                token_sequences = tokenized_data['tokens']
+            if hasattr(tokenized_data, "__getitem__") and "tokens" in tokenized_data:
+                token_sequences = tokenized_data["tokens"]
             else:
                 raise ValueError(f"Could not extract token sequences from: {type(tokenized_data)}")
-        
+
         # Process sequence token by token
         results = []
-        
+
         # Determine shape and iteration approach
-        if hasattr(token_sequences, 'shape'):
+        if hasattr(token_sequences, "shape"):
             if len(token_sequences.shape) == 2:  # [batch_size, seq_length]
                 batch_size, seq_length = token_sequences.shape
             else:
@@ -330,12 +329,12 @@ class NullSpaceScaler:
             # Handle list-like objects
             batch_size = len(token_sequences)
             seq_length = len(token_sequences[0]) if batch_size > 0 else 0
-        
+
         print(f"Processing {batch_size} sequences of length {seq_length}")
-        
+
         # Process in smaller chunks to avoid CUDA memory issues
         chunk_size = 8  # Smaller chunks are safer
-        
+
         # Print diagnostic information
         vocab_size = self.token_frequencies.shape[0]
         max_rare_index = rare_token_indices.max().item() if len(rare_token_indices) > 0 else 0
@@ -343,54 +342,60 @@ class NullSpaceScaler:
         print(f"Max rare token index: {max_rare_index}")
         print(f"W_U shape: {self.W_U.shape}")
         print(f"Number of rare tokens: {len(rare_token_indices)}")
-        
+
         for batch_idx in range(batch_size):
             for chunk_start in range(0, seq_length, chunk_size):
                 chunk_end = min(chunk_start + chunk_size, seq_length)
-                
+
                 # Clear memory before processing this chunk
                 torch.cuda.empty_cache()
                 gc.collect()
-                
-                for pos in tqdm(range(chunk_start, chunk_end), 
-                            desc=f"Batch {batch_idx+1}/{batch_size}, Chunk {chunk_start}-{chunk_end-1}"):
+
+                for pos in tqdm(
+                    range(chunk_start, chunk_end),
+                    desc=f"Batch {batch_idx + 1}/{batch_size}, Chunk {chunk_start}-{chunk_end - 1}",
+                ):
                     try:
                         # Extract single token sequence
-                        if hasattr(token_sequences, 'shape') and len(token_sequences.shape) == 2:
+                        if hasattr(token_sequences, "shape") and len(token_sequences.shape) == 2:
                             tok_seq = token_sequences[batch_idx][pos].clone()
-                        elif hasattr(token_sequences, 'shape'):
+                        elif hasattr(token_sequences, "shape"):
                             tok_seq = token_sequences[pos].clone()
                         else:
                             tok_seq = token_sequences[batch_idx][pos]
-                        
+
                         # Ensure tok_seq is a tensor and handle device
                         if not isinstance(tok_seq, torch.Tensor):
                             tok_seq = torch.tensor([tok_seq], device=self.device)
                         else:
                             tok_seq = tok_seq.to(self.device)
-                        
+
                         # Ensure proper dimensions for model input
                         if len(tok_seq.shape) == 0:  # Single token scalar
                             tok_seq = tok_seq.unsqueeze(0).unsqueeze(0)  # [1, 1]
                         elif len(tok_seq.shape) == 1:  # Single token in a vector
                             tok_seq = tok_seq.unsqueeze(0)  # [1, seq]
-                        
+
                         # Process with error handling
                         try:
                             with torch.no_grad():
                                 # Get original probabilities
                                 original_output = self.model(tok_seq)
-                                original_logits = original_output[0] if isinstance(original_output, tuple) else original_output
-                                
+                                original_logits = (
+                                    original_output[0] if isinstance(original_output, tuple) else original_output
+                                )
+
                                 # Print shapes for debugging
                                 if pos == chunk_start:  # Only print once per chunk
                                     print(f"Model output type: {type(original_output)}")
                                     if isinstance(original_output, tuple):
                                         print(f"Model output tuple length: {len(original_output)}")
                                         for i, item in enumerate(original_output):
-                                            print(f"Model output[{i}] shape: {item.shape if hasattr(item, 'shape') else 'not a tensor'}")
+                                            print(
+                                                f"Model output[{i}] shape: {item.shape if hasattr(item, 'shape') else 'not a tensor'}"
+                                            )
                                     print(f"Original logits shape: {original_logits.shape}")
-                                
+
                                 # Apply softmax - handle different shapes properly
                                 if len(original_logits.shape) == 3:  # [batch, seq, vocab]
                                     original_probs = original_logits.softmax(dim=-1)
@@ -401,142 +406,166 @@ class NullSpaceScaler:
                                 else:
                                     print(f"Unexpected logits shape: {original_logits.shape}")
                                     continue
-                                
+
                                 # Get residual
                                 _, cache = self.model.run_with_cache(tok_seq)
                                 final_residual = cache["ln_final.hook_normalized"]
-                                
+
                                 # Print debug info
                                 if pos == chunk_start:  # Only print once per chunk
                                     print(f"Final residual shape: {final_residual.shape}")
                                     print(f"Modified weights shape: {self.modified_weights.shape}")
-                                
+
                                 # Apply modified weights - handle different shapes
                                 if len(final_residual.shape) == 3:  # [batch, seq, hidden]
                                     # Use the last token's residual
                                     modified_logits = torch.matmul(final_residual[:, -1, :], self.modified_weights)
                                 else:  # [batch, hidden]
                                     modified_logits = torch.matmul(final_residual, self.modified_weights)
-                                    
+
                                 modified_probs = modified_logits.softmax(dim=-1)
-                                
+
                                 # Print once per chunk for debugging
                                 if pos == chunk_start:
                                     print(f"Original probs shape: {original_probs.shape}")
                                     print(f"Modified probs shape: {modified_probs.shape}")
-                                
+
                                 # Clean up intermediate tensors
                                 del original_output, original_logits, cache, final_residual, modified_logits
                         except RuntimeError as e:
                             print(f"CUDA error at position {pos}, skipping: {e}")
                             continue
-                        
+
                         # Calculate metrics carefully
                         try:
                             # Check if the rare token indices are within the vocabulary bounds
                             vocab_size_probs = original_probs.shape[1]
                             valid_indices = rare_token_indices[rare_token_indices < vocab_size_probs]
-                            
+
                             if len(valid_indices) == 0:
-                                print(f"Warning: No valid rare token indices found within vocabulary bounds ({vocab_size_probs})")
+                                print(
+                                    f"Warning: No valid rare token indices found within vocabulary bounds ({vocab_size_probs})"
+                                )
                                 continue
-                                
+
                             # Print first time for debugging
                             if pos == chunk_start:
-                                print(f"Number of valid rare tokens: {len(valid_indices)} out of {len(rare_token_indices)}")
-                            
+                                print(
+                                    f"Number of valid rare tokens: {len(valid_indices)} out of {len(rare_token_indices)}"
+                                )
+
                             # Calculate mean probability for rare tokens - direct indexing with valid indices
                             orig_rare_probs = original_probs[:, valid_indices].mean().item()
                             mod_rare_probs = modified_probs[:, valid_indices].mean().item()
-                            
+
                             # Debug: Print some actual probability values to verify they're non-zero
                             if pos == chunk_start:
-                                print(f"Sample of original rare token probs: {original_probs[:, valid_indices[:5]].flatten().tolist()}")
-                                print(f"Sample of modified rare token probs: {modified_probs[:, valid_indices[:5]].flatten().tolist()}")
-                            
+                                print(
+                                    f"Sample of original rare token probs: {original_probs[:, valid_indices[:5]].flatten().tolist()}"
+                                )
+                                print(
+                                    f"Sample of modified rare token probs: {modified_probs[:, valid_indices[:5]].flatten().tolist()}"
+                                )
+
                             # Calculate KL divergence more robustly
                             # Add small epsilon to avoid log(0) issues
                             epsilon = 1e-10
                             orig_log_probs = torch.log(original_probs + epsilon)
                             mod_log_probs = torch.log(modified_probs + epsilon)
-                            
+
                             # KL(original || modified)
                             kl_div1 = torch.sum(original_probs * (orig_log_probs - mod_log_probs), dim=1).mean().item()
-                            
+
                             # KL(modified || original) - reverse direction
                             kl_div2 = torch.sum(modified_probs * (mod_log_probs - orig_log_probs), dim=1).mean().item()
-                            
+
                             # Jensen-Shannon divergence (symmetric)
                             js_div = 0.5 * (kl_div1 + kl_div2)
-                            
+
                             # Print divergence values for debugging
                             if pos == chunk_start:
                                 print(f"KL(orig||mod): {kl_div1:.6f}, KL(mod||orig): {kl_div2:.6f}, JS: {js_div:.6f}")
-                                
+
                                 # Check if distributions are nearly identical
                                 max_prob_diff = torch.max(torch.abs(original_probs - modified_probs)).item()
                                 print(f"Maximum probability difference: {max_prob_diff:.6f}")
-                                
+
                                 # Check distribution sparsity
                                 orig_nonzero = (original_probs > epsilon).float().mean().item()
                                 mod_nonzero = (modified_probs > epsilon).float().mean().item()
-                                print(f"Non-zero probabilities: original {orig_nonzero:.2%}, modified {mod_nonzero:.2%}")
-                            
+                                print(
+                                    f"Non-zero probabilities: original {orig_nonzero:.2%}, modified {mod_nonzero:.2%}"
+                                )
+
                             # Top predictions with safe k
                             safe_k = min(5, original_probs.shape[1])
                             orig_top_indices = original_probs[0].topk(safe_k).indices.cpu().numpy()
                             mod_top_indices = modified_probs[0].topk(safe_k).indices.cpu().numpy()
-                            
+
                             # Count rare tokens in top predictions
                             orig_rare_in_top = sum(1 for idx in orig_top_indices if idx in rare_token_set)
                             mod_rare_in_top = sum(1 for idx in mod_top_indices if idx in rare_token_set)
-                            
+
                             # Get the actual token ID
                             token_id = tok_seq.flatten()[0].item() if tok_seq.numel() > 0 else -1
-                            
+
                             # Collect all metrics
-                            results.append({
-                                "batch_idx": batch_idx,
-                                "position": pos,
-                                "token_id": token_id,
-                                "original_rare_prob": orig_rare_probs,
-                                "modified_rare_prob": mod_rare_probs,
-                                "prob_increase": mod_rare_probs - orig_rare_probs,
-                                "kl_divergence": kl_div1,  # Original PyTorch KL
-                                "kl_divergence_orig_to_mod": kl_div1,
-                                "kl_divergence_mod_to_orig": kl_div2,
-                                "jensen_shannon_div": js_div,
-                                "original_rare_in_top": orig_rare_in_top,
-                                "modified_rare_in_top": mod_rare_in_top,
-                            })
+                            results.append(
+                                {
+                                    "batch_idx": batch_idx,
+                                    "position": pos,
+                                    "token_id": token_id,
+                                    "original_rare_prob": orig_rare_probs,
+                                    "modified_rare_prob": mod_rare_probs,
+                                    "prob_increase": mod_rare_probs - orig_rare_probs,
+                                    "kl_divergence": kl_div1,  # Original PyTorch KL
+                                    "kl_divergence_orig_to_mod": kl_div1,
+                                    "kl_divergence_mod_to_orig": kl_div2,
+                                    "jensen_shannon_div": js_div,
+                                    "original_rare_in_top": orig_rare_in_top,
+                                    "modified_rare_in_top": mod_rare_in_top,
+                                }
+                            )
                         except Exception as e:
                             print(f"Error calculating metrics: {e}")
                             import traceback
+
                             traceback.print_exc()
-                        
+
                         # Clean up references
                         del original_probs, modified_probs
-                        
+
                     except Exception as e:
                         print(f"Error processing token at batch {batch_idx}, position {pos}: {e}")
                         import traceback
+
                         traceback.print_exc()
-                        
+
                 # Force cleanup after each chunk
                 torch.cuda.empty_cache()
                 gc.collect()
-        
+
         # Check if we have any results
         if not results:
             print("Warning: No valid results were collected!")
-            empty_df = pd.DataFrame(columns=[
-                "batch_idx", "position", "token_id", 
-                "original_rare_prob", "modified_rare_prob", "prob_increase",
-                "kl_divergence", "kl_divergence_orig_to_mod", "kl_divergence_mod_to_orig",
-                "jensen_shannon_div", "original_rare_in_top", "modified_rare_in_top"
-            ])
+            empty_df = pd.DataFrame(
+                columns=[
+                    "batch_idx",
+                    "position",
+                    "token_id",
+                    "original_rare_prob",
+                    "modified_rare_prob",
+                    "prob_increase",
+                    "kl_divergence",
+                    "kl_divergence_orig_to_mod",
+                    "kl_divergence_mod_to_orig",
+                    "jensen_shannon_div",
+                    "original_rare_in_top",
+                    "modified_rare_in_top",
+                ]
+            )
             return empty_df
-            
+
         # Print summary statistics of results
         df = pd.DataFrame(results)
         print("\nResults Summary:")
@@ -547,7 +576,7 @@ class NullSpaceScaler:
         print(f"Average KL divergence (orig->mod): {df['kl_divergence_orig_to_mod'].mean():.6f}")
         print(f"Average KL divergence (mod->orig): {df['kl_divergence_mod_to_orig'].mean():.6f}")
         print(f"Average JS divergence: {df['jensen_shannon_div'].mean():.6f}")
-        
+
         return df
 
     def run_pipeline(self):
@@ -578,4 +607,3 @@ class NullSpaceScaler:
         data = " ".join(self.dataset["text"])
         self.tokenizer.pad_token = self.tokenizer.eos_token
         return self.tokenizer(data, return_tensors="pt", padding=True, max_length=128, truncation=True)
-

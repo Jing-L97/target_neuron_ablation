@@ -3,6 +3,7 @@ import ast
 import json
 import logging
 import random
+import typing as t
 from pathlib import Path
 
 import pandas as pd
@@ -13,6 +14,7 @@ from transformers import AutoTokenizer, GPTNeoXForCausalLM
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 random.seed(42)
+
 
 #######################################################
 # Extract different steps
@@ -27,7 +29,6 @@ class StepConfig:
         if resume and file_path is not None:
             self.steps = self.recover_steps(file_path)
         logger.info(f"Generated {len(self.steps)} checkpoint steps")
-
 
     def generate_pythia_checkpoints(self) -> list[int]:
         """Generate complete list of Pythia checkpoint steps."""
@@ -52,9 +53,9 @@ class StepConfig:
         """Filter out steps that have already been processed."""
         if file_path.is_file():
             # Read the CSV file from the given column
-            df = load_df(file_path,"step")
+            df = load_df(file_path, "step")
             # convert into int for matching
-            df['step'] = df['step'].astype(int)
+            df["step"] = df["step"].astype(int)
             # Extract completed steps from column headers
             completed_steps = set(df["step"])
             # Filter out completed steps
@@ -67,10 +68,17 @@ class StepConfig:
 class AblationConfig:
     """Configuration for neuron ablation."""
 
-    def __init__(self, layer_num: str, neurons: list[int] | None = None, k: int = 10) -> None:
+    def __init__(
+        self,
+        layer_num: str,
+        neurons: list[int] | None = None,
+        ablation_type: t.Literal["zero", "mean"] = "zero",
+        k: int = 10,
+    ) -> None:
         """Initialize ablation configuration."""
         self.layer_name: str = f"gpt_neox.layers.{layer_num}.mlp.dense_h_to_4h"
         self.neurons: list[int] | None = neurons
+        self.ablation_type = ablation_type
         self.k: int = k
 
 
@@ -89,12 +97,31 @@ class NeuronAblator:
         """Set up forward hooks for neuron ablation."""
 
         def ablation_hook(module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
-            """Forward hook to zero out specified neurons."""
-            if self.is_ablated and self.config.neurons:
-                # Zero out activations for specified neurons
+            """Forward hook to ablate specified neurons using zero or mean activation."""
+            if not self.is_ablated or not self.config.neurons:
+                return output
+
+            # Create a modified copy to avoid in-place operations that might affect backward pass
+            modified_output = output.clone()
+
+            if self.config.ablation_type == "zero":
+                # Zero activation - set activations to 0
                 for neuron_idx in self.config.neurons:
-                    output[:, :, int(neuron_idx)] = 0
-            return output
+                    modified_output[:, :, int(neuron_idx)] = 0
+
+            elif self.config.ablation_type == "mean":
+                # Mean activation - set to mean value across all neurons
+                # Calculate mean activation across all neurons (dimension 2)
+                # Shape: [batch_size, seq_length]
+                mean_activations = torch.mean(output, dim=2)
+
+                # Replace each specified neuron's activation with the mean
+                for neuron_idx in self.config.neurons:
+                    # For each position, set the neuron's activation to the mean activation
+                    # at that position across all neurons
+                    modified_output[:, :, int(neuron_idx)] = mean_activations
+
+            return modified_output
 
         # Get the MLP layer
         layer = dict(self.model.named_modules())[self.config.layer_name]
@@ -114,6 +141,7 @@ class NeuronAblator:
         """Remove the forward hook."""
         if self.hook_handle:
             self.hook_handle.remove()
+            self.hook_handle = None
 
 
 #######################################################
@@ -128,19 +156,21 @@ class StepSurprisalExtractor:
         model_cache_dir: Path,
         layer_num: int,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
+        ablation_type: str = "base",
         step_ablations: dict[int, list[int]] | None = None,
     ) -> None:
         """Initialize the surprisal extractor."""
         self.model_name = model_name
         self.model_cache_dir = model_cache_dir
-        self.layer_num = str(layer_num) 
+        self.layer_num = str(layer_num)
         self.config = config
         self.device = device
         self.step_ablations = step_ablations
+        self.ablation_type = ablation_type
         self.ablator = None
         self.current_step = None
         logger.info(f"Using device: {self.device}")
-        #self._validate_config()
+        # self._validate_config()
 
     def _validate_config(self) -> None:
         """Validate configuration."""
@@ -169,7 +199,7 @@ class StepSurprisalExtractor:
         if self.step_ablations is not None and step in self.step_ablations:
             # Create ablation config with the correct layer number (as string) and neurons list
             layer_num: str
-            config = AblationConfig(layer_num=self.layer_num, neurons=self.step_ablations[step])
+            config = AblationConfig(layer_num=self.layer_num, neurons=self.step_ablations[step], ablation_type = self.ablation_type)
             self.ablator = NeuronAblator(model, config)
             logger.info(f"Created ablator for step {step} with {len(self.step_ablations[step])} neurons.")
 
@@ -187,7 +217,6 @@ class StepSurprisalExtractor:
             # Setup ablator for this step
             self._setup_ablator(model, step)
             self.current_step = step
-
             return model, tokenizer
 
         except Exception as e:
@@ -246,11 +275,7 @@ class StepSurprisalExtractor:
             return float("nan")
 
     def analyze_steps(
-        self,
-        contexts: list[list[str]],
-        target_words: list[str],
-        use_bos_only: bool = True,
-        resume_path: Path = None
+        self, contexts: list[list[str]], target_words: list[str], use_bos_only: bool = True, resume_path: Path = None
     ) -> pd.DataFrame:
         """Analyze surprisal across steps with optional neuron ablation."""
         results = []
@@ -267,32 +292,24 @@ class StepSurprisalExtractor:
                             surprisal = self.compute_surprisal(
                                 model, tokenizer, context, target_word, use_bos_only=use_bos_only, ablated=True
                             )
-                            result = {
-                                "step": step,
-                                "target_word": target_word,
-                                "context_id": context_idx,
-                                "context": "BOS_ONLY" if use_bos_only else context,
-                                "surprisal": surprisal,
-                                "ablated_neurons": str(self.step_ablations[step]),
-                            }
                         else:
                             # If no neurons to ablate, compute normal surprisal
                             surprisal = self.compute_surprisal(
                                 model, tokenizer, context, target_word, use_bos_only=use_bos_only, ablated=False
                             )
-                            result = {
-                                "step": step,
-                                "target_word": target_word,
-                                "context_id": context_idx,
-                                "context": "BOS_ONLY" if use_bos_only else context,
-                                "surprisal": surprisal,
-                            }
+                        result = {
+                            "step": step,
+                            "target_word": target_word,
+                            "context_id": context_idx,
+                            "context": "BOS_ONLY" if use_bos_only else context,
+                            "surprisal": surprisal,
+                        }
                         results.append(result)
                 # save intermediate results
                 surprisal_frame = pd.DataFrame(results)
                 if resume_path.is_file():
-                    resume_frame = load_df(resume_path,"step")
-                    surprisal_frame = pd.concat([resume_frame,surprisal_frame])
+                    resume_frame = load_df(resume_path, "step")
+                    surprisal_frame = pd.concat([resume_frame, surprisal_frame])
                 surprisal_frame.to_csv(resume_path, index=False)
 
                 # Cleanup
@@ -342,7 +359,8 @@ def load_eval(
     logger.info(f"{len(target_words) - len(words)} words have no context!")
     return words, contexts
 
-def load_df(file_path:Path,col_header:str)->pd.DataFrame:
+
+def load_df(file_path: Path, col_header: str) -> pd.DataFrame:
     "Load df from the given column."
     df = pd.read_csv(file_path)
     start_idx = df.columns.tolist().index("step")

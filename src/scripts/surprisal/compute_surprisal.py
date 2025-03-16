@@ -30,7 +30,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "-a","--ablate", type=str, default="base", 
-        choices=["base", "zero", "random"],
+        choices=["base", "zero", "random","mean"],
         help="Neuron options for computing surprisal"
         )
     parser.add_argument("--use_bos_only", action="store_true", help="use_bos_only if enabled")
@@ -61,7 +61,7 @@ def main() -> None:
         logger.info(f"{len(target_words)} target words have been loaded.")
 
     # load neuron indices
-    if args.ablate in ["zero","random"]:
+    if args.ablate != "base":
         random_base = True if args.ablate == "random" else False
         step_ablations, layer_num = load_neuron_dict(
             settings.PATH.result_dir / "token_freq" / args.model_name / args.neuron_file,
