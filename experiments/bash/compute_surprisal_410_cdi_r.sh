@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --exclude=puck5
 #SBATCH --cpus-per-task=10
-#SBATCH --time=12:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/h410r_cdi.log
 
 

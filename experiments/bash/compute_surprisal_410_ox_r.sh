@@ -2,11 +2,10 @@
 #SBATCH --job-name=h410r_ox
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
-#SBATCH --mem=70G
+#SBATCH --mem=160G
 #SBATCH --gres=gpu:1
-#SBATCH --exclude=puck5
-#SBATCH --cpus-per-task=10
-#SBATCH --time=4:30:00
+#SBATCH --cpus-per-task=16
+#SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/h410r_ox.log
 
 

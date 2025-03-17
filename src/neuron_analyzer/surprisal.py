@@ -306,6 +306,7 @@ class StepSurprisalExtractor:
                         }
                         results.append(result)
                 # save intermediate results
+                # TODO: format it into differnt columns
                 surprisal_frame = pd.DataFrame(results)
                 if resume_path.is_file():
                     resume_frame = load_df(resume_path, "step")
