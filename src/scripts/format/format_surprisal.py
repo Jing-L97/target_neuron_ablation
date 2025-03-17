@@ -33,13 +33,17 @@ def format_csv(file_path:Path)->pd.DataFrame:
     if 'ablated_neurons' in df.columns:
         df = df.drop('ablated_neurons', axis=1)
     # convert differnet steps into different rows
-    df_h = df[df["step"]==0]
+    df_sel = df[df["step"]==0]
+    # remove duplicated rows
+    df_h = df_sel.drop_duplicates(subset=["target_word","context_id","context"], keep="first")
+    logger.info(f"FORMAT: Remove {df.shape[0] - df_h.shape[0]} duplicated rows")
     df_h = df_h.drop('surprisal', axis=1)
     df_grouped = df.groupby("step")
     for step, df_group in df_grouped:
         df_group = select_rows(df_group,df_h,["target_word","context_id","context"])
         df_h[step] = df_group['surprisal'].to_list()
         logger.info(f"Finished appending step {step}")
+    df_h = df_h.drop('step', axis=1)
     return df_h
 
 

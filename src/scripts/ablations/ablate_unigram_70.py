@@ -458,7 +458,7 @@ def process_single_step(args: DictConfig, step: int, save_path: Path) -> None:
     logger.info(f"Saved results for step {step} to {output_path}")
 
 
-@hydra.main(config_path=str(settings.PATH.config_dir), config_name="config_unigram_ablations", version_base=None)
+@hydra.main(config_path=str(settings.PATH.config_dir), config_name="config_unigram_ablations_70", version_base=None)
 def hydra_wrapper(hydra_args: DictConfig) -> None:
     """Wrapper function to handle Hydra configuration and process multiple steps."""
     # Get command line arguments for step range

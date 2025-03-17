@@ -170,7 +170,6 @@ class StepSurprisalExtractor:
         self.ablator = None
         self.current_step = None
         logger.info(f"Using device: {self.device}")
-        # self._validate_config()
 
     def _validate_config(self) -> None:
         """Validate configuration."""
