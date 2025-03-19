@@ -3,6 +3,7 @@ import os as _os
 import warnings as _warnings
 from pathlib import Path as _Path
 
+
 def cache_dir() -> _Path:
     """Return a directory to use as cache."""
     cache_path = _Path(_os.environ.get("CACHE_DIR", _Path.home() / ".cache" / __package__))
@@ -58,6 +59,11 @@ class _MyPathSettings:
     @property
     def result_dir(self) -> _Path:
         return self.DATA_DIR / "results"
+    
+    @property
+    def surprisal_dir(self) -> _Path:
+        return self.DATA_DIR / "results" / "surprisal"
+    
 
     @property
     def script_dir(self) -> _Path:

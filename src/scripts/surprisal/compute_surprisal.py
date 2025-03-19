@@ -2,6 +2,8 @@ import argparse
 import logging
 from pathlib import Path
 
+import pandas as pd
+
 from neuron_analyzer import settings
 from neuron_analyzer.surprisal import StepConfig, StepSurprisalExtractor, load_eval, load_neuron_dict
 
@@ -17,7 +19,7 @@ def parse_args() -> argparse.Namespace:
         "-w",
         "--word_path",
         type=Path,
-        default="context/stas/c4-en-10k/5/oxford-understand.json",
+        default="context/stas/c4-en-10k/5/merged.json",
         help="Relative path to the target words",
     )
 
@@ -29,9 +31,22 @@ def parse_args() -> argparse.Namespace:
         help="Target model name"
     )
     parser.add_argument(
+        "--ablation_mode", type=str, default="longtail", 
+        choices=["mean", "longtail"],
+        help="Differnt ablation model for freq vectors"
+        )
+    parser.add_argument(
         "-a","--ablate", type=str, default="base", 
         choices=["base", "zero", "random","mean"],
         help="Neuron options for computing surprisal"
+        )
+
+    parser.add_argument(
+        "--eval_lst", type=list, help="eval file list",
+        default=[
+            "freq/EleutherAI/pythia-410m/cdi_childes.csv",
+            "freq/EleutherAI/pythia-410m/oxford-understand.csv"
+            ]
         )
     parser.add_argument("--use_bos_only", action="store_true", help="use_bos_only if enabled")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
@@ -42,6 +57,19 @@ def parse_args() -> argparse.Namespace:
 
 def get_count(filename:str)->str:
     return filename.split(".")[0].split("_")[1]
+
+def sel_eval(results_df:pd.DataFrame,eval_path:Path,result_dir:Path,filename):
+    """Select the word subset from the eval file."""
+    # load eval file
+    eval_file = settings.PATH.dataset_root / eval_path
+    result_file = result_dir / eval_file.stem / filename
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    eval_frame = pd.read_csv(eval_file)
+    # select target words
+    results_df_sel = results_df[results_df["target_word"].isin(eval_frame["word"])]
+    results_df_sel.to_csv(result_file, index=False)
+    logger.info(f"Eval set saved to: {result_file}")
+
 
 
 def main() -> None:
@@ -64,7 +92,7 @@ def main() -> None:
     if args.ablate != "base":
         random_base = True if args.ablate == "random" else False
         step_ablations, layer_num = load_neuron_dict(
-            settings.PATH.result_dir / "token_freq" / args.model_name / args.neuron_file,
+            settings.PATH.result_dir / "token_freq" / args.ablation_mode / args.model_name / args.neuron_file,
             key_col = "step",
             value_col = "top_neurons",
             random_base = random_base
@@ -82,9 +110,9 @@ def main() -> None:
     ###################################
     # Initialize classes
     ###################################
-
-    result_file = settings.PATH.result_dir / "surprisal" / args.ablate / Path(args.word_path).stem/filename
-    resume_file = settings.PATH.result_dir / "surprisal" / args.ablate / Path(args.word_path).stem/"resume"/filename
+    result_dir = settings.PATH.surprisal_dir / args.ablation_mode / args.ablate
+    result_file = result_dir / Path(args.word_path).stem/filename
+    resume_file = result_dir / Path(args.word_path).stem/"resume"/filename
     result_file.parent.mkdir(parents=True, exist_ok=True)
     resume_file.parent.mkdir(parents=True, exist_ok=True)
     # Initialize configuration with all Pythia checkpoints
@@ -117,12 +145,17 @@ def main() -> None:
                 f"Results saved to: {result_file}\n"
                 f"Processed {len([col for col in results_df.columns if str(col).isdigit()])} checkpoints successfully"
             )
+            # save the eval file
+            for eval_path in args.eval_lst:
+                sel_eval(results_df,eval_path,result_dir,filename)
+
         else:
             logger.warning("No results were generated")
 
     except Exception as e:
         logger.error(f"Analysis failed: {str(e)}")
         raise
+
 
 
 if __name__ == "__main__":
