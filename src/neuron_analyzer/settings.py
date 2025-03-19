@@ -44,6 +44,10 @@ class _MyPathSettings:
         return self.DATA_DIR / "datasets"
 
     @property
+    def unigram_dir(self) -> _Path:
+        return self.DATA_DIR / "datasets"/ "src"/"unigram"
+
+    @property
     def model_dir(self) -> _Path:
         return self.DATA_DIR / "models"
 

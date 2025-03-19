@@ -11,4 +11,4 @@
 
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/ablations"
-python $SCRIPT_ROOT/ablate_unigram.py
+python $SCRIPT_ROOT/ablate_unigram.py --config config_unigram_ablations.yaml

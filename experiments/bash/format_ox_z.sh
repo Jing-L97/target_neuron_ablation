@@ -11,3 +11,4 @@
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/format"
 
 python $SCRIPT_ROOT/format_surprisal.py --neuron zero --eval oxford-understand
+

@@ -273,7 +273,7 @@ class StepSurprisalExtractor:
             logger.error(f"Error in compute_surprisal: {str(e)}")
             return float("nan")
 
-    def analyze_steps(
+    def analyze_steps1(
         self, contexts: list[list[str]], target_words: list[str], use_bos_only: bool = True, resume_path: Path = None
     ) -> pd.DataFrame:
         """Analyze surprisal across steps with optional neuron ablation."""
@@ -306,6 +306,57 @@ class StepSurprisalExtractor:
                         results.append(result)
                 # save intermediate results
                 # TODO: format it into differnt columns
+                surprisal_frame = pd.DataFrame(results)
+                if resume_path.is_file():
+                    resume_frame = load_df(resume_path, "step")
+                    surprisal_frame = pd.concat([resume_frame, surprisal_frame])
+                surprisal_frame.to_csv(resume_path, index=False)
+
+                # Cleanup
+                del model
+                del tokenizer
+                if self.device == "cuda":
+                    torch.cuda.empty_cache()
+
+            except Exception as e:
+                logger.error(f"Error processing step {step}: {str(e)}")
+                continue
+
+        return surprisal_frame
+
+
+    def analyze_steps(
+        self, contexts: list[list[str]], target_words: list[str], use_bos_only: bool = True, resume_path: Path = None
+    ) -> pd.DataFrame:
+        """Analyze surprisal across steps with optional neuron ablation."""
+        results = []
+
+        for step in self.config.steps:
+            logger.info(f"Processing step {step}")
+            try:
+                model, tokenizer = self.load_model_for_step(step)
+
+                for word_contexts, target_word in zip(contexts, target_words):
+                    for context_idx, context in enumerate(word_contexts):
+                        # If we have neurons to ablate for this step, compute only ablated surprisal
+                        if self.ablator and step in self.step_ablations:
+                            surprisal = self.compute_surprisal(
+                                model, tokenizer, context, target_word, use_bos_only=use_bos_only, ablated=True
+                            )
+                        else:
+                            # If no neurons to ablate, compute normal surprisal
+                            surprisal = self.compute_surprisal(
+                                model, tokenizer, context, target_word, use_bos_only=use_bos_only, ablated=False
+                            )
+                        result = {
+                            "step": step,
+                            "target_word": target_word,
+                            "context_id": context_idx,
+                            "context": "BOS_ONLY" if use_bos_only else context,
+                            step: surprisal,
+                        }
+                        results.append(result)
+                # save intermediate results
                 surprisal_frame = pd.DataFrame(results)
                 if resume_path.is_file():
                     resume_frame = load_df(resume_path, "step")

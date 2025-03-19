@@ -15,7 +15,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Format file to save space.")
     parser.add_argument(
-        "--neuron", choices=["zero", "random","mean"],default="zero",
+        "--neuron", choices=["base","zero", "random","mean"],default="zero",
         type=str, help="different abalation setting"
     )
 
