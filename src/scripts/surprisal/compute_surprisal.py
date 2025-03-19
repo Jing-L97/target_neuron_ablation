@@ -114,9 +114,9 @@ def main() -> None:
         if not results_df.empty:
             results_df.to_csv(result_file, index=False)
             logger.info(
-                f"Results saved to: {result_file}"
-                f"Processed {len(results_df['step'].unique())} checkpoints successfully"
-                )
+                f"Results saved to: {result_file}\n"
+                f"Processed {len([col for col in results_df.columns if str(col).isdigit()])} checkpoints successfully"
+            )
         else:
             logger.warning("No results were generated")
 

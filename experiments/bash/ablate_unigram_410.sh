@@ -5,7 +5,7 @@
 #SBATCH --mem=500G
 #SBATCH --gres=gpu:3
 #SBATCH --cpus-per-task=48
-#SBATCH --time=48:00:00
+#SBATCH --time=3:50:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/abl410.log
 
 

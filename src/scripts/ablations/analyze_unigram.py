@@ -53,7 +53,6 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int)
     return pd.DataFrame([step,top_neurons,med_effect,kl_diff]).T
 
 
-#TODO: first decide the long-tail
 
 
 
