@@ -1,13 +1,12 @@
 import argparse
-import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import List
 
 import pandas as pd
 
 from neuron_analyzer import settings
-from neuron_analyzer.preprocess import NGramContextCollector
+from neuron_analyzer.preprocess import NGramContextCollector, load_data, save_data
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -39,16 +38,6 @@ def load_target_words(file_path: Path) -> List[str]:
         data = pd.read_csv(file_path)
         print("csv file has been loded")
         return data["word"].to_list()
-
-
-def save_data(data: Dict[str, Any], file_path: Path) -> None:
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-
-def load_data(file_path: Path) -> Dict[str, Any]:
-    with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)
 
 
 def main():

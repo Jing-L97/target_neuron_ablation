@@ -48,6 +48,10 @@ class _MyPathSettings:
         return self.DATA_DIR / "datasets"/ "src"/"unigram"
 
     @property
+    def context_dir(self) -> _Path:
+        return self.DATA_DIR / "datasets"/ "context"
+
+    @property
     def model_dir(self) -> _Path:
         return self.DATA_DIR / "models"
 
@@ -59,11 +63,6 @@ class _MyPathSettings:
     def script_dir(self) -> _Path:
         return self.DATA_DIR / "target_neuron_ablation"
     
-    @property
-    def config_dir(self) -> _Path:
-        return self.DATA_DIR / "target_neuron_ablation"/ "experiments" / "conf"
-
-
 
 #######################################################
 # Instance of Settings

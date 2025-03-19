@@ -50,7 +50,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-
 class NeuronAblationProcessor:
     """Class to handle neural network ablation processing."""
 

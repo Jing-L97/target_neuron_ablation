@@ -1,9 +1,11 @@
+import json
 import math
 import random
 import typing as t
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from typing import List
+from pathlib import Path
+from typing import Any, Dict, List
 
 import spacy
 from datasets import load_dataset
@@ -11,6 +13,8 @@ from datasets import load_dataset
 nlp = spacy.load("en_core_web_sm", disable=["tagger", "parser", "ner"])
 nlp.add_pipe("sentencizer")
 
+#######################################################
+# Ngram collector classes
 
 @dataclass
 class ContextStats:
@@ -209,3 +213,15 @@ class NGramContextCollector:
 
         return selected_data
 
+
+#######################################################
+# json file tools
+
+def save_data(data: Dict[str, Any], file_path: Path) -> None:
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def load_data(file_path: Path) -> Dict[str, Any]:
+    with open(file_path, "r", encoding="utf-8") as f:
+        return json.load(f)
