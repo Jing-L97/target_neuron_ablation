@@ -1,30 +1,17 @@
-import os
 import sys
 
 sys.path.append("../")
 import logging
-from pathlib import Path
 from warnings import simplefilter
 
-import neel.utils as nutils
 import numpy as np
 import pandas as pd
 import torch
 import tqdm
 import transformer_lens.utils as utils
-from datasets import load_dataset
-from omegaconf import DictConfig
 from torch.nn.functional import kl_div
 
-from neuron_analyzer import settings
-from neuron_analyzer.abl_util import (
-    filter_entropy_activation_df,
-    get_entropy,
-    get_entropy_activation_df,
-    get_pile_unigram_distribution,
-    load_model_from_tl_name,
-)
-from neuron_analyzer.freq import ZipfThresholdAnalyzer
+from neuron_analyzer.abl_util import get_entropy
 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 

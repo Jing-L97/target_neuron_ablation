@@ -31,12 +31,12 @@ def parse_args() -> argparse.Namespace:
         help="Target model name"
     )
     parser.add_argument(
-        "--ablation_mode", type=str, default="longtail", 
+        "--vector", type=str, default="longtail", 
         choices=["mean", "longtail"],
         help="Differnt ablation model for freq vectors"
         )
     parser.add_argument(
-        "-a","--ablate", type=str, default="base", 
+        "-a","--ablation_mode", type=str, default="base", 
         choices=["base", "zero", "random","mean"],
         help="Neuron options for computing surprisal"
         )
@@ -89,28 +89,28 @@ def main() -> None:
         logger.info(f"{len(target_words)} target words have been loaded.")
 
     # load neuron indices
-    if args.ablate != "base":
-        random_base = True if args.ablate == "random" else False
+    if args.ablation_mode != "base":
+        random_base = True if args.ablation_mode == "random" else False
         step_ablations, layer_num = load_neuron_dict(
-            settings.PATH.result_dir / "token_freq" / args.ablation_mode / args.model_name / args.neuron_file,
+            settings.PATH.result_dir / "token_freq" / args.vector / args.model_name / args.neuron_file,
             key_col = "step",
             value_col = "top_neurons",
             random_base = random_base
             )
         neuron_count = get_count(args.neuron_file)
         filename = f"{args.model_name}_{neuron_count}.debug" if args.debug else f"{args.model_name}_{neuron_count}.csv"
-    elif args.ablate == "base":
+    elif args.ablation_mode == "base":
         step_ablations = None
         filename = f"{args.model_name}.debug" if args.debug else f"{args.model_name}.csv"
         layer_num = None
-    logger.info(f"Compute {args.ablate} surprisal")
+    logger.info(f"Compute {args.ablation_mode} surprisal")
 
 
 
     ###################################
     # Initialize classes
     ###################################
-    result_dir = settings.PATH.surprisal_dir / args.ablation_mode / args.ablate
+    result_dir = settings.PATH.surprisal_dir / args.vector / args.ablation_mode
     result_file = result_dir / Path(args.word_path).stem/filename
     resume_file = result_dir / Path(args.word_path).stem/"resume"/filename
     result_file.parent.mkdir(parents=True, exist_ok=True)
@@ -126,6 +126,7 @@ def main() -> None:
         model_cache_dir=model_cache_dir,  # note here we use the relative path
         layer_num=layer_num,
         step_ablations = step_ablations,
+        ablation_mode = args.ablation_mode
     )
 
     ###################################

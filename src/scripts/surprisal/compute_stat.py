@@ -67,51 +67,48 @@ def bin_stats(x, N):
         idx+=1
     return df, idx_lst
 
+def load_file(file_path: Path) -> pd.DataFrame:
+    # Load the data
+    data = pd.read_csv(file_path)
+    # Create a new DataFrame for the result
+    result = data[["target_word"]]
+    # Then process numeric columns
+    for col in data.columns:
+        if col.isdigit():
+            # Convert column name to log scale
+            log_value = np.log10(float(col) + 1e-10)
+            
+            # Only keep columns with log value > 3.5
+            if log_value > 3.5:
+                # Use the log value as the new column name
+                result[f"{log_value:.4f}"] = data[col]
+    
+    return result
 
-
-def load_group_data(cdi_path,freq_group):
+def load_group_data(cdi_path):
     """load group path """
     # load freq file
     cdi_freq = pd.read_csv(cdi_path)
     cdi_sorted = cdi_freq.sort_values(by="freq_m")
-    df, idx_lst = bin_stats(cdi_sorted["freq_m"], freq_group)
+    df, idx_lst = bin_stats(cdi_sorted["freq_m"], 6)
     cdi_sorted["bin_nb"] = idx_lst
     return cdi_sorted,df
 
-
-def load_file(
-    surprisal_path:Path
-    )->pd.DataFrame:
-    """Load and filter data"""
-    data = pd.read_csv(surprisal_path)
-    # select words from the given list
-    data["log_step"] = np.log10(data["step"] + 1e-10)
-    data = data[(data["log_step"] > 3.5)]
-    return data
-
-
-def group_word(data,group_data,stat_df):
+def group_word(data,group_data,stat_df)->dict:
     """Group data into different bins."""
     data_grouped = group_data.groupby("bin_nb")
-    stat_df = pd.DataFrame()
+    group_dict = {}
     for bin_idx,data_group in data_grouped:
-        median_freq_raw = stat_df["median"].tolist()[bin_idx]
-        median_freq = f"{median_freq_raw:.2f}"
-        data_sel = data[data["target_word"].isin(data_group["word"])]
-        stat = data_sel.groupby("log_step")["surprisal"].mean().reset_index()
-        stat["median_freq"] = median_freq 
-        stat_df = pd.concat([stat_df,stat])
-    return stat_df
+        median_freq = f"{stat_df["median"].tolist()[bin_idx]:.2f}"
+        df_group = data[data["target_word"].isin(data_group["word"])]
+        # remove the word column
+        df_group = df_group.drop(columns=["target_word"])
+        group_dict[median_freq] = df_group.mean()
+    df = pd.DataFrame(group_dict)
+    df = df.reset_index().rename(columns={'index': 'log_step'})
+    return df
 
 
-def read_file(neuron_setting,file_path):
-    if neuron_setting == "base":
-        return True
-    else:
-        if int(file_path.name.split("_")[1].split(".")[0]) < 500:
-            return True
-        else:
-            return False
 
 
 
@@ -120,38 +117,43 @@ def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
 
-    ###################################
-    # load paths
-    ###################################
-    cdi_path = settings.PATH.dataset_root / "freq/EleutherAI/pythia-410m" / f"{args.eval_set}.csv"
-    logger.info(f"Load tragte data from {cdi_path}")
-    cdi_sorted,stat_df = load_group_data(cdi_path,args.freq_group)
+        
+    # load group file
+    # load file as a dict
+    cdi_path = freq_path/"cdi_childes.csv"
+    group_data,stat_df = load_group_data(cdi_path)
+    eval_set = "cdi_childes"
 
-    ###################################
-    # aggregate stat by groups
-    ###################################
-    neuron_setting_lst = ["base","zero","random"]
-    stat = pd.DataFrame()
-    for neuron_setting in neuron_setting_lst:
-        logger.info(f"Load {neuron_setting} surprisal data ")
-        surprisal_path = settings.PATH.result_dir / "surprisal" / neuron_setting / args.eval_set / "EleutherAI"
-        for file_path in surprisal_path.iterdir():
 
-            # only select part odf them
-            if read_file(neuron_setting,file_path):
+    ablation_lst = ["base","mean","zero","random"]
+
+    model_lst = ["70m","410m"]
+    neuron_lst = [10,50,100,500]
+
+    stat_frame = pd.DataFrame()
+    # loop ablation conditions
+    for ablation in ablation_lst:
+        for model in model_lst:
+            if ablation == "base":
+                file_path = surprisal_path/ablation/eval_set/"EleutherAI"/f"pythia-{model}-deduped.csv"
                 data = load_file(file_path)
-                logger.info(f"Load surprisal data from {file_path}")
+                # group data
+                stat = group_word(data,group_data,stat_df)
+                for header,col_val in {"neuron":0,"model":model, "ablation":ablation}.items():
+                    stat[header]=col_val
+                stat_frame = pd.concat([stat_frame,stat])
 
-                # divide into differnet bands based on annotation
-                df = group_word(data,cdi_sorted,stat_df)
-                df["eval"] = args.eval_set
-                df["para"] = file_path.name.split("-")[1]
-                df["setting"] = neuron_setting
-                if neuron_setting != "base":
-                    df["neuron"] = file_path.name.split("_")[1].split(".")[0]
-                else:
-                    df["neuron"] = 0
-            stat = pd.concat([df,stat])
+            else:
+                for neuron in neuron_lst:
+                    file_path = surprisal_path/ablation/eval_set/"EleutherAI"/f"pythia-{model}-deduped_{neuron}.csv"
+                    data = load_file(file_path)
+                    # group data
+                    stat = group_word(data,group_data,stat_df)
+                    for header,col_val in {"neuron":neuron,"model":model, "ablation":ablation}.items():
+                        stat[header]=col_val
+                    stat_frame = pd.concat([stat_frame,stat])
+
+
 
     ###################################
     # Save the target results

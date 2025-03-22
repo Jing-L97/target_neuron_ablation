@@ -14,10 +14,9 @@ from transformers import AutoTokenizer, GPTNeoXForCausalLM
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
 random.seed(42)
+T = t.TypeVar("T")
 
 
-#######################################################
-# Extract different steps
 class StepConfig:
     """Configuration for step-wise analysis of model checkpoints."""
 
@@ -49,7 +48,6 @@ class StepConfig:
         # Remove duplicates and sort
         return sorted(list(set(checkpoints)))
 
-
     def recover_steps(self, file_path: Path) -> list[int]:
         """Filter out steps that have already been processed based on column names."""
         if not file_path.is_file():
@@ -65,8 +63,6 @@ class StepConfig:
         return [step for step in self.steps if step not in completed_steps]
 
 
-#######################################################
-# Neuron manipulation
 class AblationConfig:
     """Configuration for neuron ablation."""
 
@@ -74,13 +70,13 @@ class AblationConfig:
         self,
         layer_num: str,
         neurons: list[int] | None = None,
-        ablation_type: t.Literal["zero", "mean"] = "zero",
+        ablation_mode: t.Literal["zero", "mean", "none"] = "zero",
         k: int = 10,
     ) -> None:
         """Initialize ablation configuration."""
         self.layer_name: str = f"gpt_neox.layers.{layer_num}.mlp.dense_h_to_4h"
         self.neurons: list[int] | None = neurons
-        self.ablation_type = ablation_type
+        self.ablation_mode = ablation_mode
         self.k: int = k
 
 
@@ -91,8 +87,8 @@ class NeuronAblator:
         """Initialize ablator with model and config."""
         self.model = model
         self.config = config
-        self.is_ablated = False
         self.hook_handle = None
+        self.ablation_enabled = False
         self._setup_hooks()
 
     def _setup_hooks(self) -> None:
@@ -100,54 +96,45 @@ class NeuronAblator:
 
         def ablation_hook(module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
             """Forward hook to ablate specified neurons using zero or mean activation."""
-            if not self.is_ablated or not self.config.neurons:
-                return output
-
-            # Create a modified copy to avoid in-place operations that might affect backward pass
-            modified_output = output.clone()
-
-            if self.config.ablation_type == "zero":
+            # If we reach here, ablation is enabled and we have neurons to ablate
+            if self.config.ablation_mode == "zero":
                 # Zero activation - set activations to 0
                 for neuron_idx in self.config.neurons:
-                    modified_output[:, :, int(neuron_idx)] = 0
-
-            elif self.config.ablation_type == "mean":
-                # Mean activation - set to mean value across all neurons
+                    output[:, :, int(neuron_idx)] = 0
+            if self.config.ablation_mode == "mean":
                 # Calculate mean activation across all neurons (dimension 2)
-                # Shape: [batch_size, seq_length]
                 mean_activations = torch.mean(output, dim=2)
 
                 # Replace each specified neuron's activation with the mean
                 for neuron_idx in self.config.neurons:
-                    # For each position, set the neuron's activation to the mean activation
-                    # at that position across all neurons
-                    modified_output[:, :, int(neuron_idx)] = mean_activations
-
-            return modified_output
+                    for b in range(output.shape[0]):
+                        for s in range(output.shape[1]):
+                            output[b, s, int(neuron_idx)] = mean_activations[b, s]
+            return output
 
         # Get the MLP layer
         layer = dict(self.model.named_modules())[self.config.layer_name]
 
         # Register the forward hook
         self.hook_handle = layer.register_forward_hook(ablation_hook)
+        logger.info(f"Registered ablation hook for layer {self.config.layer_name}")
 
     def enable_ablation(self) -> None:
         """Enable neuron ablation."""
-        self.is_ablated = True
-
+        self.ablation_enabled = True
+        
     def disable_ablation(self) -> None:
         """Disable neuron ablation."""
-        self.is_ablated = False
-
+        self.ablation_enabled = False
+        
     def cleanup(self) -> None:
-        """Remove the forward hook."""
-        if self.hook_handle:
+        """Remove the hook and clean up resources."""
+        if self.hook_handle is not None:
             self.hook_handle.remove()
             self.hook_handle = None
 
 
-#######################################################
-# Extract surprisal by different steps
+
 class StepSurprisalExtractor:
     """Extracts word surprisal across different training steps with neuron ablation."""
 
@@ -157,8 +144,8 @@ class StepSurprisalExtractor:
         model_name: str,
         model_cache_dir: Path,
         layer_num: int,
+        ablation_mode: str,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
-        ablation_type: str = "base",
         step_ablations: dict[int, list[int]] | None = None,
     ) -> None:
         """Initialize the surprisal extractor."""
@@ -168,7 +155,7 @@ class StepSurprisalExtractor:
         self.config = config
         self.device = device
         self.step_ablations = step_ablations
-        self.ablation_type = ablation_type
+        self.ablation_mode = ablation_mode
         self.ablator = None
         self.current_step = None
         logger.info(f"Using device: {self.device}")
@@ -197,20 +184,19 @@ class StepSurprisalExtractor:
             self.ablator = None
 
         # Only proceed with ablation setup if step_ablations exists and contains the step
-        if self.step_ablations is not None and step in self.step_ablations:
+        if self.step_ablations is not None and step in self.step_ablations and self.step_ablations[step]:
             # Create ablation config with the correct layer number (as string) and neurons list
-            layer_num: str
             config = AblationConfig(
-                layer_num=self.layer_num, neurons=self.step_ablations[step], ablation_type=self.ablation_type
+                layer_num=self.layer_num, neurons=self.step_ablations[step], ablation_mode=self.ablation_mode
             )
             self.ablator = NeuronAblator(model, config)
-            logger.info(f"Created ablator for step {step} with {len(self.step_ablations[step])} neurons.")
+            logger.info(f"Created {self.ablation_mode} ablator for step {step} with {len(self.step_ablations[step])} neurons.")
+        else:
+            logger.info(f"No ablation configured for step {step}")
 
     def load_model_for_step(self, step: int) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:
         """Load model and tokenizer for a specific step."""
         cache_dir = self.model_cache_dir / f"step{step}"
-        logger.info(f"Loading model for step {step} on {self.device}")
-
         try:
             model = GPTNeoXForCausalLM.from_pretrained(self.model_name, revision=f"step{step}", cache_dir=cache_dir)
             model = model.to(self.device)
@@ -240,9 +226,11 @@ class StepSurprisalExtractor:
             # Handle ablation if configured
             if self.ablator and ablated:
                 self.ablator.enable_ablation()
+
             elif self.ablator:
                 self.ablator.disable_ablation()
-            # Rest of the compute_surprisal implementation remains the same
+
+            # Rest of the compute_surprisal implementation
             if use_bos_only:
                 bos_token = tokenizer.bos_token
                 input_text = bos_token + target_word
@@ -281,13 +269,19 @@ class StepSurprisalExtractor:
         self, contexts: list[list[str]], target_words: list[str], use_bos_only: bool = True, resume_path: Path = None
     ) -> pd.DataFrame:
         """Analyze surprisal across steps with optional neuron ablation."""
+
+        # Define helper function
+        def load_df(path: Path | None, index_col: str | None = None) -> pd.DataFrame:
+            if path and path.is_file():
+                return pd.read_csv(path, index_col=index_col)
+            return pd.DataFrame()
+
         surprisal_frame = (
             load_df(resume_path, "target_word") if resume_path and resume_path.is_file() else pd.DataFrame()
         )
         results = []
 
         for step in self.config.steps:
-            logger.info(f"Processing step {step}")
             try:
                 model, tokenizer = self.load_model_for_step(step)
                 surprisal_lst = []
@@ -295,7 +289,7 @@ class StepSurprisalExtractor:
                 for word_contexts, target_word in zip(contexts, target_words):
                     for context_idx, context in enumerate(word_contexts):
                         # Determine if ablation is needed
-                        ablated = self.ablator and step in self.step_ablations
+                        ablated = self.step_ablations is not None and step in self.step_ablations
 
                         # Compute surprisal with appropriate ablation setting
                         surprisal = self.compute_surprisal(
@@ -338,6 +332,8 @@ class StepSurprisalExtractor:
         """Clean up resources."""
         if self.ablator:
             self.ablator.cleanup()
+
+
 
 
 #######################################################
