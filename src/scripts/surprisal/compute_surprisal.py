@@ -112,11 +112,14 @@ def main() -> None:
     ###################################
     result_dir = settings.PATH.surprisal_dir / args.vector / args.ablation_mode
     result_file = result_dir / Path(args.word_path).stem/filename
-    resume_file = result_dir / Path(args.word_path).stem/"resume"/filename
     result_file.parent.mkdir(parents=True, exist_ok=True)
-    resume_file.parent.mkdir(parents=True, exist_ok=True)
+    if args.resume:
+        resume_file = result_dir / Path(args.word_path).stem/"resume"/filename
+        resume_file.parent.mkdir(parents=True, exist_ok=True)
+    else:
+        resume_file = None
     # Initialize configuration with all Pythia checkpoints
-    steps_config = StepConfig(args.resume, file_path = resume_file )
+    steps_config = StepConfig(resume=args.resume,debug= args.debug,file_path = resume_file)
 
     # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model_name

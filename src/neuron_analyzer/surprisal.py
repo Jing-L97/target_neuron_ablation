@@ -20,10 +20,14 @@ T = t.TypeVar("T")
 class StepConfig:
     """Configuration for step-wise analysis of model checkpoints."""
 
-    def __init__(self, resume: bool = False, file_path: Path | None = None) -> None:
+    def __init__(self, resume: bool = False, debug: bool = False, file_path: Path | None = None) -> None:
         """Initialize step configuration."""
         # Generate the complete list of steps
         self.steps = self.generate_pythia_checkpoints()
+        if debug:
+            self.steps = self.steps[:5]
+            logger.info("Entering debugging mode, select first 5 steps.")
+
         # If resuming, filter out already processed steps
         if resume and file_path is not None:
             self.steps = self.recover_steps(file_path)
@@ -59,7 +63,6 @@ class StepConfig:
         for col in df.columns:
             if col.isdigit():
                 completed_steps.add(int(col))
-        # Filter out completed steps
         return [step for step in self.steps if step not in completed_steps]
 
 
@@ -122,17 +125,16 @@ class NeuronAblator:
     def enable_ablation(self) -> None:
         """Enable neuron ablation."""
         self.ablation_enabled = True
-        
+
     def disable_ablation(self) -> None:
         """Disable neuron ablation."""
         self.ablation_enabled = False
-        
+
     def cleanup(self) -> None:
         """Remove the hook and clean up resources."""
         if self.hook_handle is not None:
             self.hook_handle.remove()
             self.hook_handle = None
-
 
 
 class StepSurprisalExtractor:
@@ -190,7 +192,9 @@ class StepSurprisalExtractor:
                 layer_num=self.layer_num, neurons=self.step_ablations[step], ablation_mode=self.ablation_mode
             )
             self.ablator = NeuronAblator(model, config)
-            logger.info(f"Created {self.ablation_mode} ablator for step {step} with {len(self.step_ablations[step])} neurons.")
+            logger.info(
+                f"Created {self.ablation_mode} ablator for step {step} with {len(self.step_ablations[step])} neurons."
+            )
         else:
             logger.info(f"No ablation configured for step {step}")
 
@@ -271,7 +275,7 @@ class StepSurprisalExtractor:
         """Analyze surprisal across steps with optional neuron ablation."""
 
         # Define helper function
-        def load_df(path: Path | None, index_col: str | None = None) -> pd.DataFrame:
+        def load_df1(path: Path | None, index_col: str | None = None) -> pd.DataFrame:
             if path and path.is_file():
                 return pd.read_csv(path, index_col=index_col)
             return pd.DataFrame()
@@ -316,7 +320,6 @@ class StepSurprisalExtractor:
 
                 if resume_path:
                     surprisal_frame.to_csv(resume_path, index=False)
-
                 # Cleanup resources
                 del model, tokenizer
                 if self.device == "cuda":
@@ -332,8 +335,6 @@ class StepSurprisalExtractor:
         """Clean up resources."""
         if self.ablator:
             self.ablator.cleanup()
-
-
 
 
 #######################################################
