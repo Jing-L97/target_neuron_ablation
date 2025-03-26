@@ -1,3 +1,4 @@
+import logging
 import typing as t
 
 import matplotlib.pyplot as plt
@@ -5,6 +6,35 @@ import numpy as np
 import torch
 from scipy import stats
 from transformers import AutoTokenizer
+
+from neuron_analyzer import settings
+from neuron_analyzer.abl_util import get_pile_unigram_distribution
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
+
+def load_unigram(model_name,device)->torch.Tensor:
+    """Load unigram distribution based on model type."""
+    # Load unigram distribution
+    if "pythia" in model_name:
+        file_path=settings.PATH.unigram_dir / "pythia-unigrams.npy"
+        unigram_distrib = get_pile_unigram_distribution(
+            device=device, pad_to_match_W_U=True,
+            file_path=file_path
+        )
+        logger.info(f"Loaded unigram freq from {file_path}")
+    elif "gpt" in model_name:
+        file_path=settings.PATH.unigram_dir / "gpt2-small-unigrams_openwebtext-2M_rows_500000.npy"
+        unigram_distrib = get_pile_unigram_distribution(
+            device=device,pad_to_match_W_U=False,
+            file_path=file_path
+        )
+        logger.info(f"Loading unigram freq from {file_path}")
+    else:
+        raise Exception(f"No unigram distribution for {model_name}")
+
+    return unigram_distrib
 
 
 class UnigramAnalyzer:
@@ -43,7 +73,7 @@ class UnigramAnalyzer:
         # Load and prepare unigram data
         self._load_unigram_data()
 
-    def _load_unigram_data(self) -> None:
+    def _load_unigram_data(self) -> None:    #TODO: unify with the load_unigram func above
         """Load unigram data from file and prepare distributions."""
         # Load the unigram counts from the .npy file
         self.unigram_count = np.load(self.unigram_file_path)

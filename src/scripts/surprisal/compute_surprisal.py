@@ -3,8 +3,10 @@ import logging
 from pathlib import Path
 
 import pandas as pd
+import torch
 
 from neuron_analyzer import settings
+from neuron_analyzer.freq import load_unigram
 from neuron_analyzer.surprisal import StepConfig, StepSurprisalExtractor, load_eval, load_neuron_dict
 
 # Setup logging
@@ -37,7 +39,7 @@ def parse_args() -> argparse.Namespace:
         )
     parser.add_argument(
         "-a","--ablation_mode", type=str, default="base", 
-        choices=["base", "zero", "random","mean"],
+        choices=["base", "zero", "random","mean","scaled"],
         help="Neuron options for computing surprisal"
         )
 
@@ -75,6 +77,7 @@ def sel_eval(results_df:pd.DataFrame,eval_path:Path,result_dir:Path,filename):
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
 
     ###################################
     # load materials and paths
@@ -105,6 +108,8 @@ def main() -> None:
         layer_num = None
     logger.info(f"Compute {args.ablation_mode} surprisal")
 
+    # load unigram freq file
+    token_frequencies = load_unigram(args.model_name,device)
 
 
     ###################################
@@ -124,12 +129,14 @@ def main() -> None:
     # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model_name
     extractor = StepSurprisalExtractor(
-        steps_config,
+        config=steps_config,
         model_name=args.model_name,
         model_cache_dir=model_cache_dir,  # note here we use the relative path
         layer_num=layer_num,
         step_ablations = step_ablations,
-        ablation_mode = args.ablation_mode
+        device=device,
+        ablation_mode = args.ablation_mode,
+        token_frequencies = token_frequencies
     )
 
     ###################################
@@ -149,10 +156,10 @@ def main() -> None:
                 f"Results saved to: {result_file}\n"
                 f"Processed {len([col for col in results_df.columns if str(col).isdigit()])} checkpoints successfully"
             )
-            # save the eval file
-            for eval_path in args.eval_lst:
-                sel_eval(results_df,eval_path,result_dir,filename)
-
+            if "merged" in str(args.word_path):
+                # save the eval file
+                for eval_path in args.eval_lst:
+                    sel_eval(results_df,eval_path,result_dir,filename)
         else:
             logger.warning("No results were generated")
 

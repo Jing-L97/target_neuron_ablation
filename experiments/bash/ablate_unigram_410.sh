@@ -6,14 +6,14 @@
 #SBATCH --mem=500G
 #SBATCH --gres=gpu:3
 #SBATCH --cpus-per-task=48
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/abl410.log
 
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/ablations"
 
-START=70
-END=155
+START=129
+END=145
 
 
 # Run the script with the appropriate parameters

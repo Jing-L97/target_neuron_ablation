@@ -1,21 +1,21 @@
 #!/bin/bash
-#SBATCH --job-name=410mm
+#SBATCH --job-name=70ms_tail
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --mem=70G
 #SBATCH --exclude=puck5
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
-#SBATCH --time=40:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/410mm_%a.log
+#SBATCH --time=20:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/70ms_tail%a.log
 #SBATCH --array=0-2
 
 # Define constants for better readability and maintenance
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
-WORD="context/stas/c4-en-10k/5/merged.json"
-MODEL="EleutherAI/pythia-410m-deduped"
-MODE="mean"
-ABLATION="mean"
+WORD="context/stas/c4-en-10k/5/longtail_words.json"
+MODEL="EleutherAI/pythia-70m-deduped"
+VECTOR="mean"
+ABLATION="scaled"
 
 # Define the neuron files in an array
 NEURON_FILES=(
@@ -36,5 +36,6 @@ python $SCRIPT_ROOT/compute_surprisal.py \
     -w $WORD \
     -n $NEURON_FILE \
     -a $ABLATION \
-    --vector $MODE \
+    --vector $VECTOR \
     --resume
+

@@ -9,9 +9,11 @@ from typing import Any, Dict, List
 
 import spacy
 from datasets import load_dataset
+from spellchecker import SpellChecker
 
 nlp = spacy.load("en_core_web_sm", disable=["tagger", "parser", "ner"])
 nlp.add_pipe("sentencizer")
+
 
 #######################################################
 # Ngram collector classes
@@ -212,6 +214,21 @@ class NGramContextCollector:
                 selected_data[word] = selected
 
         return selected_data
+
+
+#######################################################
+# word filter
+
+def is_word(word: str) -> bool:
+    """Check if a word is correctly spelled."""
+    spell = SpellChecker()
+    return word.lower() in spell
+
+def filter_words(word_list: list[str]) -> list[str]:
+    """Filter a list and return only correctly spelled words."""
+    spell = SpellChecker()
+    return [word for word in word_list if word.lower() in spell]
+
 
 
 #######################################################
