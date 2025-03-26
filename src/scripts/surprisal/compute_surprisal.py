@@ -7,7 +7,7 @@ import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.freq import load_unigram
-from neuron_analyzer.surprisal import StepConfig, StepSurprisalExtractor, load_eval, load_neuron_dict
+from neuron_analyzer.surprisal import StepConfig, StepSurprisalExtractor, load_eval, load_neuron_dict, sel_eval
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

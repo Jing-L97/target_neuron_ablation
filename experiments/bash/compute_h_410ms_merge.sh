@@ -6,7 +6,7 @@
 #SBATCH --exclude=puck5
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
-#SBATCH --time=20:00:00
+#SBATCH --time=10:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/410ms_merge%a.log
 #SBATCH --array=0-2
 

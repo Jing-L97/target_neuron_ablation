@@ -11,6 +11,8 @@ import pandas as pd
 import torch
 from transformers import AutoTokenizer, GPTNeoXForCausalLM
 
+from neuron_analyzer import settings
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -648,3 +650,18 @@ def generate_neurons(exclude_list: list[str], min_val: int = 1, max_val: int = 2
         if rand_int not in excluded_ints and rand_int not in result:
             result.append(str(rand_int))
     return result
+
+def sel_eval(results_df:pd.DataFrame,eval_path:Path,result_dir:Path,filename):
+    """Select the word subset from the eval file."""
+    # load eval file
+    eval_file = settings.PATH.dataset_root / eval_path
+    result_file = result_dir / eval_file.stem / filename
+    result_file.parent.mkdir(parents=True, exist_ok=True)
+    eval_frame = pd.read_csv(eval_file)
+    # select target words
+    results_df_sel = results_df[results_df["target_word"].isin(eval_frame["word"])]
+    results_df_sel.to_csv(result_file, index=False)
+    logger.info(f"Eval set saved to: {result_file}")
+
+
+
