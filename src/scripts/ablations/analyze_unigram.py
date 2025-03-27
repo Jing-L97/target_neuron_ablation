@@ -39,7 +39,13 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int)
         final_df["kl_from_unigram_diff"] = final_df["kl_divergence_after"] - final_df["kl_divergence_before"]
     # filter the neurons that push towards the unigram freq
     final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
-
+    # TODO: 
+    """
+    add the supressing neurons
+    
+    boost the activation
+    
+    """
     # Calculate the mediation effect
     final_df["mediation_effect"] = (
         1 - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / final_df["abs_delta_loss_post_ablation"]

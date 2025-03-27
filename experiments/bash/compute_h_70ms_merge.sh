@@ -6,9 +6,9 @@
 #SBATCH --exclude=puck5
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
-#SBATCH --time=20:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/70ms_merge%a.log
-#SBATCH --array=0-2
+#SBATCH --array=0-1
 
 # Define constants for better readability and maintenance
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
@@ -19,7 +19,6 @@ ABLATION="scaled"
 
 # Define the neuron files in an array
 NEURON_FILES=(
-    "500_10.csv"
     "500_50.csv"
     "500_500.csv"
 )

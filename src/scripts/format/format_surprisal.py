@@ -18,6 +18,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Format file to save space.")
     parser.add_argument("--input_path", default="longtail/mean", type=str, help="different abalation setting")
     parser.add_argument("--operation", default="segment", type=str, help="which operation")
+    parser.add_argument("--use_neuron", action="store_true", help="Whether to iterate neuron list")
     return parser.parse_args()
 
 
@@ -47,6 +48,68 @@ class CsvMerger:
             logger.error(f"Unknown operation: {self.operation}")
 
 
+    def process_merge_files(self) -> None:
+        # Create output directory
+        self.out_path.mkdir(parents=True, exist_ok=True)
+
+        for model in self.model_lst:
+            if len(self.neuron_lst) == 0:
+                try:
+                    # Load input files
+                    cdi_path = self.file_path / f"cdi_childes/EleutherAI/pythia-{model}-deduped.csv"
+                    ox_path = self.file_path / f"oxford-understand/EleutherAI/pythia-{model}-deduped.csv"
+
+                    cdi_data = pd.read_csv(cdi_path)
+                    ox_data = pd.read_csv(ox_path)
+
+                    # Merge the data
+                    merged = self.merge_csv(cdi_data, ox_data)
+
+                    # Save to output file
+                    output_file = self.out_path / f"pythia-{model}-deduped.csv"
+                    merged.to_csv(output_file, index=False)
+
+                    logger.info(f"Saved the merged file to {output_file}")
+                except FileNotFoundError as e:
+                    logger.error(f"Error processing {model}: {e}")
+                except Exception as e:
+                    logger.error(f"Unexpected error processing {model}: {e}")
+
+
+            else:
+                for neuron in self.neuron_lst:
+                    try:
+                        # Load input files
+                        cdi_path = self.file_path / f"cdi_childes/EleutherAI/pythia-{model}-deduped_{neuron}.csv"
+                        ox_path = self.file_path / f"oxford-understand/EleutherAI/pythia-{model}-deduped_{neuron}.csv"
+
+                        cdi_data = pd.read_csv(cdi_path)
+                        ox_data = pd.read_csv(ox_path)
+
+                        # Merge the data
+                        merged = self.merge_csv(cdi_data, ox_data)
+
+                        # Save to output file
+                        output_file = self.out_path / f"pythia-{model}-deduped_{neuron}.csv"
+                        merged.to_csv(output_file, index=False)
+
+                        logger.info(f"Saved the merged file to {output_file}")
+                    except FileNotFoundError as e:
+                        logger.error(f"Error processing {model}/{neuron}: {e}")
+                    except Exception as e:
+                        logger.error(f"Unexpected error processing {model}/{neuron}: {e}")
+
+    def merge_csv(self, cdi_data: pd.DataFrame, ox_data: pd.DataFrame) -> pd.DataFrame:
+        # Find words in ox_data that aren't in cdi_data
+        words = set(ox_data["target_word"]) - set(cdi_data["target_word"])
+
+        # Select the additional words
+        sel_df = ox_data[ox_data["target_word"].isin(words)]
+
+        # Concatenate the rows
+        merged = pd.concat([cdi_data, sel_df])
+        return merged
+
     def segment_files(self) -> None:
         file_path = self.out_path
         eval_path = "freq/EleutherAI/pythia-410m"
@@ -70,52 +133,13 @@ class CsvMerger:
                     except Exception as e:
                         logger.error(f"Error processing {model}/{neuron}: {e}")
 
-    def merge_csv(self, cdi_data: pd.DataFrame, ox_data: pd.DataFrame) -> pd.DataFrame:
-        # Find words in ox_data that aren't in cdi_data
-        words = set(ox_data["target_word"]) - set(cdi_data["target_word"])
-
-        # Select the additional words
-        sel_df = ox_data[ox_data["target_word"].isin(words)]
-
-        # Concatenate the rows
-        merged = pd.concat([cdi_data, sel_df])
-        return merged
-
-
-
-    def process_merge_files(self) -> None:
-        # Create output directory
-        self.out_path.mkdir(parents=True, exist_ok=True)
-
-        for model in self.model_lst:
-            for neuron in self.neuron_lst:
-                try:
-                    # Load input files
-                    cdi_path = self.file_path / f"cdi_childes/EleutherAI/pythia-{model}-deduped_{neuron}.csv"
-                    ox_path = self.file_path / f"oxford-understand/EleutherAI/pythia-{model}-deduped_{neuron}.csv"
-
-                    cdi_data = pd.read_csv(cdi_path)
-                    ox_data = pd.read_csv(ox_path)
-
-                    # Merge the data
-                    merged = self.merge_csv(cdi_data, ox_data)
-
-                    # Save to output file
-                    output_file = self.out_path / f"pythia-{model}-deduped_{neuron}.csv"
-                    merged.to_csv(output_file, index=False)
-
-                    logger.info(f"Saved the merged file to {output_file}")
-                except FileNotFoundError as e:
-                    logger.error(f"Error processing {model}/{neuron}: {e}")
-                except Exception as e:
-                    logger.error(f"Unexpected error processing {model}/{neuron}: {e}")
 
 
 def main() -> None:
     # loop over the different directories
     args = parse_args()
     model_lst = ["70m", "410m"]
-    neuron_lst = [10, 50, 500]
+    neuron_lst = [10, 50, 500] if args.use_neuron else []
     file_path = settings.PATH.result_dir / "surprisal" / args.input_path
 
     merger = CsvMerger(

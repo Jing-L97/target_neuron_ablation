@@ -60,20 +60,6 @@ def parse_args() -> argparse.Namespace:
 def get_count(filename:str)->str:
     return filename.split(".")[0].split("_")[1]
 
-def sel_eval(results_df:pd.DataFrame,eval_path:Path,result_dir:Path,filename):
-    """Select the word subset from the eval file."""
-    # load eval file
-    eval_file = settings.PATH.dataset_root / eval_path
-    result_file = result_dir / eval_file.stem / filename
-    result_file.parent.mkdir(parents=True, exist_ok=True)
-    eval_frame = pd.read_csv(eval_file)
-    # select target words
-    results_df_sel = results_df[results_df["target_word"].isin(eval_frame["word"])]
-    results_df_sel.to_csv(result_file, index=False)
-    logger.info(f"Eval set saved to: {result_file}")
-
-
-
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
