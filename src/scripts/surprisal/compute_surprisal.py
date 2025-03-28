@@ -2,7 +2,6 @@ import argparse
 import logging
 from pathlib import Path
 
-import pandas as pd
 import torch
 
 from neuron_analyzer import settings
@@ -32,8 +31,11 @@ def parse_args() -> argparse.Namespace:
         "-n", "--neuron_file", type=str, default="500_10.csv", 
         help="Target model name"
     )
+    parser.add_argument("--effect", type=str, choices=["boost", "supress"],
+        default="supress", help="boost or supress long-tail"
+        )
     parser.add_argument(
-        "--vector", type=str, default="longtail", 
+        "--vector", type=str, default="longtail",
         choices=["mean", "longtail"],
         help="Differnt ablation model for freq vectors"
         )
@@ -81,7 +83,7 @@ def main() -> None:
     if args.ablation_mode != "base":
         random_base = True if args.ablation_mode == "random" else False
         step_ablations, layer_num = load_neuron_dict(
-            settings.PATH.result_dir / "token_freq" / args.vector / args.model_name / args.neuron_file,
+            settings.PATH.result_dir / "token_freq" /args.effect / args.vector / args.model_name / args.neuron_file,
             key_col = "step",
             value_col = "top_neurons",
             random_base = random_base
@@ -101,7 +103,7 @@ def main() -> None:
     ###################################
     # Initialize classes
     ###################################
-    result_dir = settings.PATH.surprisal_dir / args.vector / args.ablation_mode
+    result_dir = settings.PATH.surprisal_dir / args.effect / args.vector / args.ablation_mode
     result_file = result_dir / Path(args.word_path).stem/filename
     result_file.parent.mkdir(parents=True, exist_ok=True)
     if args.resume:

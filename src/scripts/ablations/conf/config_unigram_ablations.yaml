@@ -15,7 +15,7 @@ micro_batch_size: 1  # Add micro-batch processing
 max_gpu_memory: 0.7  # Limit GPU memory usage to 70%
 memory_efficient: true  # Enable memory efficient processing
 process_neurons_in_chunks: 50  # Process neurons in smaller groups
-ablation_mode: longtail
+ablation_mode: longtail  #mean
 
 k: 10
 neuron_range: null

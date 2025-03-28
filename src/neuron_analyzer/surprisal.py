@@ -222,7 +222,6 @@ class NeuronAblator:
 
         # Now we need to adapt the null space basis to match the hidden size
         if embedding_dim != hidden_size:
-            # Method 1: Projection through a learned mapping
             # We'll create a simple linear mapping from embedding space to hidden space
             try:
                 # Try to find a model component that maps between these spaces
@@ -280,7 +279,7 @@ class NeuronAblator:
             modified_output = output.clone()
 
             # If we reach here, ablation is enabled and we have neurons to ablate
-            if self.config.ablation_mode == "zero":
+            if self.config.ablation_mode in ["zero","random"] :
                 # Zero activation - set activations to 0
                 for neuron_idx in self.config.neurons:
                     modified_output[:, :, int(neuron_idx)] = 0
@@ -488,7 +487,7 @@ class StepSurprisalExtractor:
 
             inputs = tokenizer(input_text, return_tensors="pt").to(self.device)
 
-            if context_length >= inputs.input_ids.shape[1]:
+            if context_length >= inputs.input_ids.shape[1]:   #TODO: figure out why do we -1
                 context_length = inputs.input_ids.shape[1] - 1
 
             with torch.no_grad():

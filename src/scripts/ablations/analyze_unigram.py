@@ -19,13 +19,14 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--ablation_mode", choices=["mean", "longtail"],default="longtail")
+    parser.add_argument("--effect", type=str, choices=["boost", "supress"],default="supress", help="boost or supress long-tail")
     parser.add_argument("--top_n", type=int, default=10, help="use_bos_only if enabled")
     parser.add_argument("--data_range_end", type=int, default=500, help="use_bos_only if enabled")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
     return parser.parse_args()
 
 
-def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int) -> pd.DataFrame:
+def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int,effect:str) -> pd.DataFrame:
     if not feather_path.is_file():
         return
 
@@ -38,14 +39,10 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int)
     if "kl_divergence_before" in final_df.columns:
         final_df["kl_from_unigram_diff"] = final_df["kl_divergence_after"] - final_df["kl_divergence_before"]
     # filter the neurons that push towards the unigram freq
-    final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
-    # TODO: 
-    """
-    add the supressing neurons
-    
-    boost the activation
-    
-    """
+    if effect == "supress":
+        final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
+    if effect == "boost":
+        final_df = final_df[final_df["kl_from_unigram_diff"] < 0]
     # Calculate the mediation effect
     final_df["mediation_effect"] = (
         1 - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / final_df["abs_delta_loss_post_ablation"]
@@ -69,7 +66,7 @@ def main() -> None:
 
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.ablation_mode / args.model
-    save_path = settings.PATH.result_dir / "token_freq" / args.ablation_mode /args.model / f"{args.data_range_end}_{args.top_n}.csv"
+    save_path = settings.PATH.result_dir / "token_freq" / args.effect/args.ablation_mode /args.model / f"{args.data_range_end}_{args.top_n}.csv"
     save_path.parent.mkdir(parents=True, exist_ok=True)
     if save_path.is_file():
         logger.info(f"{save_path} already exists, skip!")
@@ -78,7 +75,7 @@ def main() -> None:
         # check whether the target file has been created
         for step in abl_path.iterdir():
             feather_path = abl_path / str(step) / str(args.data_range_end) / f"k{args.k}.feather"
-            frame = select_top_token_frequency_neurons(feather_path, args.top_n, step.name)
+            frame = select_top_token_frequency_neurons(feather_path, args.top_n,step.name,args.effect)
             neuron_df = pd.concat([neuron_df, frame])
         # assign col headers
         neuron_df.columns = ["step", "top_neurons", "med_effect", "kl_diff"]
