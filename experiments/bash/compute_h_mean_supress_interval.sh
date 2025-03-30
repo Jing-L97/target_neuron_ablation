@@ -1,26 +1,29 @@
 #!/bin/bash
-#SBATCH --job-name=full_supress
+#SBATCH --job-name=mean_supress
 #SBATCH --partition=gpu
-#SBATCH --mem=160G
+#SBATCH --mem=70G
+#SBATCH --exclude=puck5
 #SBATCH --gres=gpu:1
-#SBATCH --time=10:00:00
-#SBATCH --cpus-per-task=16
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/full_supress_%a.log
+#SBATCH --time=18:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/mean_supress_%a.log
 #SBATCH --array=0-3
 
 # Define constants for better readability and maintenance
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
-VECTOR="longtail"
+VECTOR="mean"
 EFFECT="supress"
 
 # Define the input arrays
 NEURON_FILES=(
-    "500_10.csv"
-    "500_50.csv"
+    "500_1.csv"
+    "500_5.csv"
+    "500_25.csv"
+    "500_2.csv"
 )
 
+
 ABLATIONS=(
-    "full"
+    "mean"
 )
 
 WORDS=(
@@ -28,7 +31,6 @@ WORDS=(
 )
 
 MODELS=(
-    "EleutherAI/pythia-70m-deduped"
     "EleutherAI/pythia-410m-deduped"
 )
 

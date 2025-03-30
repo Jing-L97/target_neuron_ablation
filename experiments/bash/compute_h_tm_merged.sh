@@ -1,10 +1,12 @@
 #!/bin/bash
 #SBATCH --job-name=tm_merge
 #SBATCH --export=ALL
-#SBATCH --partition=cpu
-#SBATCH --mem=240G
-#SBATCH --cpus-per-task=20
-#SBATCH --time=24:00:00
+#SBATCH --partition=gpu
+#SBATCH --mem=160G
+#SBATCH --gres=gpu:1
+#SBATCH --time=18:00:00
+#SBATCH --exclude=puck6
+#SBATCH --cpus-per-task=16
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/tm_merge%a.log
 #SBATCH --array=0-1
 

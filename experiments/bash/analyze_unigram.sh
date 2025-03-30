@@ -1,27 +1,27 @@
 #!/bin/bash
 #SBATCH --job-name=sel_mean
 #SBATCH --export=ALL
-#SBATCH --partition=cpu
-#SBATCH --mem=60G
-#SBATCH --cpus-per-task=6
-#SBATCH --time=24:00:00
+#SBATCH --partition=gpu
+#SBATCH --mem=70G
+#SBATCH --exclude=puck5
+#SBATCH --gres=gpu:1
+#SBATCH --time=18:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/sel_mean_%a.log
-#SBATCH --array=0-7
+#SBATCH --array=0-3
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/ablations"
-EFFECT="boost"
+EFFECT="supress"
 VECTOR="mean"
 
 # Define the input arrays
 TOP_NS=(
-    10
-    100
-    50
-    500
+    1
+    5
+    25
+    2
 )
 
 MODELS=(
-    "EleutherAI/pythia-70m-deduped"
     "EleutherAI/pythia-410m-deduped"
 )
 
