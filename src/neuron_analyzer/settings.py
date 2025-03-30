@@ -68,7 +68,9 @@ class _MyPathSettings:
     def neuron_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "token_freq"
     
-
+    @property
+    def direction_dir(self) -> _Path:
+        return self.DATA_DIR / "results" / "directions"
     @property
     def script_dir(self) -> _Path:
         return self.DATA_DIR / "target_neuron_ablation"

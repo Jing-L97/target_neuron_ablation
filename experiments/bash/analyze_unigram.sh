@@ -7,11 +7,11 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=18:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/sel_mean_%a.log
-#SBATCH --array=0-3
+#SBATCH --array=0-7
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/ablations"
 EFFECT="supress"
-VECTOR="mean"
+VECTOR="longtail"
 
 # Define the input arrays
 TOP_NS=(
@@ -22,6 +22,7 @@ TOP_NS=(
 )
 
 MODELS=(
+    "EleutherAI/pythia-70m-deduped"
     "EleutherAI/pythia-410m-deduped"
 )
 

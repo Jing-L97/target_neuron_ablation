@@ -4,13 +4,13 @@
 #SBATCH --mem=70G
 #SBATCH --exclude=puck5
 #SBATCH --gres=gpu:1
-#SBATCH --time=18:00:00
+#SBATCH --time=15:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/mean_supress_%a.log
-#SBATCH --array=0-3
+#SBATCH --array=0-7
 
 # Define constants for better readability and maintenance
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
-VECTOR="mean"
+VECTOR="longtail"
 EFFECT="supress"
 
 # Define the input arrays
@@ -32,6 +32,7 @@ WORDS=(
 
 MODELS=(
     "EleutherAI/pythia-410m-deduped"
+    "EleutherAI/pythia-70m-deduped"
 )
 
 # Calculate total combinations for validation
