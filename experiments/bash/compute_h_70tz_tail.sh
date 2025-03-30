@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=70tm_tail
+#SBATCH --job-name=70tz_tail
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
-#SBATCH --mem=70G
+#SBATCH --mem=160G
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=10
-#SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/70tm_tail%a.log
+#SBATCH --cpus-per-task=16
+#SBATCH --time=24:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/70tz_tail%a.log
 #SBATCH --array=0-2
 
 # Define constants for better readability and maintenance

@@ -41,7 +41,7 @@ def parse_args() -> argparse.Namespace:
         )
     parser.add_argument(
         "-a","--ablation_mode", type=str, default="base", 
-        choices=["base", "zero", "random","mean","scaled"],
+        choices=["base", "zero", "random","mean","scaled","full"],
         help="Neuron options for computing surprisal"
         )
 

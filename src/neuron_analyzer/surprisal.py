@@ -284,6 +284,11 @@ class NeuronAblator:
                 for neuron_idx in self.config.neurons:
                     modified_output[:, :, int(neuron_idx)] = 0
 
+            elif self.config.ablation_mode == "full":
+                # Zero activation - set activations to 0
+                for neuron_idx in self.config.neurons:
+                    modified_output[:, :, int(neuron_idx)] = 1
+
             elif self.config.ablation_mode == "mean":
                 # Calculate mean activation across all neurons (dimension 2)
                 mean_activations = torch.mean(output, dim=2)

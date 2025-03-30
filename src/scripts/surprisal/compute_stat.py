@@ -31,20 +31,6 @@ def parse_args() -> argparse.Namespace:
 
 
 
-def d_stats(x):
-    """Descriptive stats for an array of values."""
-    stats = {
-        "mean": np.mean(x),
-        "median": np.median(x),
-        "min": np.min(x),
-        "max": np.max(x),
-        "stdev": np.std(x, ddof=1),
-        "first": np.percentile(x, 25),
-        "third": np.percentile(x, 75),
-    }
-    return stats
-
-
 def bin_stats(x, N):
     """Divide the array x into N bins and compute stats for each."""
     # Sort the array
@@ -67,7 +53,7 @@ def bin_stats(x, N):
         idx+=1
     return df, idx_lst
 
-def load_file(file_path: Path) -> pd.DataFrame:
+def load_file(file_path: Path,min_step:float=3.5) -> pd.DataFrame:
     # Load the data
     data = pd.read_csv(file_path)
     # Create a new DataFrame for the result
@@ -77,16 +63,14 @@ def load_file(file_path: Path) -> pd.DataFrame:
         if col.isdigit():
             # Convert column name to log scale
             log_value = np.log10(float(col) + 1e-10)
-            
             # Only keep columns with log value > 3.5
-            if log_value > 3.5:
+            if log_value > min_step:
                 # Use the log value as the new column name
                 result[f"{log_value:.4f}"] = data[col]
-    
     return result
 
 def load_group_data(cdi_path):
-    """load group path """
+    """Load group path"""
     # load freq file
     cdi_freq = pd.read_csv(cdi_path)
     cdi_sorted = cdi_freq.sort_values(by="freq_m")
@@ -94,20 +78,115 @@ def load_group_data(cdi_path):
     cdi_sorted["bin_nb"] = idx_lst
     return cdi_sorted,df
 
+
 def group_word(data,group_data,stat_df)->dict:
     """Group data into different bins."""
     data_grouped = group_data.groupby("bin_nb")
     group_dict = {}
     for bin_idx,data_group in data_grouped:
-        median_freq = f"{stat_df["median"].tolist()[bin_idx]:.2f}"
+        median_freq = stat_df["median"].tolist()[bin_idx]
+        median_freq = f"{median_freq:.2f}"
         df_group = data[data["target_word"].isin(data_group["word"])]
         # remove the word column
         df_group = df_group.drop(columns=["target_word"])
         group_dict[median_freq] = df_group.mean()
     df = pd.DataFrame(group_dict)
-    df = df.reset_index().rename(columns={'index': 'log_step'})
+    df = df.reset_index().rename(columns={"index": "log_step"})
     return df
 
+def group_word_all(data):
+    df_group = data.drop(columns=["target_word"])
+    result = df_group.mean()
+    df = pd.DataFrame(result)
+    df.columns = ["surprisal"]
+    df = df.reset_index().rename(columns={"index": "log_step"})
+    return df
+
+
+def get_stat_freq(eval_set,cdi_path):
+    """Get stat by freq bands."""
+    def process_all(file_path,header_dict,group_data,stat_df):
+        data = load_file(file_path)
+        # group data
+        stat = group_word(data,group_data,stat_df)
+        for header,col_val in header_dict.items():
+            stat[header]=col_val
+        return stat
+
+    ablation_lst = ["mean","zero","random","scaled"]
+    group_data,stat_df = load_group_data(cdi_path)
+    effect_lst=["boost","supress"]
+    model_lst = ["70m","410m"]
+    neuron_lst = [10,50,500]
+    vec_lst = ["base","mean","longtail"]
+
+    stat_frame = pd.DataFrame()
+    # loop ablation conditions
+    for effect in effect_lst:
+        for model in model_lst:
+            for vec in vec_lst:
+                if vec == "base":
+                    file_path = surprisal_path/vec/eval_set/"EleutherAI"/f"pythia-{model}-deduped.csv"
+                    header_dict = {"vec":vec,"neuron":0,"model":model, "ablation":"base","eval":eval_set}
+                    stat = process_all(file_path,header_dict,group_data,stat_df)
+                    stat_frame = pd.concat([stat_frame,stat])
+
+                else:
+                    for ablation in ablation_lst:
+                        for neuron in neuron_lst:
+                            file_path = surprisal_path/vec/ablation/eval_set/"EleutherAI"/f"pythia-{model}-deduped_{neuron}.csv"
+                            header_dict = {"vec":vec,"neuron":neuron,"model":model, "ablation":ablation,"eval":eval_set}
+                            if file_path.is_file():
+                                stat = process_all(file_path,header_dict,group_data,stat_df)
+                                stat_frame = pd.concat([stat_frame,stat])
+                            else:
+                                print(file_path)
+
+    stat_frame.to_csv(surprisal_path/"stat_freq.csv")
+    print(f"Stat file ahs been saved to {surprisal_path}/stat_freq.csv")
+    return stat_frame
+
+def get_stat_all(surprisal_path):
+    """Get stat of all the words."""
+    eval_set_lst = ["merged","longtail_words"]
+    ablation_lst = ["mean","zero","random","scaled"]
+    effect_lst=["boost","supress"]
+    model_lst = ["70m","410m"]
+    neuron_lst = [10,50,500]
+    vec_lst = ["base","mean","longtail"]
+
+    def process_all(file_path,header_dict):
+        data = load_file(file_path)
+        # group data
+        stat = group_word_all(data)
+        for header,col_val in header_dict.items():
+                stat[header]=col_val
+        return stat
+
+    stat_frame = pd.DataFrame()
+    # loop ablation conditions
+    for effect in effect_lst:
+        for eval_set in eval_set_lst:
+            for model in model_lst:
+                for vec in vec_lst:
+                    if vec == "base":
+                        header_dict = {"vec":vec,"neuron":0,"model":model, "ablation":"base","eval":eval_set,"effect":effect}
+                        file_path = surprisal_path/vec/eval_set/"EleutherAI"/f"pythia-{model}-deduped.csv"
+                        stat = process_all(file_path,header_dict)
+                        stat_frame = pd.concat([stat_frame,stat])
+                    else:
+                        for ablation in ablation_lst:
+                            for neuron in neuron_lst:
+                                file_path = surprisal_path/effect/vec/ablation/eval_set/"EleutherAI"/f"pythia-{model}-deduped_{neuron}.csv"
+                                header_dict = {"vec":vec,"neuron":neuron,"model":model, "ablation":ablation,"eval":eval_set,"effect":effect}
+                                if file_path.is_file():
+                                    stat = process_all(file_path,header_dict)
+                                    stat_frame = pd.concat([stat_frame,stat])
+                                else:
+                                    print(file_path)
+    stat_frame.to_csv(surprisal_path/"stat_all.csv")
+    print(f"Stat file ahs been saved to {surprisal_path}/stat_all.csv")
+    return stat_frame
 
 
 

@@ -3,10 +3,9 @@
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --mem=70G
-#SBATCH --exclude=puck5
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
-#SBATCH --time=48:00:00
+#SBATCH --time=24:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/410tz_merge%a.log
 #SBATCH --array=0-2
 
