@@ -63,6 +63,10 @@ class _MyPathSettings:
     @property
     def surprisal_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "surprisal"
+
+    @property
+    def neuron_dir(self) -> _Path:
+        return self.DATA_DIR / "results" / "token_freq"
     
 
     @property
