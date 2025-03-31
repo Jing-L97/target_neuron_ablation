@@ -18,8 +18,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-m", "--model_name", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name"
     )
+    parser.add_argument("--layer_num", type=int, default=5,help="layer num")
     parser.add_argument(
-        "-n", "--neuron_file", type=str, default="500_10.csv", 
+        "-n", "--neuron_file", type=str, default="500_10.csv",
         help="Target model name"
     )
     parser.add_argument("--effect", type=str, choices=["boost", "supress"],
@@ -36,37 +37,65 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def analyze_neuron_directions(model, layer_idx=-1):
-    """Analyze orthogonality between all neurons in a layer."""
-    # Parse layer index to get the correct layer
-    layer_num = str(layer_idx) if layer_idx >= 0 else str(len(model.gpt_neox.layers) + layer_idx)
-    
-    # Get the MLP input projection layer
+
+def analyze_neuron_directions(model, layer_num=-1,chunk_size = 1024, device=None):
+    """Analyze orthogonality between all neurons in a layer with optimized computation."""
+    # Get weight matrix directly on the device where the model is
     input_layer_path = f"gpt_neox.layers.{layer_num}.mlp.dense_h_to_4h"
     layer_dict = dict(model.named_modules())
     input_layer = layer_dict[input_layer_path]
-    
-    # Get the weight matrix - shape [4*hidden_size, hidden_size]
-    W_in = input_layer.weight.detach().cpu()
-    
+
+    # Get the weight matrix directly on the appropriate device
+    W_in = input_layer.weight.detach()
+    if W_in.device != device:
+        W_in = W_in.to(device)
+
     # Get dimensions
     intermediate_size, hidden_size = W_in.shape
-    print(f"Computing pairwise directions for {intermediate_size} neurons")
-    
     # Normalize all neuron directions
     norm = torch.norm(W_in, dim=1, keepdim=True)
     normalized_directions = W_in / (norm + 1e-8)
-    
-    # Calculate complete pairwise cosine similarity matrix: [intermediate_size, intermediate_size] 
-    cosine_sim_matrix = torch.matmul(normalized_directions, normalized_directions.T)
 
+    # Compute the cosine similarity matrix more efficiently
+    # We can use chunking to avoid memory issues for large matrices
+    cosine_sim_matrix = torch.zeros((intermediate_size, intermediate_size), device=device)
+
+    # Calculate only the lower triangular part (including diagonal)
+    for i in range(0, intermediate_size, chunk_size):
+        end_i = min(i + chunk_size, intermediate_size)
+        chunk_i = normalized_directions[i:end_i]
+
+        # Calculate similarity with all neurons up to and including this chunk
+        for j in range(0, end_i, chunk_size):
+            end_j = min(j + chunk_size, end_i)  # Only calculate lower triangle
+            chunk_j = normalized_directions[j:end_j]
+
+            # Compute cosine similarity for this block
+            block_sim = torch.matmul(chunk_i, chunk_j.T)
+
+            # Fill in the corresponding part of the matrix
+            cosine_sim_matrix[i:end_i, j:end_j] = block_sim
+
+    # Make the matrix symmetric by copying the lower triangle to the upper triangle
+    indices = torch.triu_indices(intermediate_size, intermediate_size, 1, device=device)
+    cosine_sim_matrix[indices[1], indices[0]] = cosine_sim_matrix[indices[0], indices[1]]
+
+    # Set diagonal to zero (self-similarity is not relevant for orthogonality analysis)
+    cosine_sim_matrix.fill_diagonal_(0)
+
+    # Move to CPU for DataFrame conversion
+    cosine_sim_matrix_cpu = cosine_sim_matrix.cpu()
+
+    # Convert to DataFrame with neuron indices as both row and column labels
     cosine_df = pd.DataFrame(
-        cosine_sim_matrix.numpy(),
-        index=[f'{i}' for i in range(intermediate_size)],
-        columns=[f'{i}' for i in range(intermediate_size)]
+        cosine_sim_matrix_cpu.numpy(),
+        index=list(range(intermediate_size)),
+        columns=list(range(intermediate_size))
     )
+
     return cosine_df
 
+#TODO: add seleted neuron analyses
 
 def main() -> None:
     """Main function demonstrating usage."""
@@ -78,25 +107,21 @@ def main() -> None:
     ###################################
 
     # load neuron indices
-    step_ablations, layer_num = load_neuron_dict(
+    step_ablations, max_layer_num = load_neuron_dict(
         settings.PATH.result_dir / "token_freq" /args.effect / args.vector / args.model_name / args.neuron_file,
         key_col = "step",
         value_col = "top_neurons"
         )
+    if args.layer_num > max_layer_num:
+        logger.error(f"Assigned {args.layer_num}: is larger than max MLP layers {max_layer_num}")
+        raise
 
     ###################################
     # Initialize classes
     ###################################
-    result_dir = settings.PATH.direction_dir / args.model_name 
-    result_file =  result_dir / args.neuron_file
-    result_file.parent.mkdir(parents=True, exist_ok=True)
-    if args.resume:
-        resume_file = result_dir / "resume"/ args.neuron_file
-        resume_file.parent.mkdir(parents=True, exist_ok=True)
-    else:
-        resume_file = None
+
     # Initialize configuration with all Pythia checkpoints
-    steps_config = StepConfig(resume=args.resume,debug= args.debug,file_path = resume_file)
+    steps_config = StepConfig(resume=args.resume,debug= args.debug)
 
     # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model_name
@@ -104,34 +129,37 @@ def main() -> None:
         config=steps_config,
         model_name=args.model_name,
         model_cache_dir=model_cache_dir,  # note here we use the relative path
-        layer_num=layer_num,
+        layer_num=args.layer_num,
         device=device
     )
 
     ###################################
     # Save the target results
     ###################################
-    try:
-        # loop over different steps
-        for step in steps_config.steps:
+
+    # loop over different steps
+    for step in steps_config.steps:
+        # make the step directory
+        result_file =  settings.PATH.direction_dir / "neurons" / args.model_name / str(step)/f"{args.layer_num}.csv"
+
+        if args.resume and result_file.is_file():
+            logger.info(f"There exists: {result_file}. Skip")
+        else:
+            result_file.parent.mkdir(parents=True, exist_ok=True)
             # load model
             model, _ = extractor.load_model_for_step(step)
             # analyze the activation directions
-            #results_df = analyze_neuron_directions(model, step_ablations[step], layer_num)
-            results_df = analyze_neuron_directions(model, layer_num)
-        # Save results even if some checkpoints failed
-        if not results_df.empty:
-            results_df.to_csv(result_file, index=False)
-            logger.info(
-                f"Results saved to: {result_file}\n"
-                f"Processed {len([col for col in results_df.columns if str(col).isdigit()])} checkpoints successfully"
-            )
-        else:
-            logger.warning("No results were generated")
+            results_df = analyze_neuron_directions(model=model, layer_num =args.layer_num,device=device)
+            # Save results even if some checkpoints failed
+            if not results_df.empty:
+                results_df.to_csv(result_file)
+                logger.info(f"Results saved to: {result_file}")
+            else:
+                logger.warning("No results were generated for step")
 
-    except Exception as e:
-        logger.error(f"Analysis failed: {str(e)}")
-        raise
+    logger.info(f"Processed {len(steps_config.steps)} checkpoints successfully")
+
+
 
 
 

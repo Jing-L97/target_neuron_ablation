@@ -441,7 +441,8 @@ class StepSurprisalExtractor:
                 f"Created {self.ablation_mode} ablator for step {step} with {len(self.step_ablations[step])} neurons."
             )
         else:
-            logger.info(f"No ablation configured for step {step}")
+            #logger.info(f"No ablation configured for step {step}")
+            pass
 
     def load_model_for_step(self, step: int) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:
         """Load model and tokenizer for a specific step."""
