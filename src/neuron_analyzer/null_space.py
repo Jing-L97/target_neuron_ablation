@@ -607,3 +607,7 @@ class NullSpaceScaler:
         data = " ".join(self.dataset["text"])
         self.tokenizer.pad_token = self.tokenizer.eos_token
         return self.tokenizer(data, return_tensors="pt", padding=True, max_length=128, truncation=True)
+
+
+
+
