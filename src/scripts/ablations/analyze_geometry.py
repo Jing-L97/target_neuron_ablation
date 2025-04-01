@@ -20,14 +20,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-m", "--model_name", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name"
     )
-    parser.add_argument("--layer_num", type=int, default=5, help="layer num")
     parser.add_argument("-n", "--neuron_file", type=str, default="500_50.csv", help="Target model name")
     parser.add_argument(
-        "--vector",type=str,default="longtail",
-        choices=["mean", "longtail"],
+        "--vector",type=str,
+        default="longtail",choices=["mean", "longtail"],
         help="Differnt ablation model for freq vectors",
     )
-
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
@@ -39,13 +37,34 @@ class NeuronGeometricAnalyzer:
         self.model = model
         self.boost_neurons = boost_neurons
         self.suppress_neurons = suppress_neurons
-        self.results = {}
         self.layer_num = layer_num
         self.device = device
+        self.results = {}
+
+        # Get common neurons (not boost or suppress)
+        self.common_neurons,self.sampled_common_neurons = self._get_common_neurons()
+
+    def _get_common_neurons(self):
+        """Get neurons that are neither boosting nor suppressing."""
+        # Get layer to determine total neurons
+        layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
+        layer_dict = dict(self.model.named_modules())
+        layer = layer_dict[layer_path]
+        total_neurons = layer.weight.shape[0]
+
+        # Get neurons that are neither boosting nor suppressing
+        all_special = set(self.boost_neurons + self.suppress_neurons)
+        common_neurons = [i for i in range(total_neurons) if i not in all_special]
+
+        # Sample a subset of similar size if there are too many
+        reference_size = max(len(self.boost_neurons), len(self.suppress_neurons))
+        if len(common_neurons) > reference_size:
+            sampled_common_neurons = np.random.choice(common_neurons, size=reference_size, replace=False).tolist()
+
+        return common_neurons, sampled_common_neurons
 
     def extract_neuron_weights(self, neuron_indices):
         """Extract weight vectors for specified neurons in a layer."""
-        # Adjust this based on your model architecture
         layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
         layer_dict = dict(self.model.named_modules())
         layer = layer_dict[layer_path]
@@ -54,108 +73,129 @@ class NeuronGeometricAnalyzer:
         W = layer.weight.detach().cpu().numpy()
         # Extract weights for specific neurons
         W_neurons = W[neuron_indices]
+        # Ensure we return a 2D array
+        if len(W_neurons.shape) == 1:
+            W_neurons = W_neurons.reshape(1, -1)
+
         return W_neurons
 
-    def subspace_dimensionality(self):
-        """Method 1: Analyze the dimensionality of rare token neuron subspaces."""
-        # Extract weights for boost and suppress neurons
-        boost_indices = self.boost_neurons
-        suppress_indices = self.suppress_neurons
+    def subspace_dimensionality(self, group_indices):
+        """Analyze the dimensionality of neuron subspaces"""
 
-        # Get weights and print shapes
-        W_boost = self.extract_neuron_weights(boost_indices)
-        W_suppress = self.extract_neuron_weights(suppress_indices)
+        # Extract weights
+        W_group = self.extract_neuron_weights(group_indices)
 
-        # Now proceed with SVD on properly shaped arrays
-
-        U_b, S_b, Vh_b = np.linalg.svd(W_boost, full_matrices=False)
-        U_s, S_s, Vh_s = np.linalg.svd(W_suppress, full_matrices=False)
-
+        # Perform SVD on both neuron groups
+        U, S, Vh = np.linalg.svd(W_group, full_matrices=False)
         # Calculate normalized singular values
-        S_b_norm = S_b / S_b.sum()
-        S_s_norm = S_s / S_s.sum()
+        S_norm = S / S.sum() if S.sum() > 0 else S
 
         # Calculate cumulative explained variance
-        cum_var_b = np.cumsum(S_b_norm)
-        cum_var_s = np.cumsum(S_s_norm)
+        cum_var = np.cumsum(S_norm)
 
         # Estimate effective dimensionality (number of dimensions for 95% variance)
-        dim_b = np.argmax(cum_var_b >= 0.95) + 1 if np.any(cum_var_b >= 0.95) else len(S_b)
-        dim_s = np.argmax(cum_var_s >= 0.95) + 1 if np.any(cum_var_s >= 0.95) else len(S_s)
+        dim = np.argmax(cum_var >= 0.95) + 1 if np.any(cum_var >= 0.95) else len(S)
 
-        # Store results
+        # Store metrics
         result = {
-            "singular_values_boost": S_b,
-            "singular_values_suppress": S_s,
-            "normalized_sv_boost": S_b_norm,
-            "normalized_sv_suppress": S_s_norm,
-            "cumulative_variance_boost": cum_var_b,
-            "cumulative_variance_suppress": cum_var_s,
-            "effective_dim_boost": dim_b,
-            "effective_dim_suppress": dim_s,
-            "right_singular_vectors_boost": Vh_b,
-            "right_singular_vectors_suppress": Vh_s,
+            "effective_dim": dim,
+            "total_dim": len(S),
+            "top5_sv": S_norm[: min(5, len(S_norm))].tolist(),
+            "right_singular_vectors": Vh,
         }
+
+        # Calculate decay rates if we have at least 2 singular values
+        if len(S) >= 2:
+            result["sv_decay_rate_2"] = S[0] / S[1]
 
         return result
 
-    def orthogonality_measurement(self):  # TODO: add common tokens
-        """Measure orthogonality between boost and suppress subspaces."""
-        # Get the right singular vectors from method 1
-        Vh_b = self.result["right_singular_vectors_boost"]
-        Vh_s = self.result["right_singular_vectors_suppress"]
+    def orthogonality_measurement(self,Vh_1, Vh_2, dim_1, dim_2):
+        """Measure orthogonality between two subspaces."""
+        if Vh_1 is None or Vh_2 is None:
+            return None
 
-        # Get effective dimensions
-        dim_b = self.result["effective_dim_boost"]
-        dim_s = self.result["effective_dim_suppress"]
+        # Make sure we don't exceed available dimensions
+        dim_1 = min(dim_1, Vh_1.shape[0])
+        dim_2 = min(dim_2, Vh_2.shape[0])
 
         # Use effective dimensions to define subspaces
-        V_b = Vh_b[:dim_b].T  # Column vectors spanning boost subspace
-        V_s = Vh_s[:dim_s].T  # Column vectors spanning suppress subspace
+        V_1 = Vh_1[:dim_1].T  # Column vectors spanning subspace 1
+        V_2 = Vh_2[:dim_2].T  # Column vectors spanning subspace 2
 
         # Compute principal angles between subspaces
-        angles = subspace_angles(V_b, V_s)
+        try:
+            angles = subspace_angles(V_1, V_2)
+        except Exception:
+            # Handle case when angles calculation fails
+            return None
 
         # Calculate summary statistics
         mean_angle = np.mean(angles)
         median_angle = np.median(angles)
         min_angle = np.min(angles)
 
-        # Calculate cosine similarities between all pairs of basis vectors
-        cosine_sim_matrix = np.dot(Vh_b[:dim_b], Vh_s[:dim_s].T)
+        # Calculate percentage of near-orthogonal angles (80°-100°)
+        angles_degrees = np.degrees(angles)
+        near_orthogonal = ((angles_degrees >= 80) & (angles_degrees <= 100)).mean()
 
+        # Store the metrics
         result = {
-            "principal_angles": angles,
-            "mean_angle_radians": mean_angle,
             "mean_angle_degrees": np.degrees(mean_angle),
             "median_angle_degrees": np.degrees(median_angle),
             "min_angle_degrees": np.degrees(min_angle),
-            "cosine_similarity_matrix": cosine_sim_matrix,
+            "pct_near_orthogonal": near_orthogonal * 100,
         }
 
         return result
 
+    def get_neruon_pairs(self,dictionary)->list:   #TODO: revise this function
+        """Generate all possible pairs of keys from a dictionary without repetition. """
+        keys = list(dictionary.keys())
+        pair_dict = {}
+        # Loop through all possible pairs
+        for i in range(len(keys)):
+            for j in range(i+1, len(keys)):
+                pair_dict.append([keys[i], keys[j]])
+        return pair_dict
+
+
     def run_analyses(self):
-        """Run all methods of analysis."""
-        # Initialize results for this layer if not already present
-        self.results = {}
+        """Run analyses on subspace dimensionality."""
 
-        # Run Method 1: Subspace Dimensionality
-        m1_result = self.subspace_dimensionality()
-        self.results["subspace_dimensionality"] = m1_result
+        # load neuron subspaces
+        neuron_dict = {
+            "common":self.common_neurons,
+            "sampled_common":self.sampled_common_neurons,
+            "supress":self.suppress_neurons,
+            "boost":self.boost_neurons
+        }
+        subspace_lst = []
+        for _,neurons in neuron_dict.items():
+            subspace_lst.append(self.subspace_dimensionality(neurons))
+        subspace_df = pd.DataFrame(subspace_lst)
+        subspace_df["neuron"]=neuron_dict.keys()
 
-        # Store m1_result as instance attribute for method 2 to use
-        self.result = m1_result  # Note: this matches your orthogonality_measurement method which uses self.result
+        # compute orthogonality metrics
+        pair_dict = self.get_neuron_pairs(neuron_dict)
+        orthogonality_lst = []
+        for _,pair in pair_dict.items():
+            orthogonality_lst.append
+            (
+                self.orthogonality_measurement
+                    (
+                        pair[0]["right_singular_vectors"],
+                        pair[1]["right_singular_vectors"],
+                        pair[0]["effective_dim"],
+                        pair[1]["effective_dim"]
+                    )
+            )
+        orthogonality_df = pd.DataFrame(subspace_lst)
+        orthogonality_df["pair"] = pair_dict.keys()
+        return subspace_df
 
-        # Run Method 2 based on Method 1 results
-        if m1_result is not None:
-            m2_result = self.orthogonality_measurement()
-            self.results["orthogonality"] = m2_result
 
-        # Return results as DataFrame
-        return pd.DataFrame([self.results])  # Wrap in list to ensure proper DataFrame structure
-
-
+    
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
@@ -164,23 +204,24 @@ def main() -> None:
     ###################################
     # load materials and paths
     ###################################
+    result_dir = settings.PATH.direction_dir / "geometry" / args.model_name 
+    subspace_file = result_dir/ "subspace" / args.neuron_file
+    orthogonality_file = result_dir/  "orthogonality" / args.neuron_file
+    result_file.parent.mkdir(parents=True, exist_ok=True)
 
     # load neuron indices
-    boost_step_ablations, max_layer_num = load_neuron_dict(
+    boost_step_ablations,layer_num = load_neuron_dict(
         settings.PATH.result_dir / "token_freq" / "boost" / args.vector / args.model_name / args.neuron_file,
         key_col="step",
         value_col="top_neurons",
     )
 
-    suppress_step_ablations, max_layer_num = load_neuron_dict(
+    suppress_step_ablations, ayer_num = load_neuron_dict(
         settings.PATH.result_dir / "token_freq" / "suppress" / args.vector / args.model_name / args.neuron_file,
         key_col="step",
         value_col="top_neurons",
     )
 
-    if args.layer_num > max_layer_num:
-        logger.error(f"Assigned {args.layer_num}: is larger than max MLP layers {max_layer_num}")
-        raise
 
     ###################################
     # Initialize classes
@@ -202,16 +243,10 @@ def main() -> None:
     ###################################
     # Save the target results
     ###################################
-
+    
     # loop over different steps
     for step in steps_config.steps:
         # make the step directory
-        result_file = settings.PATH.direction_dir / "geometry" / args.model_name / str(step) / f"{args.layer_num}.csv"
-
-        if args.resume and result_file.is_file():
-            logger.info(f"There exists: {result_file}. Skip")
-        else:
-            result_file.parent.mkdir(parents=True, exist_ok=True)
             # load model
             model, _ = extractor.load_model_for_step(step)
             # initilize the analyzer class
