@@ -19,6 +19,8 @@ logger = logging.getLogger(__name__)
 random.seed(42)
 T = t.TypeVar("T")
 
+#######################################################
+# Util func to set up steps
 
 class StepConfig:
     """Configuration for step-wise analysis of model checkpoints."""
@@ -67,6 +69,11 @@ class StepConfig:
             if col.isdigit():
                 completed_steps.add(int(col))
         return [step for step in self.steps if step not in completed_steps]
+
+
+
+#######################################################
+# Util func to compute surprisal
 
 
 class AblationConfig:
@@ -364,6 +371,9 @@ class NeuronAblator:
         self.null_space_basis = None
         self.projection_matrix = None
 
+
+#######################################################
+# Util func to set up steps
 
 class StepSurprisalExtractor:
     """Extracts word surprisal across different training steps with neuron ablation."""

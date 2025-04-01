@@ -1,24 +1,35 @@
 #!/bin/bash
-#SBATCH --job-name=sel_mean
+#SBATCH --job-name=sel_neuron
 #SBATCH --export=ALL
-#SBATCH --partition=gpu
-#SBATCH --mem=70G
-#SBATCH --exclude=puck5
-#SBATCH --gres=gpu:1
+#SBATCH --partition=cpu
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=40G
 #SBATCH --time=18:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/sel_mean_%a.log
-#SBATCH --array=0-7
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/sel_neuron_%a.log
+#SBATCH --array=0-31
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/ablations"
-EFFECT="supress"
-VECTOR="longtail"
 
 # Define the input arrays
+EFFECTS=(
+    "suppress"
+    "boost"
+)
+
+VECTORS=(
+    "longtail"
+    "mean"
+)
+
 TOP_NS=(
     1
-    5
-    25
     2
+    5
+    10
+    25
+    50
+    100
+    500
 )
 
 MODELS=(
@@ -27,24 +38,31 @@ MODELS=(
 )
 
 # Calculate total combinations for validation
-TOTAL_COMBINATIONS=$((${#TOP_NS[@]} * ${#MODELS[@]}))
+TOTAL_COMBINATIONS=$((${#EFFECTS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#MODELS[@]}))
+
 if [[ $SLURM_ARRAY_TASK_ID -ge $TOTAL_COMBINATIONS ]]; then
     echo "Error: SLURM_ARRAY_TASK_ID ($SLURM_ARRAY_TASK_ID) exceeds total combinations ($TOTAL_COMBINATIONS)"
     exit 1
 fi
 
-# Calculate which combination to use based on the SLURM array task ID
-TOP_N_IDX=$(( SLURM_ARRAY_TASK_ID / ${#MODELS[@]} ))
+# Calculate indices for each variable based on the SLURM array task ID
+EFFECT_IDX=$(( SLURM_ARRAY_TASK_ID / (${#VECTORS[@]} * ${#TOP_NS[@]} * ${#MODELS[@]}) ))
+VECTOR_IDX=$(( (SLURM_ARRAY_TASK_ID / (${#TOP_NS[@]} * ${#MODELS[@]})) % ${#VECTORS[@]} ))
+TOP_N_IDX=$(( (SLURM_ARRAY_TASK_ID / ${#MODELS[@]}) % ${#TOP_NS[@]} ))
 MODEL_IDX=$(( SLURM_ARRAY_TASK_ID % ${#MODELS[@]} ))
 
 # Get the actual values from arrays using the calculated indices
+EFFECT="${EFFECTS[$EFFECT_IDX]}"
+VECTOR="${VECTORS[$VECTOR_IDX]}"
 TOP_N="${TOP_NS[$TOP_N_IDX]}"
 MODEL="${MODELS[$MODEL_IDX]}"
 
 # Log which combination is being processed
 echo "Processing combination:"
-echo "  Model: $MODEL"
-echo "  Top N: $TOP_N"
+echo " Effect: $EFFECT"
+echo " Vector: $VECTOR"
+echo " Model: $MODEL"
+echo " Top N: $TOP_N"
 
 # Run the analysis with the selected combination
 python $SCRIPT_ROOT/analyze_unigram.py \

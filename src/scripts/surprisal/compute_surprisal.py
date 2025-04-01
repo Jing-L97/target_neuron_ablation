@@ -31,7 +31,7 @@ def parse_args() -> argparse.Namespace:
         "-n", "--neuron_file", type=str, default="500_10.csv", 
         help="Target model name"
     )
-    parser.add_argument("--effect", type=str, choices=["boost", "supress"],
+    parser.add_argument("--effect", type=str, choices=["boost", "suppress"],
         default="supress", help="boost or supress long-tail"
         )
     parser.add_argument(

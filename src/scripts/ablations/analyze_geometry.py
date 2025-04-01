@@ -153,7 +153,7 @@ class NeuronGeometricAnalyzer:
         """Generate all possible pairs of keys from a dictionary without repetition. """
         keys = list(dictionary.keys())
         pair_dict = {}
-        # Loop through all possible pairs
+        # Loop through all possible pairs TODO: modify the dict keys
         for i in range(len(keys)):
             for j in range(i+1, len(keys)):
                 pair_dict.append([keys[i], keys[j]])
@@ -192,10 +192,9 @@ class NeuronGeometricAnalyzer:
             )
         orthogonality_df = pd.DataFrame(subspace_lst)
         orthogonality_df["pair"] = pair_dict.keys()
-        return subspace_df
+        return subspace_df, orthogonality_df
 
 
-    
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
@@ -206,8 +205,9 @@ def main() -> None:
     ###################################
     result_dir = settings.PATH.direction_dir / "geometry" / args.model_name 
     subspace_file = result_dir/ "subspace" / args.neuron_file
-    orthogonality_file = result_dir/  "orthogonality" / args.neuron_file
-    result_file.parent.mkdir(parents=True, exist_ok=True)
+    orthogonality_file= result_dir/  "orthogonality" / args.neuron_file
+    subspace_file.parent.mkdir(parents=True, exist_ok=True)
+    orthogonality_file.parent.mkdir(parents=True, exist_ok=True)
 
     # load neuron indices
     boost_step_ablations,layer_num = load_neuron_dict(
@@ -243,28 +243,32 @@ def main() -> None:
     ###################################
     # Save the target results
     ###################################
-    
+
     # loop over different steps
+    subspace_df = pd.DataFrame()
+    orthogonality_df = pd.DataFrame()
     for step in steps_config.steps:
         # make the step directory
-            # load model
-            model, _ = extractor.load_model_for_step(step)
-            # initilize the analyzer class
-            geometry_analyzer = NeuronGeometricAnalyzer(
-                model=model,
-                layer_num=args.layer_num,
-                boost_neurons=boost_step_ablations[step],
-                suppress_neurons=suppress_step_ablations[step],
-                device=device,
-            )
-            results_df = geometry_analyzer.run_analyses()
-            # Save results even if some checkpoints failed
-            if not results_df.empty:
-                results_df.to_csv(result_file)
-                logger.info(f"Results saved to: {result_file}")
-            else:
-                logger.warning("No results were generated for step")
-
+        # load model
+        model, _ = extractor.load_model_for_step(step)
+        # initilize the analyzer class
+        geometry_analyzer = NeuronGeometricAnalyzer(
+            model=model,
+            layer_num=args.layer_num,
+            boost_neurons=boost_step_ablations[step],
+            suppress_neurons=suppress_step_ablations[step],
+            device=device,
+        )
+        subspace, orthogonality = geometry_analyzer.run_analyses()
+        subspace["step"] = step
+        orthogonality["step"] = step
+        subspace_df = pd.concat([subspace_df,subspace])
+        orthogonality_df = pd.concat([orthogonality_df,orthogonality])
+    # Save results even if some checkpoints failed
+    subspace_df.to_csv(subspace_file)
+    logger.info(f"Subspace results saved to: {subspace_file}")
+    orthogonality_df.to_csv(orthogonality_file)
+    logger.info(f"Subspace results saved to: {orthogonality_file}")
     logger.info(f"Processed {len(steps_config.steps)} checkpoints successfully")
 
 

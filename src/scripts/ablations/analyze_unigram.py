@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", choices=["mean", "longtail"],default="longtail")
-    parser.add_argument("--effect", type=str, choices=["boost", "supress"],default="supress", help="boost or supress long-tail")
+    parser.add_argument("--effect", type=str, choices=["boost", "suppress"],default="suppress", help="boost or suppress long-tail prob")
     parser.add_argument("--top_n", type=int, default=10, help="use_bos_only if enabled")
     parser.add_argument("--data_range_end", type=int, default=500, help="use_bos_only if enabled")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
@@ -38,17 +38,20 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int,
     )
     if "kl_divergence_before" in final_df.columns:
         final_df["kl_from_unigram_diff"] = final_df["kl_divergence_after"] - final_df["kl_divergence_before"]
-    # filter the neurons that push towards the unigram freq
-    if effect == "supress":
-        final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
-    if effect == "boost":
+        final_df["abs_kl_from_unigram_diff"] = np.abs(final_df["kl_divergence_after"] - final_df["kl_divergence_before"])
+
+    if effect == "suppress":
+        # filter the neurons that push towards the unigram freq
         final_df = final_df[final_df["kl_from_unigram_diff"] < 0]
+    if effect == "boost":
+        # filter the neurons that push away from the unigram freq
+        final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
     # Calculate the mediation effect
     final_df["mediation_effect"] = (
         1 - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / final_df["abs_delta_loss_post_ablation"]
     )
 
-    ranked_neurons = final_df.sort_values(by=["mediation_effect", "kl_from_unigram_diff"], ascending=[False, False])
+    ranked_neurons = final_df.sort_values(by=["mediation_effect", "abs_kl_from_unigram_diff"], ascending=[False, False])
     # Select top N neurons, preserving the original sorting
     top_neurons = ranked_neurons["component_name"].head(top_n).tolist()
     med_effect = ranked_neurons["mediation_effect"].head(top_n).tolist()
