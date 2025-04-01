@@ -1,19 +1,28 @@
 #!/bin/bash
-#SBATCH --job-name=mean_supress
+#SBATCH --job-name=h_sup_int
 #SBATCH --partition=gpu
 #SBATCH --mem=70G
-#SBATCH --exclude=puck5
 #SBATCH --gres=gpu:1
-#SBATCH --time=15:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/mean_supress_%a.log
-#SBATCH --array=0-7
+#SBATCH --time=24:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/h_sup_int_%a.log
+#SBATCH --array=0-47
+
 
 # Define constants for better readability and maintenance
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
-VECTOR="longtail"
-EFFECT="supress"
+
+# Define constants
+EFFECT="suppress"  
 
 # Define the input arrays
+VECTORS=(
+    "longtail"
+    "mean"
+)
+
+# Fixed word variable
+WORD="context/stas/c4-en-10k/5/longtail_words.json"
+
 NEURON_FILES=(
     "500_1.csv"
     "500_5.csv"
@@ -21,22 +30,20 @@ NEURON_FILES=(
     "500_2.csv"
 )
 
-
 ABLATIONS=(
     "mean"
-)
-
-WORDS=(
-    "context/stas/c4-en-10k/5/longtail_words.json"
+    "zero"
+    "random"
 )
 
 MODELS=(
-    "EleutherAI/pythia-410m-deduped"
     "EleutherAI/pythia-70m-deduped"
+    "EleutherAI/pythia-410m-deduped"
 )
 
 # Calculate total combinations for validation
-TOTAL_COMBINATIONS=$((${#NEURON_FILES[@]} * ${#ABLATIONS[@]} * ${#WORDS[@]} * ${#MODELS[@]}))
+TOTAL_COMBINATIONS=$((${#VECTORS[@]} * ${#NEURON_FILES[@]} * ${#ABLATIONS[@]} * ${#MODELS[@]}))
+
 if [[ $SLURM_ARRAY_TASK_ID -ge $TOTAL_COMBINATIONS ]]; then
     echo "Error: SLURM_ARRAY_TASK_ID ($SLURM_ARRAY_TASK_ID) exceeds total combinations ($TOTAL_COMBINATIONS)"
     exit 1
@@ -44,27 +51,29 @@ fi
 
 # Calculate which combination to use based on the SLURM array task ID
 # Using integer division and modulo to extract indices
-NEURON_IDX=$(( SLURM_ARRAY_TASK_ID / (${#ABLATIONS[@]} * ${#WORDS[@]} * ${#MODELS[@]}) ))
-REMAINDER=$(( SLURM_ARRAY_TASK_ID % (${#ABLATIONS[@]} * ${#WORDS[@]} * ${#MODELS[@]}) ))
+VECTOR_IDX=$(( SLURM_ARRAY_TASK_ID / (${#NEURON_FILES[@]} * ${#ABLATIONS[@]} * ${#MODELS[@]}) ))
+REMAINDER=$(( SLURM_ARRAY_TASK_ID % (${#NEURON_FILES[@]} * ${#ABLATIONS[@]} * ${#MODELS[@]}) ))
 
-ABLATION_IDX=$(( REMAINDER / (${#WORDS[@]} * ${#MODELS[@]}) ))
-REMAINDER=$(( REMAINDER % (${#WORDS[@]} * ${#MODELS[@]}) ))
+NEURON_IDX=$(( REMAINDER / (${#ABLATIONS[@]} * ${#MODELS[@]}) ))
+REMAINDER=$(( REMAINDER % (${#ABLATIONS[@]} * ${#MODELS[@]}) ))
 
-WORD_IDX=$(( REMAINDER / ${#MODELS[@]} ))
+ABLATION_IDX=$(( REMAINDER / ${#MODELS[@]} ))
 MODEL_IDX=$(( REMAINDER % ${#MODELS[@]} ))
 
 # Get the actual values from arrays using the calculated indices
+VECTOR="${VECTORS[$VECTOR_IDX]}"
 NEURON_FILE="${NEURON_FILES[$NEURON_IDX]}"
 ABLATION="${ABLATIONS[$ABLATION_IDX]}"
-WORD="${WORDS[$WORD_IDX]}"
 MODEL="${MODELS[$MODEL_IDX]}"
 
 # Log which combination is being processed
 echo "Processing combination:"
-echo "  Model: $MODEL"
-echo "  Word: $WORD"
-echo "  Neuron file: $NEURON_FILE"
-echo "  Ablation: $ABLATION"
+echo " Effect: $EFFECT (fixed)"
+echo " Vector: $VECTOR"
+echo " Model: $MODEL"
+echo " Word: $WORD (fixed)"
+echo " Neuron file: $NEURON_FILE"
+echo " Ablation: $ABLATION"
 
 # Run the surprisal computation with the selected combination
 python $SCRIPT_ROOT/compute_surprisal.py \
@@ -74,4 +83,4 @@ python $SCRIPT_ROOT/compute_surprisal.py \
     -a "$ABLATION" \
     --effect "$EFFECT" \
     --vector "$VECTOR" \
-    --resume \
+    --resume
