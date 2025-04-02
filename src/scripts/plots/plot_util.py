@@ -2,6 +2,7 @@ import ast
 import typing as t
 from pathlib import Path
 
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 
@@ -31,7 +32,7 @@ class SurprisalLoader:
         base_path: Path,
         eval_sets: list[str] = ["merged", "longtail_words"],
         ablations: list[str] = ["mean", "zero", "random", "scaled", "full"],
-        effects: list[str] = ["boost", "supress"],
+        effects: list[str] = ["boost", "suppress"],
         models: list[str] = ["70m", "410m"],
         neurons: list[int] = [1, 2, 5, 10, 25, 50, 500],
         vectors: list[str] = ["base", "mean", "longtail"],
@@ -64,11 +65,7 @@ class SurprisalLoader:
                 if log_value > self.min_step:
                     # Add to columns dictionary with log value as key
                     columns_dict[f"{log_value:.4f}"] = data[col]
-
-        # Create DataFrame from dictionary at once (avoids fragmentation)
-        result = pd.DataFrame(columns_dict)
-
-        return result
+        return pd.DataFrame(columns_dict)
 
     def group_word_all(self, data: pd.DataFrame) -> pd.DataFrame:
         """Calculate mean values across all words, dropping the target_word column."""
@@ -149,13 +146,16 @@ class SurprisalLoader:
 
         # Concatenate all frames at once (more efficient than incremental concatenation)
         stat_frame = pd.concat(stat_frames, ignore_index=True) if stat_frames else pd.DataFrame()
-
+        stat_frame["log_step"] = stat_frame["log_step"].astype(float)
         # Save the result
         output_path = self.base_path / "stat_all.csv"
         stat_frame.to_csv(output_path)
         print(f"Stat file has been saved to {output_path}")
 
         return stat_frame
+
+
+
 
 
 
@@ -174,7 +174,6 @@ def load_kl(file_path: Path) -> list[float]:
     return flat_kl_diff, stat_df
 
 
-
 #######################################################
 # Util func in stat
 
@@ -190,3 +189,165 @@ def d_stats(x):
         "third": np.percentile(x, 75),
     }
     return stats
+
+
+
+
+#######################################################
+# Util func in plotting surprisal
+
+class SurprisalPlotter:
+    """Class for plotting model effect data with various filtering options."""
+
+    def __init__(
+        self,
+        df: pd.DataFrame,
+        output_dir: Path,
+        neuron_colors: dict[int, str],
+        ylim_dict: dict[str, dict[str, tuple[float, float]]],
+        models=None,
+        effect_lst=None,
+        vec_lst=None,
+        ablations=None,
+        neurons=None,
+    ):
+        """Initialize the plotter with data and configuration."""
+        self.df = df
+        self.output_dir = Path(output_dir)
+        self.neuron_colors = neuron_colors
+        self.ylim_dict = ylim_dict
+
+        # Set models or compute from df if None
+        self.models = models if models is not None else df["model"].unique().tolist()
+        self.effect_lst = effect_lst if effect_lst is not None else df["effect"].unique().tolist()
+        self.vec_lst = vec_lst if vec_lst is not None else df["vec"].unique().tolist()
+        # Make sure "base" is not included in ablations to avoid creating "base_*.png" files
+        if ablations is not None:
+            self.ablations = [a for a in ablations if a != "base"]
+        else:
+            self.ablations = [a for a in df["ablation"].unique() if a != "base"]
+        self.neurons = neurons if neurons is not None else df["neuron"].unique().tolist()
+
+    def _plot_line(self, data: pd.DataFrame, label: str) -> bool:
+        """ Plot a single line for the given data."""
+        if data.empty:
+            return False
+
+        baseline_grouped = data.groupby("log_step")
+        x_values = sorted(data["log_step"].unique())
+
+        # Extract surprisal values
+        y_values = [
+            baseline_grouped.get_group(log_step)["surprisal"].values[0]
+            for log_step in x_values
+            if log_step in baseline_grouped.groups
+        ]
+
+        if not y_values:  # Skip if no values to plot
+            return False
+
+        # Determine color based on label
+        if label == "baseline":
+            color = self.neuron_colors.get(0, "black")
+        else:
+            try:
+                neuron_id = int(label)
+                color = self.neuron_colors.get(neuron_id, "black")
+            except ValueError:
+                color = "black"
+
+        # Plot the line
+        plt.plot(x_values, y_values, color=color, linewidth=2, label=label)
+        return True
+
+    def plot_all(self, eval_set: str, figure_size: tuple[int, int] = (10, 8)) -> list[Path]:
+        """Plot the overall development using the configuration from initialization. """
+
+        # Process each model and ablation type using class attributes
+        for effect in self.effect_lst:
+            for vec in self.vec_lst:
+                for model in self.models:
+                    for ablation in self.ablations:
+                        # Create a new figure
+                        plt.figure(figsize=figure_size)
+
+                        # Get baseline data (always include baseline for comparison)
+                        baseline_data = self.df[
+                            (self.df["model"] == model)
+                            & (self.df["ablation"] == "base")
+                            & (self.df["eval"] == eval_set)
+                            & (self.df["effect"] == effect)
+                        ]
+
+                        # Plot baseline data first
+                        baseline_plotted = self._plot_line(baseline_data, "baseline")
+
+                        # Count how many lines we've plotted
+                        lines_plotted = 1 if baseline_plotted else 0
+
+                        # Filter data for this model and configuration
+                        model_data = self.df[
+                            (self.df["model"] == model)
+                            & (self.df["vec"] == vec)
+                            & (self.df["eval"] == eval_set)
+                            & (self.df["effect"] == effect)
+                            & (self.df["ablation"] == ablation)
+                        ]
+
+                        if model_data.empty and not baseline_plotted:
+                            plt.close()
+                            continue
+
+                        # Process each neuron condition for this ablation
+                        for neuron in self.neurons:
+                            # Filter data for this neuron and ablation combination
+                            condition_data = model_data[(model_data["neuron"] == neuron)]
+
+                            # Plot neuron data
+                            if self._plot_line(condition_data, str(neuron)):
+                                lines_plotted += 1
+
+                        # Check if we have any plotted data or if it's a base ablation
+                        if lines_plotted == 0 or ablation == "base":
+                            plt.close()
+                            continue
+
+                        # Style the plot
+                        plt.xlabel("Log step", fontsize=11)
+                        plt.ylabel("Surprisal", fontsize=11)
+                        plt.title(f"neuron={effect}, vec={vec}, intervention={ablation}", fontsize=13)
+                        plt.grid(alpha=0.2)
+
+                        # Create legend with baseline first
+                        handles, labels = plt.gca().get_legend_handles_labels()
+
+                        if handles:  # Only create legend if we have items to show
+                            # If baseline is in the legend, make sure it comes first
+                            if "baseline" in labels:
+                                base_idx = labels.index("baseline")
+                                # Move baseline to front
+                                handles = [handles[base_idx]] + [h for i, h in enumerate(handles) if i != base_idx]
+                                labels = [labels[base_idx]] + [l for i, l in enumerate(labels) if i != base_idx]
+
+                            plt.legend(handles, labels, loc="lower left")
+
+                        # Set y-axis limits if provided
+                        if eval_set in self.ylim_dict and model in self.ylim_dict[eval_set]:
+                            plt.ylim(self.ylim_dict[eval_set][model])
+
+                        # Save the figure
+                        plt.tight_layout()
+
+                        # Create output directory if it doesn't exist
+                        output_path = self.output_dir / effect / eval_set
+                        output_path.mkdir(parents=True, exist_ok=True)
+
+                        # Final check to absolutely make sure we never save any files with "base" in the name
+                        if vec != "base":
+                            output_file = output_path / f"{vec}_{model}_{ablation}.png"
+                            plt.savefig(output_file, dpi=300, bbox_inches="tight")
+
+                        plt.close()
+
+
+

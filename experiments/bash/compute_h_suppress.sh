@@ -1,10 +1,10 @@
 #!/bin/bash
-#SBATCH --job-name=h_suppress
+#SBATCH --job-name=h_suppress_merged
 #SBATCH --partition=gpu
 #SBATCH --mem=70G
 #SBATCH --gres=gpu:1
 #SBATCH --time=24:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/h_suppress_%a.log
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/h_suppress_merged_%a.log
 #SBATCH --array=0-35
 
 
@@ -21,7 +21,7 @@ VECTORS=(
 )
 
 # Fixed word variable
-WORD="context/stas/c4-en-10k/5/longtail_words.json"
+WORD="context/stas/c4-en-10k/5/merged.json"
 
 NEURON_FILES=(
     "500_10.csv"

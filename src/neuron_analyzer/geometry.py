@@ -37,7 +37,6 @@ class NeuronGeometricAnalyzer:
 
         return common_neurons, sampled_common_neurons
 
-
     def extract_neuron_weights(self, neuron_indices):
         """Extract weight vectors for specified neurons in a layer."""
         layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
@@ -137,13 +136,12 @@ class NeuronGeometricAnalyzer:
 
         return pair_dict
 
-
     def run_analyses(self):
         """Run analyses on subspace dimensionality."""
         # load neuron subspaces
         neuron_dict = {
-            "common": self.common_neurons,
-            "sampled_common": self.sampled_common_neurons,
+            "all": self.common_neurons,
+            "random": self.sampled_common_neurons,
             "suppress": self.suppress_neurons,  # Fixed typo
             "boost": self.boost_neurons,
         }
@@ -190,11 +188,11 @@ class NeuronGeometricAnalyzer:
         return subspace_df, orthogonality_df
 
 
-
 #######################################################
 # Neuron direction analysis
 
-def analyze_neuron_directions(model, layer_num=-1,chunk_size = 1024, device=None)->pd.DataFrame:
+
+def analyze_neuron_directions(model, layer_num=-1, chunk_size=1024, device=None) -> pd.DataFrame:
     """Analyze orthogonality between all neurons in a layer with optimized computation."""
     # Get weight matrix directly on the device where the model is
     input_layer_path = f"gpt_neox.layers.{layer_num}.mlp.dense_h_to_4h"
@@ -244,9 +242,7 @@ def analyze_neuron_directions(model, layer_num=-1,chunk_size = 1024, device=None
 
     # Convert to DataFrame with neuron indices as both row and column labels
     cosine_df = pd.DataFrame(
-        cosine_sim_matrix_cpu.numpy(),
-        index=list(range(intermediate_size)),
-        columns=list(range(intermediate_size))
+        cosine_sim_matrix_cpu.numpy(), index=list(range(intermediate_size)), columns=list(range(intermediate_size))
     )
 
     return cosine_df
@@ -257,27 +253,27 @@ def get_stat(cosine_df, neuron_idx: list, threshold: float = 0.1) -> pd.DataFram
     # Ensure all neurons are in the dataframe
     all_neurons = set(cosine_df.index)
     valid_neurons = [n for n in neuron_idx if n in all_neurons]
-    
+
     if len(valid_neurons) < len(neuron_idx):
         missing = set(neuron_idx) - all_neurons
         print(f"Warning: {len(missing)} neurons not found in the matrix: {missing}")
-    
+
     if not valid_neurons:
         raise ValueError("No valid neurons found in the cosine similarity matrix")
-    
+
     # Create a mask for neurons in the list and outside the list
     neuron_set = set(valid_neurons)
     all_neurons = set(cosine_df.index)
     neurons_outside = list(all_neurons - neuron_set)
-    
+
     # Prepare results container
     results = []
-    
+
     # Process each neuron
     for neuron in valid_neurons:
         # Get cosine similarities
         similarities = cosine_df.loc[neuron]
-        
+
         # Within list statistics (excluding self)
         within_list = [similarities[n] for n in valid_neurons if n != neuron]
         if within_list:
@@ -288,7 +284,7 @@ def get_stat(cosine_df, neuron_idx: list, threshold: float = 0.1) -> pd.DataFram
             within_null_percent = (within_null_count / len(within_list)) * 100 if within_list else 0
         else:
             within_mean = within_max = within_min = within_null_count = within_null_percent = 0
-        
+
         # Outside list statistics
         outside_list = [similarities[n] for n in neurons_outside]
         if outside_list:
@@ -299,45 +295,48 @@ def get_stat(cosine_df, neuron_idx: list, threshold: float = 0.1) -> pd.DataFram
             outside_null_percent = (outside_null_count / len(outside_list)) * 100
         else:
             outside_mean = outside_max = outside_min = outside_null_count = outside_null_percent = 0
-        
+
         # Add to results (two rows per neuron - within and outside)
-        results.append({
-            'neuron_idx': neuron,
-            'type': 'within_list',
-            'mean_abs_cosine': within_mean,
-            'max_abs_cosine': within_max,
-            'min_abs_cosine': within_min,
-            'null_space_count': within_null_count,
-            'null_space_percent': within_null_percent,
-            'total_comparisons': len(within_list)
-        })
-        
-        results.append({
-            'neuron_idx': neuron,
-            'type': 'outside_list',
-            'mean_abs_cosine': outside_mean,
-            'max_abs_cosine': outside_max,
-            'min_abs_cosine': outside_min,
-            'null_space_count': outside_null_count,
-            'null_space_percent': outside_null_percent,
-            'total_comparisons': len(outside_list)
-        })
-    
+        results.append(
+            {
+                "neuron_idx": neuron,
+                "type": "within_list",
+                "mean_abs_cosine": within_mean,
+                "max_abs_cosine": within_max,
+                "min_abs_cosine": within_min,
+                "null_space_count": within_null_count,
+                "null_space_percent": within_null_percent,
+                "total_comparisons": len(within_list),
+            }
+        )
+
+        results.append(
+            {
+                "neuron_idx": neuron,
+                "type": "outside_list",
+                "mean_abs_cosine": outside_mean,
+                "max_abs_cosine": outside_max,
+                "min_abs_cosine": outside_min,
+                "null_space_count": outside_null_count,
+                "null_space_percent": outside_null_percent,
+                "total_comparisons": len(outside_list),
+            }
+        )
+
     # Convert to DataFrame
     stat_df = pd.DataFrame(results)
-    
+
     # Add interpretation column
     def interpret_orthogonality(row):
-        if row['null_space_percent'] > 75:
-            return 'highly_orthogonal'
-        elif row['null_space_percent'] > 50:
-            return 'moderately_orthogonal'
-        elif row['null_space_percent'] > 25:
-            return 'slightly_orthogonal'
+        if row["null_space_percent"] > 75:
+            return "highly_orthogonal"
+        elif row["null_space_percent"] > 50:
+            return "moderately_orthogonal"
+        elif row["null_space_percent"] > 25:
+            return "slightly_orthogonal"
         else:
-            return 'not_orthogonal'
-    
-    stat_df['orthogonality_category'] = stat_df.apply(interpret_orthogonality, axis=1)
-    
-    return stat_df
+            return "not_orthogonal"
 
+    stat_df["orthogonality_category"] = stat_df.apply(interpret_orthogonality, axis=1)
+
+    return stat_df
