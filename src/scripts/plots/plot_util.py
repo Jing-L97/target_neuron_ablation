@@ -155,8 +155,63 @@ class SurprisalLoader:
         return stat_frame
 
 
+class GeometryLoader:
+    """Class for loading and processing geometric metric data."""
 
+    def __init__(self, min_step: float = 3.5):
+        self.min_step = min_step
 
+    @staticmethod
+    def convert_log(step: float) -> float:
+        return np.log10(step + 1e-10)
+
+    def convert_log_step(self, file_path: Path) -> pd.DataFrame:
+        # Load the data
+        data = pd.read_csv(file_path)
+        # Apply log conversion
+        data["log_step"] = data["step"].apply(self.convert_log)
+        # Filter by minimum log step
+        return data[data["log_step"] > self.min_step].copy()
+
+    def load_subspace(self, data: pd.DataFrame, neuron_type_lst=None) -> pd.core.groupby.DataFrameGroupBy:
+        """Process subspace data with string replacements and filtering."""
+        # Create a copy to avoid SettingWithCopyWarning
+        df = data.copy()
+        # Replace neuron type strings
+        df["neuron"] = df["neuron"].str.replace("sampled_common", "random", regex=False)
+        df["neuron"] = df["neuron"].str.replace("common", "all", regex=False)
+        # Filter by neuron type if list provided
+        if neuron_type_lst:
+            df = df[~df["neuron"].isin(neuron_type_lst)]
+        # Calculate dimension proportion
+        df["dim_prop"] = df["effective_dim"] / df["total_dim"]
+        return df.groupby("neuron")
+
+    def load_orthogonality(
+        self, data: pd.DataFrame, neuron_type_lst = None
+    ) -> pd.core.groupby.DataFrameGroupBy:
+        """Process orthogonality data with string replacements and filtering."""
+        # Create a copy to avoid SettingWithCopyWarning
+        df = data.copy()
+        # Replace pair strings (order matters - replace longer pattern first)
+        df["pair"] = df["pair"].str.replace("sampled_common", "random", regex=False)
+        df["pair"] = df["pair"].str.replace("common", "all", regex=False)
+        # Filter by neuron type if list provided
+        if neuron_type_lst:
+            # Exclude pairs containing any item from neuron_type_lst
+            df = df[~df["pair"].apply(lambda pair: any(item in pair for item in neuron_type_lst))]
+        return df.groupby("pair")
+
+    def load_file(self, file_path: Path, metric: str, neuron_type_lst = None) :
+        """Main function to load and process metric data files."""
+        # Load data with log step conversion
+        data = self.convert_log_step(file_path)
+        # Route to appropriate processing function based on metric
+        if metric == "subspace":
+            return self.load_subspace(data, neuron_type_lst=neuron_type_lst)
+        if metric == "orthogonality":
+            return self.load_orthogonality(data, neuron_type_lst=neuron_type_lst)
+        return None
 
 
 
@@ -313,8 +368,8 @@ class SurprisalPlotter:
                             continue
 
                         # Style the plot
-                        plt.xlabel("Log step", fontsize=11)
-                        plt.ylabel("Surprisal", fontsize=11)
+                        plt.xlabel("Log step", fontsize=12)
+                        plt.ylabel("Surprisal", fontsize=12)
                         plt.title(f"neuron={effect}, vec={vec}, intervention={ablation}", fontsize=13)
                         plt.grid(alpha=0.2)
 
@@ -351,3 +406,23 @@ class SurprisalPlotter:
 
 
 
+
+def plot_geometry_step(geometry_path,output_path, metric, model_lst, neuron_lst, neuron_type_lst, ylim_dict, metric_dict):
+    for model in model_lst:
+        for neuron in neuron_lst:
+            file_path = geometry_path / f"pythia-{model}-deduped" / metric / f"500_{neuron}.csv"
+            geometry_loader = GeometryLoader()
+            data_grouped = geometry_loader.load_file(file_path, metric=metric, neuron_type_lst=neuron_type_lst)
+            for metric_val in metric_dict[metric]:
+                for neuron_type, data_group in data_grouped:
+                    plt.grid(alpha=0.2)
+                    plt.plot(data_group["log_step"], data_group[metric_val], label=neuron_type)
+                    plt.title(f"{metric_val}: #neuron={neuron}, model={model}")
+                plt.ylim(ylim_dict[metric_val])
+                plt.xlabel("Log step", fontsize=12)
+                plt.ylabel(metric_val, fontsize=12)
+                plt.legend()
+                output_file = output_path / metric_val / f"{model}_{neuron}.png"
+                output_file.parent.mkdir(parents=True, exist_ok=True)
+                plt.savefig(output_file, dpi=300, bbox_inches="tight")
+                plt.close()

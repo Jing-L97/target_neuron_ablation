@@ -188,6 +188,9 @@ class NeuronGeometricAnalyzer:
         return subspace_df, orthogonality_df
 
 
+
+
+
 #######################################################
 # Neuron direction analysis
 
