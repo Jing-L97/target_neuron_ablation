@@ -36,6 +36,9 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int,
     final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
         final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
     )
+    final_df["delta_loss_post_ablation"] = final_df["loss_post_ablation"] - final_df["loss"]
+    final_df["delta_loss_post_ablation_with_frozen_unigram"] = final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
+
     if "kl_divergence_before" in final_df.columns:
         final_df["kl_from_unigram_diff"] = final_df["kl_divergence_after"] - final_df["kl_divergence_before"]
         final_df["abs_kl_from_unigram_diff"] = np.abs(final_df["kl_divergence_after"] - final_df["kl_divergence_before"])
@@ -46,18 +49,31 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int,
     if effect == "boost":
         # filter the neurons that push away from the unigram freq
         final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
+
     # Calculate the mediation effect
     final_df["mediation_effect"] = (
         1 - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / final_df["abs_delta_loss_post_ablation"]
     )
-
+    # group by neuron idx
+    final_df = final_df.groupby("component_name").mean(numeric_only=True).reset_index()
     ranked_neurons = final_df.sort_values(by=["mediation_effect", "abs_kl_from_unigram_diff"], ascending=[False, False])
-    # Select top N neurons, preserving the original sorting
-    top_neurons = ranked_neurons["component_name"].head(top_n).tolist()
-    med_effect = ranked_neurons["mediation_effect"].head(top_n).tolist()
-    kl_diff = ranked_neurons["kl_from_unigram_diff"].head(top_n).tolist()
 
-    return pd.DataFrame([step,top_neurons,med_effect,kl_diff]).T
+    # Select top N neurons, preserving the original sorting
+    header_dict = {
+        "component_name":"top_neurons",
+        "mediation_effect":"med_effect",
+        "kl_from_unigram_diff":"kl_diff",
+        "delta_loss_post_ablation": "delta_loss_post",
+        "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen"
+        }
+    df_lst = []
+    for sel_header,_ in header_dict.item():
+        df_lst.append(ranked_neurons[sel_header].head(top_n).tolist())
+
+    stat_df = pd.DataFrame(df_lst).T
+    col_headers = ["step"].extend(list(header_dict.values()))
+    stat_df.columns = col_headers
+    return stat_df
 
 
 
@@ -81,7 +97,6 @@ def main() -> None:
             frame = select_top_token_frequency_neurons(feather_path, args.top_n,step.name,args.effect)
             neuron_df = pd.concat([neuron_df, frame])
         # assign col headers
-        neuron_df.columns = ["step", "top_neurons", "med_effect", "kl_diff"]
         neuron_df.to_csv(save_path)
         logger.info(f"Save file to {save_path}")
 

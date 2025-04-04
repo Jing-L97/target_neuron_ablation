@@ -625,7 +625,8 @@ def load_df(file_path: Path, col_header: str) -> pd.DataFrame:
 
 
 def load_neuron_dict(
-    file_path: Path, key_col: str = "step", value_col: str = "top_neurons", random_base: bool = False
+    file_path: Path, key_col: str = "step", 
+    value_col: str = "top_neurons", random_base: bool = False, top_n = None
 ) -> dict[int, list[int]]:
     """Load a DataFrame and convert neuron values to integers."""
     df = pd.read_csv(file_path)
@@ -640,12 +641,16 @@ def load_neuron_dict(
             # generate the random indices excluded the
             if random_base:
                 neurons = generate_neurons(neurons)
+            if top_n:
+                neurons = neurons[:top_n]
             result[row[key_col]] = neurons
         except (ValueError, SyntaxError) as e:
             print(f"Error parsing neuron list for step {row[key_col]}: {e}")
             result[row[key_col]] = []
     layer_num = [int(str(float(x)).split(".")[0]) for x in float_neurons][0]
+    logger.info(f"Computing on {top_n} neurons")
     return result, layer_num
+
 
 
 def generate_neurons(exclude_list: list[str], min_val: int = 1, max_val: int = 2047) -> list[int]:
