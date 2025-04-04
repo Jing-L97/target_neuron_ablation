@@ -3,7 +3,6 @@ import pandas as pd
 import torch
 from scipy.linalg import subspace_angles
 
-
 #######################################################
 # Neuron group subspace direction analysis
 
@@ -154,7 +153,6 @@ class NeuronGeometricAnalyzer:
             "pct_near_orthogonal": (((full_angles_degrees >= 80) & (full_angles_degrees <= 100)).mean() * 100),
             "pct_obtuse_angles": ((full_angles_degrees > 90).mean() * 100),
             "pct_acute_angles": ((full_angles_degrees < 90).mean() * 100),
-            "full_angle_degrees": full_angles_degrees.tolist(),
             # Flag to identify self-pairs
             "is_self_pair": True,
         }
@@ -230,7 +228,6 @@ class NeuronGeometricAnalyzer:
             "pct_near_orthogonal": (((full_angles_degrees >= 80) & (full_angles_degrees <= 100)).mean() * 100),
             "pct_obtuse_angles": ((full_angles_degrees > 90).mean() * 100),
             "pct_acute_angles": ((full_angles_degrees < 90).mean() * 100),
-            "full_angle_degrees": full_angles_degrees.tolist(),
             # Flag to identify self-pairs
             "is_self_pair": False,
         }
@@ -325,16 +322,6 @@ class NeuronGeometricAnalyzer:
 
         # Process the angle distributions columns - these contain lists which may cause issues
         # Fix the error by correctly checking types instead of using pd.isna()
-        if "principal_angle_degrees" in orthogonality_df.columns:
-            orthogonality_df["principal_angle_degrees"] = orthogonality_df["principal_angle_degrees"].apply(
-                lambda x: str(x) if isinstance(x, list) else x
-            )
-
-        if "full_angle_degrees" in orthogonality_df.columns:
-            orthogonality_df["full_angle_degrees"] = orthogonality_df["full_angle_degrees"].apply(
-                lambda x: str(x) if isinstance(x, list) else x
-            )
-
         return subspace_df, orthogonality_df
 
 

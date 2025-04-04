@@ -25,7 +25,11 @@ VECTORS=(
   "longtail"
   "mean"
 )
-NEURON_FILE="500_500.csv"
+NEURON_FILES=(
+  "500_10.csv"
+  "500_50.csv"
+  "500_500.csv"
+)
 
 # Calculate total combinations for verification
 TOTAL_COMBINATIONS=$((${#MODELS[@]} * ${#VECTORS[@]} * NEURON_RANGE))

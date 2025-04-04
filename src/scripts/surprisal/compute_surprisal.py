@@ -32,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         help="Target model name"
     )
     parser.add_argument("--effect", type=str, choices=["boost", "suppress"],
-        default="supress", help="boost or supress long-tail"
+        default="suppress", help="boost or supress long-tail"
         )
     parser.add_argument(
         "--vector", type=str, default="longtail",
@@ -52,6 +52,7 @@ def parse_args() -> argparse.Namespace:
             "freq/EleutherAI/pythia-410m/oxford-understand.csv"
             ]
         )
+    parser.add_argument("--interval", type=int,default=10, help="Checkpoint interval sampling")
     parser.add_argument("--use_bos_only", action="store_true", help="use_bos_only if enabled")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
@@ -112,7 +113,12 @@ def main() -> None:
     else:
         resume_file = None
     # Initialize configuration with all Pythia checkpoints
-    steps_config = StepConfig(resume=args.resume,debug= args.debug,file_path = resume_file)
+    steps_config = StepConfig(
+        resume=args.resume,
+        debug= args.debug,
+        file_path=resume_file,
+        interval=args.interval
+        )
 
     # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model_name

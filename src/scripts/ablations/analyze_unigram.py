@@ -67,14 +67,13 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int,
         "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen"
         }
     df_lst = []
-    for sel_header,_ in header_dict.item():
-        df_lst.append(ranked_neurons[sel_header].head(top_n).tolist())
+    for sel_header,_ in header_dict.items():
+        df_lst.append([ranked_neurons[sel_header].head(top_n).tolist()])
 
     stat_df = pd.DataFrame(df_lst).T
-    col_headers = ["step"].extend(list(header_dict.values()))
-    stat_df.columns = col_headers
+    stat_df.columns = header_dict.values()
+    stat_df.insert(0,"step",step)
     return stat_df
-
 
 
 

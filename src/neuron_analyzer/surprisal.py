@@ -25,10 +25,18 @@ T = t.TypeVar("T")
 class StepConfig:
     """Configuration for step-wise analysis of model checkpoints."""
 
-    def __init__(self, resume: bool = False, debug: bool = False, file_path: Path | None = None) -> None:
+    def __init__(
+        self, resume: bool = False, debug: bool = False, file_path: Path | None = None, interval: int = 1
+    ) -> None:
         """Initialize step configuration."""
         # Generate the complete list of steps
         self.steps = self.generate_pythia_checkpoints()
+
+        # Apply interval sampling while preserving start and end steps
+        if interval > 1:
+            self.steps = self._apply_interval_sampling(self.steps, interval)
+            logger.info(f"Applied interval sampling with n={interval}, resulting in {len(self.steps)} steps")
+
         if debug:
             self.steps = self.steps[:5]
             logger.info("Entering debugging mode, select first 5 steps.")
@@ -36,7 +44,26 @@ class StepConfig:
         # If resuming, filter out already processed steps
         if resume and file_path is not None:
             self.steps = self.recover_steps(file_path)
+
         logger.info(f"Generated {len(self.steps)} checkpoint steps")
+
+    def _apply_interval_sampling(self, steps: list[int], interval: int) -> list[int]:
+        """Sample steps at every nth interval while preserving start and end steps."""
+        if len(steps) <= 2:
+            return steps
+
+        # Always keep first and last steps
+        first_step = steps[0]
+        last_step = steps[-1]
+
+        # Sample the middle steps at the specified interval
+        middle_steps = steps[1:-1][::interval]
+
+        # Combine and return
+        result = [first_step] + middle_steps + [last_step]
+
+        # Ensure no duplicates if interval sampling results in last step being included twice
+        return sorted(list(set(result)))
 
     def generate_pythia_checkpoints(self) -> list[int]:
         """Generate complete list of Pythia checkpoint steps."""
@@ -61,15 +88,17 @@ class StepConfig:
         """Filter out steps that have already been processed based on column names."""
         if not file_path.is_file():
             return self.steps
+
         # Read the CSV file
         df = pd.read_csv(file_path)
+
         # Extract completed steps from column headers (only consider fully numeric columns)
         completed_steps = set()
         for col in df.columns:
             if col.isdigit():
                 completed_steps.add(int(col))
-        return [step for step in self.steps if step not in completed_steps]
 
+        return [step for step in self.steps if step not in completed_steps]
 
 
 #######################################################
@@ -286,7 +315,7 @@ class NeuronAblator:
             modified_output = output.clone()
 
             # If we reach here, ablation is enabled and we have neurons to ablate
-            if self.config.ablation_mode in ["zero","random"] :
+            if self.config.ablation_mode in ["zero", "random"]:
                 # Zero activation - set activations to 0
                 for neuron_idx in self.config.neurons:
                     modified_output[:, :, int(neuron_idx)] = 0
@@ -375,6 +404,7 @@ class NeuronAblator:
 #######################################################
 # Util func to set up steps
 
+
 class StepSurprisalExtractor:
     """Extracts word surprisal across different training steps with neuron ablation."""
 
@@ -451,7 +481,7 @@ class StepSurprisalExtractor:
                 f"Created {self.ablation_mode} ablator for step {step} with {len(self.step_ablations[step])} neurons."
             )
         else:
-            #logger.info(f"No ablation configured for step {step}")
+            # logger.info(f"No ablation configured for step {step}")
             pass
 
     def load_model_for_step(self, step: int) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:
@@ -503,7 +533,7 @@ class StepSurprisalExtractor:
 
             inputs = tokenizer(input_text, return_tensors="pt").to(self.device)
 
-            if context_length >= inputs.input_ids.shape[1]:   #TODO: figure out why do we -1
+            if context_length >= inputs.input_ids.shape[1]:  # TODO: figure out why do we -1
                 context_length = inputs.input_ids.shape[1] - 1
 
             with torch.no_grad():
@@ -625,8 +655,7 @@ def load_df(file_path: Path, col_header: str) -> pd.DataFrame:
 
 
 def load_neuron_dict(
-    file_path: Path, key_col: str = "step", 
-    value_col: str = "top_neurons", random_base: bool = False, top_n = None
+    file_path: Path, key_col: str = "step", value_col: str = "top_neurons", random_base: bool = False, top_n=None
 ) -> dict[int, list[int]]:
     """Load a DataFrame and convert neuron values to integers."""
     df = pd.read_csv(file_path)
@@ -652,7 +681,6 @@ def load_neuron_dict(
     return result, layer_num
 
 
-
 def generate_neurons(exclude_list: list[str], min_val: int = 1, max_val: int = 2047) -> list[int]:
     """Generate a list of non-repeating random integers with the same length as the input list."""
     # Convert all strings to integers for comparison
@@ -671,7 +699,8 @@ def generate_neurons(exclude_list: list[str], min_val: int = 1, max_val: int = 2
             result.append(str(rand_int))
     return result
 
-def sel_eval(results_df:pd.DataFrame,eval_path:Path,result_dir:Path,filename):
+
+def sel_eval(results_df: pd.DataFrame, eval_path: Path, result_dir: Path, filename):
     """Select the word subset from the eval file."""
     # load eval file
     eval_file = settings.PATH.dataset_root / eval_path
@@ -682,6 +711,3 @@ def sel_eval(results_df:pd.DataFrame,eval_path:Path,result_dir:Path,filename):
     results_df_sel = results_df[results_df["target_word"].isin(eval_frame["word"])]
     results_df_sel.to_csv(result_file, index=False)
     logger.info(f"Eval set saved to: {result_file}")
-
-
-

@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
         choices=["mean", "longtail"],
         help="Differnt ablation model for freq vectors",
     )
+    parser.add_argument("--interval", type=int,default=10, help="Checkpoint interval sampling")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
@@ -81,7 +82,7 @@ def main() -> None:
     ###################################
 
     # Initialize configuration with all Pythia checkpoints
-    steps_config = StepConfig(resume=args.resume, debug=args.debug)
+    steps_config = StepConfig(debug=args.debug,interval=args.interval)
 
     # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model_name
