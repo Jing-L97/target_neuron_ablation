@@ -10,4 +10,5 @@
 
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
+
 python $SCRIPT_ROOT/prepare_context.py -w freq/EleutherAI/pythia-410m/longtail_words.csv

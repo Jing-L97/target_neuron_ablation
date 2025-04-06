@@ -21,7 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vector", choices=["mean", "longtail"],default="longtail")
     parser.add_argument("--effect", type=str, choices=["boost", "suppress"],default="suppress", help="boost or suppress long-tail prob")
     parser.add_argument("--top_n", type=int, default=10, help="use_bos_only if enabled")
-    parser.add_argument("--data_range_end", type=int, default=500, help="use_bos_only if enabled")
+    parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
     return parser.parse_args()
 
