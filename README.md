@@ -62,7 +62,7 @@ python $SCRIPT_ROOT/analyze_unigram.py \
 - `analyze_unigram.py`: Select the token frequency neurons based on the mediation effect and KL divergence. 
 
 
-
+```
 # Define constants for better readability and maintenance
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
 
@@ -113,7 +113,7 @@ The `scripts/surprisal/` folder contains code for computing the target surprisal
 - `prepare_context.py`: Extract the target context of the given  word list
 - `compute_surprisal.py`: Compute surprisal conditioned on the given text, across differnt training steps. 
 
-# Build longtail word set
+### Build longtail word set
 Step 1: selet long-tail words based on the given threhsold, implement with this script:
 
 ```
