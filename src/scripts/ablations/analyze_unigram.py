@@ -43,6 +43,9 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int,
         final_df["kl_from_unigram_diff"] = final_df["kl_divergence_after"] - final_df["kl_divergence_before"]
         final_df["abs_kl_from_unigram_diff"] = np.abs(final_df["kl_divergence_after"] - final_df["kl_divergence_before"])
 
+    # group by neuron idx
+    final_df = final_df.groupby("component_name").mean(numeric_only=True).reset_index()
+
     if effect == "suppress":
         # filter the neurons that push towards the unigram freq
         final_df = final_df[final_df["kl_from_unigram_diff"] < 0]
@@ -54,8 +57,6 @@ def select_top_token_frequency_neurons(feather_path: Path, top_n: int, step:int,
     final_df["mediation_effect"] = (
         1 - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / final_df["abs_delta_loss_post_ablation"]
     )
-    # group by neuron idx
-    final_df = final_df.groupby("component_name").mean(numeric_only=True).reset_index()
     ranked_neurons = final_df.sort_values(by=["mediation_effect", "abs_kl_from_unigram_diff"], ascending=[False, False])
 
     # Select top N neurons, preserving the original sorting

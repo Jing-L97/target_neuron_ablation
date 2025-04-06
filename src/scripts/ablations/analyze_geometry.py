@@ -35,11 +35,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
 
-def get_filename(neuron_file:str,top_n:int)->str:
+def get_filename(neuron_file:str,neuron_num:int)->str:
     """Insert the neuron num to the saved file.  e.g.500_10.csv """
-    file_prefix = neuron_file.split("_")[0]
-    file_suffix = neuron_file.split(".")[1]
-    return f"{file_prefix}_{top_n}.{file_suffix}"
+    if neuron_num==0:
+        return neuron_file
+    else:
+        file_prefix = neuron_file.split("_")[0]
+        file_suffix = neuron_file.split(".")[1]
+        return f"{file_prefix}_{neuron_num}.{file_suffix}"
 
 
 def main() -> None:

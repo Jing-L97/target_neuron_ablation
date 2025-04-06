@@ -655,7 +655,7 @@ def load_df(file_path: Path, col_header: str) -> pd.DataFrame:
 
 
 def load_neuron_dict(
-    file_path: Path, key_col: str = "step", value_col: str = "top_neurons", random_base: bool = False, top_n=None
+    file_path: Path, key_col: str = "step", value_col: str = "top_neurons", random_base: bool = False, top_n=0
 ) -> dict[int, list[int]]:
     """Load a DataFrame and convert neuron values to integers."""
     df = pd.read_csv(file_path)
@@ -670,7 +670,7 @@ def load_neuron_dict(
             # generate the random indices excluded the
             if random_base:
                 neurons = generate_neurons(neurons)
-            if top_n:
+            if top_n!=0:
                 neurons = neurons[:top_n]
             result[row[key_col]] = neurons
         except (ValueError, SyntaxError) as e:
