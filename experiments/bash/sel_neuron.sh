@@ -60,7 +60,7 @@ echo " Model: $MODEL"
 echo " Top N: $TOP_N"
 
 # Run the analysis with the selected combination
-python $SCRIPT_ROOT/analyze_unigram.py \
+python $SCRIPT_ROOT/sel_neuron.py \
     -m "$MODEL" \
     --effect "$EFFECT" \
     --top_n "$TOP_N" \
