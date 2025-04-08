@@ -5,7 +5,7 @@ import pandas as pd
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.surprisal import StepConfig, StepSurprisalExtractor, load_neuron_dict
+from neuron_analyzer.eval.surprisal import StepConfig, StepSurprisalExtractor, load_neuron_dict
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -18,27 +18,25 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "-m", "--model_name", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name"
     )
-    parser.add_argument("--layer_num", type=int, default=5,help="layer num")
+    parser.add_argument("--layer_num", type=int, default=5, help="layer num")
+    parser.add_argument("-n", "--neuron_file", type=str, default="500_10.csv", help="Target model name")
     parser.add_argument(
-        "-n", "--neuron_file", type=str, default="500_10.csv",
-        help="Target model name"
+        "--effect", type=str, choices=["boost", "supress"], default="supress", help="boost or supress long-tail"
     )
-    parser.add_argument("--effect", type=str, choices=["boost", "supress"],
-        default="supress", help="boost or supress long-tail"
-        )
     parser.add_argument(
-        "--vector", type=str, default="longtail",
+        "--vector",
+        type=str,
+        default="longtail",
         choices=["mean", "longtail"],
-        help="Differnt ablation model for freq vectors"
-        )
+        help="Differnt ablation model for freq vectors",
+    )
 
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
 
 
-
-def analyze_neuron_directions(model, layer_num=-1,chunk_size = 1024, device=None):
+def analyze_neuron_directions(model, layer_num=-1, chunk_size=1024, device=None):
     """Analyze orthogonality between all neurons in a layer with optimized computation."""
     # Get weight matrix directly on the device where the model is
     input_layer_path = f"gpt_neox.layers.{layer_num}.mlp.dense_h_to_4h"
@@ -88,14 +86,14 @@ def analyze_neuron_directions(model, layer_num=-1,chunk_size = 1024, device=None
 
     # Convert to DataFrame with neuron indices as both row and column labels
     cosine_df = pd.DataFrame(
-        cosine_sim_matrix_cpu.numpy(),
-        index=list(range(intermediate_size)),
-        columns=list(range(intermediate_size))
+        cosine_sim_matrix_cpu.numpy(), index=list(range(intermediate_size)), columns=list(range(intermediate_size))
     )
 
     return cosine_df
 
-#TODO: add seleted neuron analyses
+
+# TODO: add seleted neuron analyses
+
 
 def main() -> None:
     """Main function demonstrating usage."""
@@ -108,10 +106,10 @@ def main() -> None:
 
     # load neuron indices
     step_ablations, max_layer_num = load_neuron_dict(
-        settings.PATH.result_dir / "token_freq" /args.effect / args.vector / args.model_name / args.neuron_file,
-        key_col = "step",
-        value_col = "top_neurons"
-        )
+        settings.PATH.result_dir / "token_freq" / args.effect / args.vector / args.model_name / args.neuron_file,
+        key_col="step",
+        value_col="top_neurons",
+    )
     if args.layer_num > max_layer_num:
         logger.error(f"Assigned {args.layer_num}: is larger than max MLP layers {max_layer_num}")
         raise
@@ -121,7 +119,7 @@ def main() -> None:
     ###################################
 
     # Initialize configuration with all Pythia checkpoints
-    steps_config = StepConfig(resume=args.resume,debug= args.debug)
+    steps_config = StepConfig(resume=args.resume, debug=args.debug)
 
     # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model_name
@@ -130,7 +128,7 @@ def main() -> None:
         model_name=args.model_name,
         model_cache_dir=model_cache_dir,  # note here we use the relative path
         layer_num=args.layer_num,
-        device=device
+        device=device,
     )
 
     ###################################
@@ -140,7 +138,7 @@ def main() -> None:
     # loop over different steps
     for step in steps_config.steps:
         # make the step directory
-        result_file =  settings.PATH.direction_dir / "neurons" / args.model_name / str(step)/f"{args.layer_num}.csv"
+        result_file = settings.PATH.direction_dir / "neurons" / args.model_name / str(step) / f"{args.layer_num}.csv"
 
         if args.resume and result_file.is_file():
             logger.info(f"There exists: {result_file}. Skip")
@@ -149,7 +147,7 @@ def main() -> None:
             # load model
             model, _ = extractor.load_model_for_step(step)
             # analyze the activation directions
-            results_df = analyze_neuron_directions(model=model, layer_num =args.layer_num,device=device)
+            results_df = analyze_neuron_directions(model=model, layer_num=args.layer_num, device=device)
             # Save results even if some checkpoints failed
             if not results_df.empty:
                 results_df.to_csv(result_file)
@@ -158,9 +156,6 @@ def main() -> None:
                 logger.warning("No results were generated for step")
 
     logger.info(f"Processed {len(steps_config.steps)} checkpoints successfully")
-
-
-
 
 
 if __name__ == "__main__":

@@ -1,5 +1,4 @@
 import argparse
-import gc
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +8,7 @@ from datasets import load_dataset
 from transformers import AutoTokenizer
 
 from neuron_analyzer import settings
-from neuron_analyzer.null_space import NullSpaceScaler
+from neuron_analyzer.ablation.null_space import NullSpaceScaler
 
 
 def parse_args() -> argparse.Namespace:

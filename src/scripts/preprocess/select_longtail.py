@@ -11,9 +11,9 @@ import torch
 from transformers import AutoTokenizer
 
 from neuron_analyzer import settings
-from neuron_analyzer.abl_util import get_pile_unigram_distribution
-from neuron_analyzer.freq import ZipfThresholdAnalyzer
-from neuron_analyzer.preprocess import filter_words
+from neuron_analyzer.ablation.abl_util import get_pile_unigram_distribution
+from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
+from neuron_analyzer.preprocess.preprocess import filter_words
 
 T = t.TypeVar("T")
 
@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
 class TokenSelector:
     """Class to handle token selection for long-tail analysis."""
 
-    def __init__(self, model: str, logger: t.Optional[logging.Logger] = None):
+    def __init__(self, model: str, logger: logging.Logger | None = None):
         """Initialize the token selector."""
         # Set up logger
         self.logger = logger or logging.getLogger(__name__)

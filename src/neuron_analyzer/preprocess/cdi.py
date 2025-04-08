@@ -1,6 +1,10 @@
 # ruff: noqa
 # type: ignore
-"""Loader and extractor for Human CDI."""
+"""
+Loader and extractor for Human CDI.
+
+!!! Note that this script is migrated from another repo and haven't integreated well
+"""
 
 import enum
 import functools
@@ -13,7 +17,8 @@ from lexical_benchmark import settings
 from lexical_benchmark.datasets import utils as dataset_utils
 from lexical_benchmark.datasets.utils import text_cleaning
 
-#TODO: fit into our package
+
+# TODO: fit into our package
 class POSTypes(str, enum.Enum):
     """Categories for Part of speech (PoS)."""
 

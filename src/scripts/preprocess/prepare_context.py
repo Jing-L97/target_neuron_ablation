@@ -1,12 +1,11 @@
 import argparse
 import logging
 from pathlib import Path
-from typing import List
 
 import pandas as pd
 
 from neuron_analyzer import settings
-from neuron_analyzer.preprocess import NGramContextCollector, load_data, save_data
+from neuron_analyzer.preprocess.preprocess import NGramContextCollector, load_data, save_data
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -17,7 +16,11 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="collect n-gram contexts from a corpus.")
     parser.add_argument(
-        "-w", "--words_file", type=Path, default="matched/oxford-understand.csv", help="Relative path to the target words"
+        "-w",
+        "--words_file",
+        type=Path,
+        default="matched/oxford-understand.csv",
+        help="Relative path to the target words",
     )
     parser.add_argument(
         "-o", "--output_path", type=Path, default="context", help="Relative path to the extracted context"
@@ -30,9 +33,9 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def load_target_words(file_path: Path) -> List[str]:
+def load_target_words(file_path: Path) -> list[str]:
     if file_path.suffix == ".txt":
-        with open(file_path, "r", encoding="utf-8") as f:
+        with open(file_path, encoding="utf-8") as f:
             return [line.strip() for line in f]
     if file_path.suffix == ".csv":
         data = pd.read_csv(file_path)

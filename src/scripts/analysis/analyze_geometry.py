@@ -7,8 +7,8 @@ import pandas as pd
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.geometry import NeuronGeometricAnalyzer
-from neuron_analyzer.surprisal import StepConfig, StepSurprisalExtractor, load_neuron_dict
+from neuron_analyzer.analysis.geometry import NeuronGeometricAnalyzer
+from neuron_analyzer.eval.surprisal import StepConfig, StepSurprisalExtractor, load_neuron_dict
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -30,19 +30,19 @@ def parse_args() -> argparse.Namespace:
         choices=["mean", "longtail"],
         help="Differnt ablation model for freq vectors",
     )
-    parser.add_argument("--interval", type=int,default=10, help="Checkpoint interval sampling")
+    parser.add_argument("--interval", type=int, default=10, help="Checkpoint interval sampling")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
 
-def get_filename(neuron_file:str,neuron_num:int)->str:
-    """Insert the neuron num to the saved file.  e.g.500_10.csv """
-    if neuron_num==0:
+
+def get_filename(neuron_file: str, neuron_num: int) -> str:
+    """Insert the neuron num to the saved file.  e.g.500_10.csv"""
+    if neuron_num == 0:
         return neuron_file
-    else:
-        file_prefix = neuron_file.split("_")[0]
-        file_suffix = neuron_file.split(".")[1]
-        return f"{file_prefix}_{neuron_num}.{file_suffix}"
+    file_prefix = neuron_file.split("_")[0]
+    file_suffix = neuron_file.split(".")[1]
+    return f"{file_prefix}_{neuron_num}.{file_suffix}"
 
 
 def main() -> None:
@@ -53,13 +53,13 @@ def main() -> None:
     ###################################
     # load materials and paths
     ###################################
-    raw_filename = get_filename(args.neuron_file,args.neuron_num)
+    raw_filename = get_filename(args.neuron_file, args.neuron_num)
     result_dir = settings.PATH.direction_dir / "geometry" / args.model_name
     filename = f"{Path(raw_filename).stem}.debug" if args.debug else raw_filename
     subspace_file = result_dir / "subspace" / filename
     orthogonality_file = result_dir / "orthogonality" / filename
     if args.resume and subspace_file.is_file() and orthogonality_file.is_file():
-        logger.info(f"Target files already exist, skipping processing as resume is enabled")
+        logger.info("Target files already exist, skipping processing as resume is enabled")
         sys.exit(0)
 
     subspace_file.parent.mkdir(parents=True, exist_ok=True)
@@ -70,22 +70,21 @@ def main() -> None:
         settings.PATH.result_dir / "token_freq" / "boost" / args.vector / args.model_name / args.neuron_file,
         key_col="step",
         value_col="top_neurons",
-        top_n = args.neuron_num
+        top_n=args.neuron_num,
     )
     suppress_step_ablations, ayer_num = load_neuron_dict(
         settings.PATH.result_dir / "token_freq" / "suppress" / args.vector / args.model_name / args.neuron_file,
         key_col="step",
         value_col="top_neurons",
-        top_n = args.neuron_num
+        top_n=args.neuron_num,
     )
-
 
     ###################################
     # Initialize classes
     ###################################
 
     # Initialize configuration with all Pythia checkpoints
-    steps_config = StepConfig(debug=args.debug,interval=args.interval)
+    steps_config = StepConfig(debug=args.debug, interval=args.interval)
 
     # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model_name
@@ -124,7 +123,6 @@ def main() -> None:
             logger.info(f"Successfully get result for step {step}")
         except:
             logger.info(f"Something wrong with step {step}")
-            pass
     # Save results even if some checkpoints failed
     subspace_df.to_csv(subspace_file)
     logger.info(f"Subspace results saved to: {subspace_file}")

@@ -1,5 +1,7 @@
 #!/usr/bin/env python
-"""Building Word-CDI Dataset."""
+"""Building Word-CDI Dataset.
+!!! Note that this script is migrated from another repo and haven't integreated well
+"""
 
 from lexical_benchmark import settings
 from lexical_benchmark.datasets import wordbank_cdi

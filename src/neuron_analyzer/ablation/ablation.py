@@ -8,10 +8,10 @@ import numpy as np
 import pandas as pd
 import torch
 import tqdm
-import transformer_lens.utils as utils
 from torch.nn.functional import kl_div
+from transformer_lens import utils
 
-from neuron_analyzer.abl_util import get_entropy
+from neuron_analyzer.ablation.abl_util import get_entropy
 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
@@ -20,16 +20,18 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 
 def adjust_vectors_3dim(v, u, target_values):
-    """
-    Adjusts a batch of vectors v such that their projections along the unit vector u equal the target values.
+    """Adjusts a batch of vectors v such that their projections along the unit vector u equal the target values.
 
-    Parameters:
+    Parameters
+    ----------
     - v: A 3D tensor of shape (n, m, d), representing the batch of vectors to be adjusted.
     - u: A 1D unit tensor of shape (d,), representing the direction along which the adjustment is made.
     - target_values: A 2D tensor of shape (n, m), representing the desired projection values of the vectors in v along u.
 
-    Returns:
+    Returns
+    -------
     - adjusted_v: The adjusted batch of vectors such that their projections along u are equal to the target values.
+
     """
     current_projections = (v @ u.unsqueeze(-1)).squeeze(-1)  # Current projections of v onto u
     delta = target_values - current_projections  # Differences needed to reach the target projections
@@ -285,13 +287,13 @@ def mean_ablate_components(
             df_to_append = df_to_append.rename(columns={f"{component_name}_activation": "activation"})
 
             df_to_append["component_name"] = component_name
-            df_to_append[f"loss_post_ablation"] = loss_post_ablation[i]
-            df_to_append[f"loss_post_ablation_with_frozen_unigram"] = loss_post_ablation_with_frozen_unigram[i]
-            df_to_append[f"entropy_post_ablation"] = entropy_post_ablation[i]
-            df_to_append[f"entropy_post_ablation_with_frozen_unigram"] = entropy_post_ablation_with_frozen_unigram[i]
-            df_to_append[f"kl_divergence_before"] = kl_divergence_before
-            df_to_append[f"kl_divergence_after"] = kl_divergence_after[i]
-            df_to_append[f"kl_divergence_after_frozen_unigram"] = kl_divergence_after_frozen_unigram[i]
+            df_to_append["loss_post_ablation"] = loss_post_ablation[i]
+            df_to_append["loss_post_ablation_with_frozen_unigram"] = loss_post_ablation_with_frozen_unigram[i]
+            df_to_append["entropy_post_ablation"] = entropy_post_ablation[i]
+            df_to_append["entropy_post_ablation_with_frozen_unigram"] = entropy_post_ablation_with_frozen_unigram[i]
+            df_to_append["kl_divergence_before"] = kl_divergence_before
+            df_to_append["kl_divergence_after"] = kl_divergence_after[i]
+            df_to_append["kl_divergence_after_frozen_unigram"] = kl_divergence_after_frozen_unigram[i]
             # Add ablation information
             df_to_append["ablation_mode"] = ablation_mode
             if ablation_mode == "longtail":
@@ -305,4 +307,3 @@ def mean_ablate_components(
 
         pbar.update(1)
     return results
-

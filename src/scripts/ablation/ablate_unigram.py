@@ -14,9 +14,9 @@ import neel.utils as nutils
 import numpy as np
 import pandas as pd
 import torch
-import transformer_lens.utils as utils
 from datasets import load_dataset
 from omegaconf import DictConfig
+from transformer_lens import utils
 
 from neuron_analyzer import settings
 from neuron_analyzer.abl_util import (
@@ -26,8 +26,8 @@ from neuron_analyzer.abl_util import (
     load_model_from_tl_name,
 )
 from neuron_analyzer.ablation import mean_ablate_components
-from neuron_analyzer.freq import ZipfThresholdAnalyzer
-from neuron_analyzer.surprisal import StepConfig
+from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
+from neuron_analyzer.eval.surprisal import StepConfig
 
 T = t.TypeVar("T")
 
@@ -40,10 +40,11 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments for step range."""
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
-    parser.add_argument( "--start", type=int, default=0, help="Start index of step range")
-    parser.add_argument( "--end", type=int, default=155, help="End index of step range")
+    parser.add_argument("--start", type=int, default=0, help="Start index of step range")
+    parser.add_argument("--end", type=int, default=155, help="End index of step range")
     parser.add_argument(
-        "--config",type=str,
+        "--config",
+        type=str,
         default="config_unigram_ablations.yaml",
         help="Name of the configuration file to use (without .yaml extension)",
     )
@@ -53,14 +54,14 @@ def parse_args() -> argparse.Namespace:
 class NeuronAblationProcessor:
     """Class to handle neural network ablation processing."""
 
-    def __init__(self, args: DictConfig, logger: t.Optional[logging.Logger] = None):
+    def __init__(self, args: DictConfig, logger: logging.Logger | None = None):
         """Initialize the ablation processor with configuration."""
         # Set up logger
         self.logger = logger or logging.getLogger(__name__)
 
         # Initialize parameters from args
         self.args = args
-        self.seed:int = args.seed
+        self.seed: int = args.seed
         self.device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
         # Initialize random seeds
@@ -92,9 +93,7 @@ class NeuronAblationProcessor:
 
         return unigram_distrib
 
-    def get_tail_threshold(
-        self, unigram_distrib, save_path: Path
-    ) -> tuple[t.Optional[float], t.Optional[dict]]:
+    def get_tail_threshold(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
         """Calculate threshold for long-tail ablation mode."""
         if self.args.ablation_mode == "longtail":
             if unigram_distrib is None:
@@ -113,9 +112,8 @@ class NeuronAblationProcessor:
             self.logger.info(f"Saved threshold statistics to {stats_path}")
 
             return longtail_threshold, threshold_stats
-        else:
-            # Not in longtail mode, use default threshold
-            return None, None
+        # Not in longtail mode, use default threshold
+        return None, None
 
     def process_single_step(
         self, step: int, unigram_distrib, longtail_threshold, threshold_stats, save_path: Path
@@ -142,7 +140,7 @@ class NeuronAblationProcessor:
             start, end = map(int, self.args.neuron_range.split("-"))
             all_neuron_indices = list(range(start, end))
         else:
-            all_neuron_indices = list(range(0, model.cfg.d_mlp))
+            all_neuron_indices = list(range(model.cfg.d_mlp))
 
         all_neurons = [f"{entropy_neuron_layer}.{i}" for i in all_neuron_indices]
         self.logger.info("Loaded all the neurons")
@@ -193,12 +191,12 @@ class NeuronAblationProcessor:
         self.logger.info("finished ablations!")
 
         # Process and save results
-        self._save_results(results, tokenizer,step, save_path)
+        self._save_results(results, tokenizer, step, save_path)
 
     def load_model_and_tokenizer(self, step: int) -> tuple[t.Any, t.Any]:
         """Load model and tokenizer for processing."""
         # Load HF token
-        with open(settings.PATH.unigram_dir / self.args.hf_token_path, "r") as f:
+        with open(settings.PATH.unigram_dir / self.args.hf_token_path) as f:
             hf_token = f.read()
 
         # Load model and tokenizer
@@ -209,7 +207,6 @@ class NeuronAblationProcessor:
         model.eval()
 
         return model, tokenizer
-
 
     def _save_results(
         self,
@@ -251,38 +248,32 @@ def main():
         logger.info(f"Processing steps {cli_args.start} to {cli_args.end}")
 
         # intialize the process class
-        base_save_dir = (
-                settings.PATH.result_dir
-                / hydra_args.output_dir
-                / hydra_args.ablation_mode
-                / hydra_args.model
-            )
+        base_save_dir = settings.PATH.result_dir / hydra_args.output_dir / hydra_args.ablation_mode / hydra_args.model
         base_save_dir.mkdir(parents=True, exist_ok=True)
-        abalation_processor = NeuronAblationProcessor(args=hydra_args,logger=logger)
+        abalation_processor = NeuronAblationProcessor(args=hydra_args, logger=logger)
         unigram_distrib = abalation_processor.load_unigram()
         longtail_threshold, threshold_stats = abalation_processor.get_tail_threshold(
-            unigram_distrib,save_path=base_save_dir
-            )
+            unigram_distrib, save_path=base_save_dir
+        )
 
         # Process each step in range
         for step in steps_config.steps[cli_args.start : cli_args.end]:
             # Create save_path as a directory
-            save_path = base_save_dir/ str(step)/ str(hydra_args.data_range_end)
+            save_path = base_save_dir / str(step) / str(hydra_args.data_range_end)
             save_path.mkdir(parents=True, exist_ok=True)
             # Check for existing files with pattern matching expected output
             if (save_path / f"k{hydra_args.k}.feather").is_file():
                 logger.info(f"Files for step {step} already exist. Skip!")
                 continue
-            else:
-                logger.info(f"Processing step {step}")
-                try:
-                    abalation_processor.process_single_step(
-                        step, unigram_distrib, longtail_threshold, threshold_stats,save_path
-                        )
+            logger.info(f"Processing step {step}")
+            try:
+                abalation_processor.process_single_step(
+                    step, unigram_distrib, longtail_threshold, threshold_stats, save_path
+                )
 
-                except Exception as e:
-                    logger.error(f"Error processing step {step}: {str(e)}")
-                    continue
+            except Exception as e:
+                logger.error(f"Error processing step {step}: {e!s}")
+                continue
 
 
 if __name__ == "__main__":

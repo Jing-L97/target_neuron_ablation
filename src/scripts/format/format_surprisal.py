@@ -6,7 +6,7 @@ from pathlib import Path
 import pandas as pd
 
 from neuron_analyzer import settings
-from neuron_analyzer.surprisal import sel_eval
+from neuron_analyzer.eval.surprisal import sel_eval
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -20,7 +20,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--operation", default="segment", type=str, help="which operation")
     parser.add_argument("--use_neuron", action="store_true", help="Whether to iterate neuron list")
     return parser.parse_args()
-
 
 
 class CsvMerger:
@@ -46,7 +45,6 @@ class CsvMerger:
             self.segment_files()
         else:
             logger.error(f"Unknown operation: {self.operation}")
-
 
     def process_merge_files(self) -> None:
         # Create output directory
@@ -74,7 +72,6 @@ class CsvMerger:
                     logger.error(f"Error processing {model}: {e}")
                 except Exception as e:
                     logger.error(f"Unexpected error processing {model}: {e}")
-
 
             else:
                 for neuron in self.neuron_lst:
@@ -134,7 +131,6 @@ class CsvMerger:
                         logger.error(f"Error processing {model}/{neuron}: {e}")
 
 
-
 def main() -> None:
     # loop over the different directories
     args = parse_args()
@@ -142,16 +138,9 @@ def main() -> None:
     neuron_lst = [10, 50, 500] if args.use_neuron else []
     file_path = settings.PATH.result_dir / "surprisal" / args.input_path
 
-    merger = CsvMerger(
-        file_path=file_path,
-        operation=args.operation,
-        model_lst=model_lst,
-        neuron_lst=neuron_lst
-    )
+    merger = CsvMerger(file_path=file_path, operation=args.operation, model_lst=model_lst, neuron_lst=neuron_lst)
     merger.process_files()
+
 
 if __name__ == "__main__":
     main()
-
-
-

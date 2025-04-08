@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 from neuron_analyzer import settings
-from neuron_analyzer.preprocess import load_data, save_data
+from neuron_analyzer.preprocess.preprocess import load_data, save_data
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -13,14 +13,11 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="collect n-gram contexts from a corpus.")
-    parser.add_argument("--file1_path", type=Path, 
-        default="stas/c4-en-10k/5/cdi_childes.json")
+    parser.add_argument("--file1_path", type=Path, default="stas/c4-en-10k/5/cdi_childes.json")
 
-    parser.add_argument("--file2_path", type=Path, 
-        default="stas/c4-en-10k/5/oxford-understand.json")
+    parser.add_argument("--file2_path", type=Path, default="stas/c4-en-10k/5/oxford-understand.json")
 
-    parser.add_argument("-o", "--output_path", type=Path, 
-        default="stas/c4-en-10k/5/merged.json")
+    parser.add_argument("-o", "--output_path", type=Path, default="stas/c4-en-10k/5/merged.json")
     return parser.parse_args()
 
 
