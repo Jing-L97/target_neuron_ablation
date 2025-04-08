@@ -5,8 +5,8 @@ from pathlib import Path
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.freq import load_unigram
-from neuron_analyzer.eval.surprisal import StepSurprisalExtractor, load_eval, sel_eval
+from neuron_analyzer.eval.surprisal import StepSurprisalExtractor
+from neuron_analyzer.load_util import load_eval, load_unigram, sel_eval
 from neuron_analyzer.model_util import NeuronLoader, StepConfig
 
 # Setup logging

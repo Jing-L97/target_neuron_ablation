@@ -11,8 +11,8 @@ import torch
 from transformers import AutoTokenizer
 
 from neuron_analyzer import settings
-from neuron_analyzer.ablation.abl_util import get_pile_unigram_distribution
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
+from neuron_analyzer.load_util import load_unigram
 from neuron_analyzer.preprocess.preprocess import filter_words
 
 T = t.TypeVar("T")
@@ -57,26 +57,6 @@ class TokenSelector:
         else:  # Default for other models like GPT-2
             self.true_vocab_size = len(self.tokenizer)
             self.pad_to_match_w_u = False
-
-    def load_unigram(self) -> torch.Tensor:
-        """Load unigram distribution based on model type."""
-        if "pythia" in self.model:
-            self.logger.info("Loading unigram distribution for pythia...")
-            unigram_distrib = get_pile_unigram_distribution(
-                device=self.device, file_path=settings.PATH.unigram_dir / "pythia-unigrams.npy"
-            )
-        elif "gpt" in self.model:
-            self.logger.info("Loading unigram distribution for gpt2...")
-            unigram_distrib = get_pile_unigram_distribution(
-                device=self.device,
-                file_path=settings.PATH.unigram_dir / "gpt2-small-unigrams_openwebtext-2M_rows_500000.npy",
-                pad_to_match_W_U=False,
-            )
-        else:
-            raise Exception(f"No unigram distribution for {self.model}")
-
-        self.unigram_distrib = unigram_distrib
-        return unigram_distrib
 
     def get_tail_threshold(self, unigram_distrib: torch.Tensor) -> float:
         """Calculate threshold for long-tail ablation mode."""
@@ -139,7 +119,7 @@ class TokenSelector:
         """Encapsulated method to perform the entire process."""
         # Step 1: Load unigram distribution
         self.logger.info("Loading unigram distribution...")
-        unigram_distrib = self.load_unigram()
+        unigram_distrib = load_unigram(self.model, self.device)
 
         # Step 2: Calculate threshold and identify long-tail tokens
         self.logger.info("Calculating threshold and identifying long-tail tokens...")

@@ -19,14 +19,14 @@ from omegaconf import DictConfig
 from transformer_lens import utils
 
 from neuron_analyzer import settings
-from neuron_analyzer.abl_util import (
+from neuron_analyzer.ablation.abl_util import (
     filter_entropy_activation_df,
     get_entropy_activation_df,
-    get_pile_unigram_distribution,
     load_model_from_tl_name,
 )
-from neuron_analyzer.ablation import mean_ablate_components
+from neuron_analyzer.ablation.ablation import mean_ablate_components
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
+from neuron_analyzer.load_util import load_unigram
 from neuron_analyzer.model_util import StepConfig
 
 T = t.TypeVar("T")
@@ -54,7 +54,7 @@ def parse_args() -> argparse.Namespace:
 class NeuronAblationProcessor:
     """Class to handle neural network ablation processing."""
 
-    def __init__(self, args: DictConfig, logger: logging.Logger | None = None):
+    def __init__(self, args: DictConfig, device, logger: logging.Logger | None = None):
         """Initialize the ablation processor with configuration."""
         # Set up logger
         self.logger = logger or logging.getLogger(__name__)
@@ -62,7 +62,7 @@ class NeuronAblationProcessor:
         # Initialize parameters from args
         self.args = args
         self.seed: int = args.seed
-        self.device: str = "cuda" if torch.cuda.is_available() else "cpu"
+        self.device: str = device
 
         # Initialize random seeds
         torch.manual_seed(self.seed)
@@ -73,32 +73,9 @@ class NeuronAblationProcessor:
         if hasattr(args, "chdir") and args.chdir:
             os.chdir(args.chdir)
 
-    def load_unigram(self) -> torch.Tensor:
-        """Load unigram distribution based on model type."""
-        # Load unigram distribution
-        if "pythia" in self.args.model:
-            self.logger.info("Loading unigram distribution for pythia...")
-            unigram_distrib = get_pile_unigram_distribution(
-                device=self.args.device, file_path=settings.PATH.unigram_dir / "pythia-unigrams.npy"
-            )
-        elif "gpt" in self.args.model:
-            self.logger.info("Loading unigram distribution for gpt2...")
-            unigram_distrib = get_pile_unigram_distribution(
-                device=self.args.device,
-                file_path=settings.PATH.unigram_dir / "gpt2-small-unigrams_openwebtext-2M_rows_500000.npy",
-                pad_to_match_W_U=False,
-            )
-        else:
-            raise Exception(f"No unigram distribution for {self.args.model}")
-
-        return unigram_distrib
-
     def get_tail_threshold(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
         """Calculate threshold for long-tail ablation mode."""
         if self.args.ablation_mode == "longtail":
-            if unigram_distrib is None:
-                self.load_unigram()
-
             window_size = 2000
             analyzer = ZipfThresholdAnalyzer(unigram_distrib, window_size=window_size)
             threshold_stats = analyzer.analyze_zipf_anomalies(verbose=False)
@@ -236,6 +213,7 @@ def main():
     # Initialize Hydra programmatically with the config name from CLI
     config_name = cli_args.config
     config_path = "conf"
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Set up Hydra's context
     with hydra.initialize(version_base=None, config_path=config_path):
@@ -250,8 +228,8 @@ def main():
         # intialize the process class
         base_save_dir = settings.PATH.result_dir / hydra_args.output_dir / hydra_args.ablation_mode / hydra_args.model
         base_save_dir.mkdir(parents=True, exist_ok=True)
-        abalation_processor = NeuronAblationProcessor(args=hydra_args, logger=logger)
-        unigram_distrib = abalation_processor.load_unigram()
+        abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
+        unigram_distrib = load_unigram(model_name=hydra_args.model, device=device)
         longtail_threshold, threshold_stats = abalation_processor.get_tail_threshold(
             unigram_distrib, save_path=base_save_dir
         )

@@ -7,34 +7,9 @@ import torch
 from scipy import stats
 from transformers import AutoTokenizer
 
-from neuron_analyzer import settings
-from neuron_analyzer.abl_util import get_pile_unigram_distribution
-
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
-
-def load_unigram(model_name,device)->torch.Tensor:
-    """Load unigram distribution based on model type."""
-    # Load unigram distribution
-    if "pythia" in model_name:
-        file_path=settings.PATH.unigram_dir / "pythia-unigrams.npy"
-        unigram_distrib = get_pile_unigram_distribution(
-            device=device, pad_to_match_W_U=True,
-            file_path=file_path
-        )
-        logger.info(f"Loaded unigram freq from {file_path}")
-    elif "gpt" in model_name:
-        file_path=settings.PATH.unigram_dir / "gpt2-small-unigrams_openwebtext-2M_rows_500000.npy"
-        unigram_distrib = get_pile_unigram_distribution(
-            device=device,pad_to_match_W_U=False,
-            file_path=file_path
-        )
-        logger.info(f"Loading unigram freq from {file_path}")
-    else:
-        raise Exception(f"No unigram distribution for {model_name}")
-
-    return unigram_distrib
 
 
 class UnigramAnalyzer:
@@ -49,8 +24,8 @@ class UnigramAnalyzer:
     def __init__(
         self,
         model_name: str = "pythia-410m",
-        unigram_file_path: t.Optional[str] = None,
-        tokenizer: t.Optional[AutoTokenizer] = None,
+        unigram_file_path: str | None = None,
+        tokenizer: AutoTokenizer | None = None,
         device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         """Initialize the UnigramAnalyzer with model and tokenizer information."""
@@ -73,7 +48,7 @@ class UnigramAnalyzer:
         # Load and prepare unigram data
         self._load_unigram_data()
 
-    def _load_unigram_data(self) -> None:    #TODO: unify with the load_unigram func above
+    def _load_unigram_data(self) -> None:
         """Load unigram data from file and prepare distributions."""
         # Load the unigram counts from the .npy file
         self.unigram_count = np.load(self.unigram_file_path)
@@ -115,11 +90,12 @@ class UnigramAnalyzer:
 
         return {"total_tokens": len(token_results), "total_count": total_count, "avg_frequency": avg_frequency}
 
+
 class ZipfThresholdAnalyzer:
     def __init__(
         self,
         unigram_distrib,
-        window_size: int = 2000, # sliding window size for elbow point detection
+        window_size: int = 2000,  # sliding window size for elbow point detection
         head_portion: float = 0.2,  # Modified to 20% for tail analysis
         tail_threshold: float = 0.8,  # New parameter for tail region
         residual_significance_threshold: float = 1.5,  # Threshold for identifying anomalous words
@@ -209,9 +185,7 @@ class ZipfThresholdAnalyzer:
             "slope_after": derivatives[max_change_idx + 1],
         }
 
-    def analyze_zipf_anomalies(
-        self, detect_elbow: bool = True, verbose: bool = False
-    ) -> dict[str, t.Any]:
+    def analyze_zipf_anomalies(self, detect_elbow: bool = True, verbose: bool = False) -> dict[str, t.Any]:
         """Analyze Zipf law distribution and identify anomalous words."""
         # Preprocess distribution
         sorted_probs, ranks, sorted_indices = self._preprocess_distribution()
