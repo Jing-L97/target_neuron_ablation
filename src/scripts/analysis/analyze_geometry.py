@@ -8,7 +8,8 @@ import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.geometry import NeuronGeometricAnalyzer
-from neuron_analyzer.eval.surprisal import StepConfig, StepSurprisalExtractor, load_neuron_dict
+from neuron_analyzer.eval.surprisal import StepSurprisalExtractor
+from neuron_analyzer.model_util import NeuronLoader, StepConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -66,17 +67,20 @@ def main() -> None:
     orthogonality_file.parent.mkdir(parents=True, exist_ok=True)
 
     # load neuron indices
-    boost_step_ablations, layer_num = load_neuron_dict(
+    neuron_loader = NeuronLoader()
+    boost_step_ablations, layer_num = neuron_loader.load_neuron_dict(
         settings.PATH.result_dir / "token_freq" / "boost" / args.vector / args.model_name / args.neuron_file,
         key_col="step",
         value_col="top_neurons",
         top_n=args.neuron_num,
+        random_base=False,
     )
-    suppress_step_ablations, ayer_num = load_neuron_dict(
+    suppress_step_ablations, layer_num = neuron_loader.load_neuron_dict(
         settings.PATH.result_dir / "token_freq" / "suppress" / args.vector / args.model_name / args.neuron_file,
         key_col="step",
         value_col="top_neurons",
         top_n=args.neuron_num,
+        random_base=False,
     )
 
     ###################################

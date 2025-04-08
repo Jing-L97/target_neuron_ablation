@@ -27,7 +27,7 @@ from neuron_analyzer.abl_util import (
 )
 from neuron_analyzer.ablation import mean_ablate_components
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
-from neuron_analyzer.eval.surprisal import StepConfig
+from neuron_analyzer.model_util import StepConfig
 
 T = t.TypeVar("T")
 

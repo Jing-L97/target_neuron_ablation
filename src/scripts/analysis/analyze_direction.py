@@ -5,7 +5,8 @@ import pandas as pd
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.eval.surprisal import StepConfig, StepSurprisalExtractor, load_neuron_dict
+from neuron_analyzer.eval.surprisal import StepSurprisalExtractor
+from neuron_analyzer.model_util import NeuronLoader, StepConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -105,7 +106,8 @@ def main() -> None:
     ###################################
 
     # load neuron indices
-    step_ablations, max_layer_num = load_neuron_dict(
+    neuron_loader = NeuronLoader()
+    step_ablations, max_layer_num = neuron_loader.load_neuron_dict(
         settings.PATH.result_dir / "token_freq" / args.effect / args.vector / args.model_name / args.neuron_file,
         key_col="step",
         value_col="top_neurons",
