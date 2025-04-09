@@ -30,7 +30,7 @@ class ZipfThresholdAnalyzer:
         """Initialize Zipf threshold analyzer with configurable parameters."""
         self.unigram_distrib = unigram_distrib
         self.head_portion = head_portion
-        self.tail_threshold = tail_threshold
+        self.tail_threshold = tail_threshold / 100
         self.residual_significance_threshold = residual_significance_threshold
         self.min_tokens_threshold = min_tokens_threshold
         self.window_size = window_size
@@ -127,7 +127,7 @@ class ZipfThresholdAnalyzer:
     def find_prop_point(self) -> dict[str, t.Any]:
         """Calculate the probability threshold that corresponds to a given tail percentage."""
         if not 0.0 <= self.tail_threshold <= 1.0:
-            raise ValueError("Tail percentage must be between 0.0 and 1.0")
+            raise ValueError("Tail percentage must be between 0 and 100")
 
         # Preprocess distribution if not already done
         sorted_probs, ranks, sorted_indices = self._preprocess_distribution()

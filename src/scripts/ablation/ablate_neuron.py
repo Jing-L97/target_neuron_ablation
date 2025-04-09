@@ -42,11 +42,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
     parser.add_argument("--interval", type=int, default=10, help="Checkpoint interval sampling")
     parser.add_argument(
-        "--config",
+        "--config_name",
         type=str,
-        default="config_unigram_ablations.yaml",
-        help="Name of the configuration file to use (without .yaml extension)",
+        default="config_unigram_ablations_70.yaml",
+        help="Name of the configuration file to use",
     )
+    parser.add_argument("--config_path", type=str, default="conf", help="Relative dir to config file")
     parser.add_argument("--start", type=int, default=14, help="Start index of step range")
     parser.add_argument("--end", type=int, default=142, help="End index of step range")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
@@ -80,12 +81,22 @@ class NeuronAblationProcessor:
         """Calculate threshold for long-tail ablation mode."""
         if self.args.ablation_mode == "longtail":
             analyzer = ZipfThresholdAnalyzer(
-                unigram_distrib, window_size=self.args.window_size, apply_elbow=self.args.apply_elbow
+                unigram_distrib=unigram_distrib,
+                window_size=self.args.window_size,
+                tail_threshold=self.args.tail_threshold,
+                apply_elbow=self.args.apply_elbow,
             )
             threshold_stats = analyzer.analyze_zipf_anomalies(verbose=False)
             longtail_threshold = threshold_stats["threshold_info"]["probability"]
-            self.logger.info(f"Get long-tail threshold {longtail_threshold} fromZipf's law.")
-
+            if self.args.apply_elbow:
+                self.logger.info("Applying elbow point.")
+            self.logger.info(f"Get long-tail threshold {longtail_threshold} from Zipf's law.")
+            # Calculate how many tokens are below this threshold
+            long_tail_count = (unigram_distrib.cpu().numpy() < longtail_threshold).sum()
+            vocab_size = len(unigram_distrib)
+            self.logger.info(
+                f"Long-tail tokens: {long_tail_count} ({long_tail_count / vocab_size * 100:.2f}% of vocabulary)"
+            )
             # Save threshold statistics only for the first step
             stats_df = pd.DataFrame([threshold_stats])
             stats_path = save_path / "zipf_threshold_stats.csv"
@@ -142,19 +153,10 @@ class NeuronAblationProcessor:
             residuals_layer=entropy_dim_layer,
             residuals_dict={},
         )
-        self.logger.info("finished computing all the entropy")
+        self.logger.info("Finished computing all the entropy")
 
         # Ablate the dimensions
         model.set_use_attn_result(False)
-
-        if self.args.ablation_mode == "longtail" and longtail_threshold is not None:
-            self.logger.info(f"Long-tail threshold: {longtail_threshold}")
-            # Calculate how many tokens are below this threshold
-            long_tail_count = (unigram_distrib.cpu().numpy() < longtail_threshold).sum()
-            vocab_size = len(unigram_distrib)
-            self.logger.info(
-                f"Long-tail tokens: {long_tail_count} ({long_tail_count / vocab_size * 100:.2f}% of vocabulary)"
-            )
 
         results = mean_ablate_components(
             components_to_ablate=all_neurons,
@@ -167,7 +169,7 @@ class NeuronAblationProcessor:
             ablation_mode=self.args.ablation_mode,
             longtail_threshold=longtail_threshold,
         )
-        self.logger.info("finished ablations!")
+        self.logger.info("Finished ablations!")
 
         # Process and save results
         self._save_results(results, tokenizer, step, save_path)
@@ -184,7 +186,6 @@ class NeuronAblationProcessor:
         )
         model = model.to(self.device)
         model.eval()
-
         return model, tokenizer
 
     def _save_results(
@@ -223,17 +224,13 @@ def main():
     """Main entry point that handles both CLI args and Hydra config."""
     # Parse command line arguments
     cli_args = parse_args()
-
-    # Initialize Hydra programmatically with the config name from CLI
-    config_name = cli_args.config
-    config_path = "conf"
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
 
     # Set up Hydra's context
-    with hydra.initialize(version_base=None, config_path=config_path):
+    with hydra.initialize(version_base=None, config_path=cli_args.config_path):
         # Load the config with the name from CLI
-        hydra_args = hydra.compose(config_name=config_name)
-        logger.info(f"Using configuration: {config_name}")
+        hydra_args = hydra.compose(config_name=cli_args.config_name)
+        logger.info(f"Using configuration: {cli_args.config_name}")
 
         # Initialize step configurations
         steps_config = StepConfig(
@@ -247,7 +244,6 @@ def main():
         base_save_dir = abalation_processor.get_save_dir()
         unigram_distrib = load_unigram(model_name=hydra_args.model, device=device)
         longtail_threshold, _ = abalation_processor.get_tail_threshold(unigram_distrib, save_path=base_save_dir)
-
         # Process each step in range
         for step in steps_config.steps:
             # Create save_path as a directory
