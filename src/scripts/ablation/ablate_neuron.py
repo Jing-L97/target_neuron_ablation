@@ -77,7 +77,7 @@ class NeuronAblationProcessor:
         if hasattr(args, "chdir") and args.chdir:
             os.chdir(args.chdir)
 
-    def get_tail_threshold(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
+    def get_tail_threshold_stat(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
         """Calculate threshold for long-tail ablation mode."""
         if self.args.ablation_mode == "longtail":
             analyzer = ZipfThresholdAnalyzer(
@@ -86,26 +86,17 @@ class NeuronAblationProcessor:
                 tail_threshold=self.args.tail_threshold,
                 apply_elbow=self.args.apply_elbow,
             )
-            threshold_stats = analyzer.analyze_zipf_anomalies(verbose=False)
-            longtail_threshold = threshold_stats["threshold_info"]["probability"]
-            if self.args.apply_elbow:
-                self.logger.info("Applying elbow point.")
-            self.logger.info(f"Get long-tail threshold {longtail_threshold} from Zipf's law.")
-            # Calculate how many tokens are below this threshold
-            long_tail_count = (unigram_distrib.cpu().numpy() < longtail_threshold).sum()
-            vocab_size = len(unigram_distrib)
-            self.logger.info(
-                f"Long-tail tokens: {long_tail_count} ({long_tail_count / vocab_size * 100:.2f}% of vocabulary)"
-            )
-            # Save threshold statistics only for the first step
-            stats_df = pd.DataFrame([threshold_stats])
-            stats_path = save_path / "zipf_threshold_stats.csv"
-            stats_df.to_csv(stats_path, index=False)
-            self.logger.info(f"Saved threshold statistics to {stats_path}")
-
-            return longtail_threshold, threshold_stats
+            longtail_threshold, threshold_stats = analyzer.get_tail_threshold(verbose=False)
+            self._save_threshold_stat(threshold_stats, save_path)
+            return longtail_threshold
         # Not in longtail mode, use default threshold
-        return None, None
+        return None
+
+    def _save_threshold_stat(self, threshold_stats, save_path: Path):
+        # Save threshold only if it's not none
+        stats_df = pd.DataFrame([threshold_stats])
+        stats_df.to_csv(save_path / "zipf_threshold_stats.csv", index=False)
+        self.logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.csv")
 
     def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
         """Process a single step with the given configuration."""
@@ -243,7 +234,8 @@ def main():
         abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
         base_save_dir = abalation_processor.get_save_dir()
         unigram_distrib = load_unigram(model_name=hydra_args.model, device=device)
-        longtail_threshold, _ = abalation_processor.get_tail_threshold(unigram_distrib, save_path=base_save_dir)
+        longtail_threshold = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
+
         # Process each step in range
         for step in steps_config.steps:
             # Create save_path as a directory

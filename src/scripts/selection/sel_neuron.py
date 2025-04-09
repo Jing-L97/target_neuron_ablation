@@ -17,7 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Select neurons based on single neuron heuristics.")
 
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
-    parser.add_argument("--vector", choices=["mean", "longtail"], default="longtail")
+    parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument(
         "--effect", type=str, choices=["boost", "suppress"], default="suppress", help="boost or suppress long-tail prob"
     )
@@ -39,9 +39,10 @@ def main() -> None:
     save_path = (
         settings.PATH.result_dir
         / "token_freq"
-        / args.effect
         / args.vector
         / args.model
+        / args.heuristic
+        / args.effect
         / f"{args.data_range_end}_{args.top_n}.csv"
     )
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -52,13 +53,14 @@ def main() -> None:
         # check whether the target file has been created
         for step in abl_path.iterdir():
             feather_path = abl_path / str(step) / str(args.data_range_end) / f"k{args.k}.feather"
-            # initilize the class
-            neuron_selector = NeuronSelector(feather_path, args.top_n, step.name, args.effect)
-            if args.heuristic == "KL":
-                frame = neuron_selector.select_by_KL()
-            if args.heuristic == "prob":
-                frame = neuron_selector.select_by_prob()
-            neuron_df = pd.concat([neuron_df, frame])
+            if feather_path.is_file():
+                # initilize the class
+                neuron_selector = NeuronSelector(feather_path, args.top_n, step.name, args.effect)
+                if args.heuristic == "KL":
+                    frame = neuron_selector.select_by_KL()
+                if args.heuristic == "prob":
+                    frame = neuron_selector.select_by_prob()
+                neuron_df = pd.concat([neuron_df, frame])
         # assign col headers
         neuron_df.to_csv(save_path)
         logger.info(f"Save file to {save_path}")

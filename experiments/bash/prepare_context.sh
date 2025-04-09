@@ -9,6 +9,6 @@
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/surprisal/preprocess.log
 
 
-SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/surprisal"
+SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/preprocess"
 
-python $SCRIPT_ROOT/prepare_context.py -w freq/EleutherAI/pythia-410m/longtail_words.csv
+python $SCRIPT_ROOT/prepare_context.py -w freq/EleutherAI/pythia-410m/longtail_50.csv

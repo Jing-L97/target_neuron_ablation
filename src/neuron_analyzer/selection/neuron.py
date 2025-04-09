@@ -13,19 +13,17 @@ logger = logging.getLogger(__name__)
 class NeuronSelector:
     """Class for selecting neurons based on various criteria."""
 
-    def __init__(self, top_n: int, step: int, effect: str = ""):
+    def __init__(self, feather_path: Path, top_n: int, step: int, effect: str):
         """Initialize the NeuronSelector."""
+        self.feather_path = feather_path
         self.top_n = top_n
         self.step = step
         self.effect = effect
 
-    def _prepare_dataframe(self, feather_path: Path) -> pd.DataFrame | None:
+    def _prepare_dataframe(self) -> pd.DataFrame | None:
         """Common preprocessing for the DataFrame."""
-        if not feather_path.is_file():
-            return None
-
-        final_df = pd.read_feather(feather_path)
-        logger.info(f"Analyzing file from {feather_path}")
+        final_df = pd.read_feather(self.feather_path)
+        logger.info(f"Analyzing file from {self.feather_path}")
 
         # Calculate delta loss metrics
         final_df["abs_delta_loss_post_ablation"] = np.abs(final_df["loss_post_ablation"] - final_df["loss"])
@@ -58,9 +56,9 @@ class NeuronSelector:
         stat_df.insert(0, "step", self.step)
         return stat_df
 
-    def select_by_KL(self, feather_path: Path) -> pd.DataFrame | None:
+    def select_by_KL(self) -> pd.DataFrame | None:
         """Select neurons by mediation effect and KL."""
-        final_df = self._prepare_dataframe(feather_path)
+        final_df = self._prepare_dataframe()
         if final_df is None:
             return None
 
@@ -94,9 +92,9 @@ class NeuronSelector:
 
         return self._create_stats_dataframe(ranked_neurons, header_dict)
 
-    def select_by_prob(self, feather_path: Path) -> pd.DataFrame | None:
+    def select_by_prob(self) -> pd.DataFrame | None:
         """Select neurons by mediation effect and prob variations."""
-        final_df = self._prepare_dataframe(feather_path)
+        final_df = self._prepare_dataframe()
         if final_df is None:
             return None
 

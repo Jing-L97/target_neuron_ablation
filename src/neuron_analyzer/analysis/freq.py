@@ -218,6 +218,19 @@ class ZipfThresholdAnalyzer:
 
         return results
 
+    def get_tail_threshold(self) -> tuple[float | None, dict | None]:
+        """Calculate threshold for long-tail part."""
+        threshold_stats = self.analyze_zipf_anomalies(verbose=False)
+        longtail_threshold = threshold_stats["threshold_info"]["probability"]
+        if self.apply_elbow:
+            logger.info("Applying elbow point.")
+        logger.info(f"Get long-tail threshold {longtail_threshold} from Zipf's law.")
+        # Calculate how many tokens are below this threshold
+        long_tail_count = (self.unigram_distrib.cpu().numpy() < longtail_threshold).sum()
+        vocab_size = len(self.unigram_distrib)
+        logger.info(f"Long-tail tokens: {long_tail_count} ({long_tail_count / vocab_size * 100:.2f}% of vocabulary)")
+        return longtail_threshold, threshold_stats
+
     def _visualize_zipf_analysis(
         self,
         log_ranks: np.ndarray,
