@@ -3,7 +3,7 @@ import logging
 from pathlib import Path
 
 import pandas as pd
-from transformers import AutoTokenizer
+import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.freq import UnigramAnalyzer
@@ -44,7 +44,7 @@ def get_word_stat(df: pd.DataFrame, col_header: str, unigram_analyzer) -> pd.Dat
 def main():
     """Main function demonstrating usage."""
     args = parse_args()
-
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
     # set paths
     word_path = settings.PATH.dataset_root / "src" / "cdi" / args.word_file
     unigram_path = settings.PATH.dataset_root / "src" / "unigram" / args.unigram_file
@@ -53,12 +53,9 @@ def main():
     # load csv file
     logger.info(f"Loading file from {word_path}")
     word_df = pd.read_csv(word_path)
-    # load tokenizer based on the model name
-    tokenizer = AutoTokenizer.from_pretrained(args.model_name)
     # intilize unigram analyzer
     logger.info(f"Matching unigram from {unigram_path}")
-    unigram_analyzer = UnigramAnalyzer(model_name=args.model_name, unigram_file_path=unigram_path, tokenizer=tokenizer)
-
+    unigram_analyzer = UnigramAnalyzer(model_name=args.model_name, device=device)
     # match word freq
     freq_df = get_word_stat(word_df, "word", unigram_analyzer)
     # save the file to the target directory

@@ -4,6 +4,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from transformers import AutoTokenizer
+
+from neuron_analyzer.analysis.freq import UnigramAnalyzer
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -13,17 +16,23 @@ logger = logging.getLogger(__name__)
 class NeuronSelector:
     """Class for selecting neurons based on various criteria."""
 
-    def __init__(self, feather_path: Path, top_n: int, step: int, effect: str):
+    def __init__(self, feather_path: Path, top_n: int, step: int, effect: str, model_name: str):
         """Initialize the NeuronSelector."""
         self.feather_path = feather_path
         self.top_n = top_n
         self.step = step
         self.effect = effect
+        # only load the arguments when needing longtail
+
+        tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self.unigram_analyzer = UnigramAnalyzer(model_name=model_name, tokenizer=tokenizer)
 
     def _prepare_dataframe(self) -> pd.DataFrame | None:
         """Common preprocessing for the DataFrame."""
         final_df = pd.read_feather(self.feather_path)
         logger.info(f"Analyzing file from {self.feather_path}")
+
+        # filter the df by stats
 
         # Calculate delta loss metrics
         final_df["abs_delta_loss_post_ablation"] = np.abs(final_df["loss_post_ablation"] - final_df["loss"])
@@ -120,3 +129,13 @@ class NeuronSelector:
         }
 
         return self._create_stats_dataframe(ranked_neurons, header_dict)
+
+    def _filter_df(self, final_df):
+        """Filter df by frequency."""
+        # get stats
+        final_df["freq"] = final_df["unigram_data"].apply(lambda x: x[0][2] if len(x) > 0 else None)
+        final_df["unigram_count"] = final_df[word_column].apply(
+            lambda word: [count for _, count, _ in unigram_analyzer.get_unigram_freq(word)]
+            if isinstance(word, str) and not pd.isna(word)
+            else []
+        )

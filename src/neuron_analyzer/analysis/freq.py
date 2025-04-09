@@ -7,6 +7,8 @@ import torch
 from scipy import stats
 from transformers import AutoTokenizer
 
+from neuron_analyzer.load_util import load_unigram
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -355,52 +357,17 @@ class ZipfThresholdAnalyzer:
 class UnigramAnalyzer:
     """Class for analyzing unigram frequencies of words based on model-specific unigram counts."""
 
-    # Model-specific constants
-    MODEL_CONFIGS = {
-        "pythia": {"W_U_SIZE": 50304, "TRUE_VOCAB_SIZE": 50277},
-        "phi-2": {"W_U_SIZE": 51200, "TRUE_VOCAB_SIZE": 50295},
-    }
-
     def __init__(
         self,
+        device: str,
         model_name: str = "pythia-410m",
-        unigram_file_path: str | None = None,
-        tokenizer: AutoTokenizer | None = None,
-        device: str = "cuda" if torch.cuda.is_available() else "cpu",
     ):
         """Initialize the UnigramAnalyzer with model and tokenizer information."""
         self.model_name = model_name
         self.device = device
-
-        # Determine model type and set vocabulary sizes
-        if "pythia" in model_name:
-            self.model_type = "pythia"
-        elif "phi-2" in model_name:
-            self.model_type = "phi-2"
-        else:
-            raise ValueError(f"Unsupported model: {model_name}")
-
-        self.W_U_SIZE = self.MODEL_CONFIGS[self.model_type]["W_U_SIZE"]
-        self.TRUE_VOCAB_SIZE = self.MODEL_CONFIGS[self.model_type]["TRUE_VOCAB_SIZE"]
-        self.token_discrepancy = self.W_U_SIZE - self.TRUE_VOCAB_SIZE
-        self.unigram_file_path = unigram_file_path
-        self.tokenizer = tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         # Load and prepare unigram data
-        self._load_unigram_data()
-
-    def _load_unigram_data(self) -> None:
-        """Load unigram data from file and prepare distributions."""
-        # Load the unigram counts from the .npy file
-        self.unigram_count = np.load(self.unigram_file_path)
-
-        # Pad the unigram count array if needed
-        if len(self.unigram_count) < self.W_U_SIZE:
-            self.unigram_count = np.concatenate([self.unigram_count, [0] * self.token_discrepancy])
-
-        # Calculate unigram distribution (normalized frequency)
-        self.unigram_distrib = self.unigram_count + 1  # Add 1 for Laplace smoothing
-        self.unigram_distrib = self.unigram_distrib / self.unigram_distrib.sum()
-        self.unigram_distrib = torch.tensor(self.unigram_distrib, dtype=torch.float32).to(self.device)
+        self.unigram_distrib = load_unigram(self.model_name, self.device)
 
     def get_unigram_freq(self, word: str) -> list[tuple[int, int, float]]:
         """Get the unigram count and frequency for a given word."""
@@ -416,7 +383,6 @@ class UnigramAnalyzer:
             else:
                 count = 0
                 frequency = 0.0
-
             results.append((token_id, count, frequency))
 
         return results
