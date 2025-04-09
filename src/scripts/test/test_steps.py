@@ -12,6 +12,8 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
     parser.add_argument("--interval", type=int, default=20, help="Checkpoint intervals")
+    parser.add_argument("--start", type=int, default=0, help="Start index of step range")
+    parser.add_argument("--end", type=int, default=141, help="End index of step range")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
@@ -21,7 +23,14 @@ def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
     # Initialize configuration with all Pythia checkpoints
-    steps_config = StepConfig(resume=args.resume, debug=args.debug, file_path=None, interval=args.interval)
+    steps_config = StepConfig(
+        resume=args.resume,
+        debug=args.debug,
+        file_path=None,
+        interval=args.interval,
+        start_idx=args.start,
+        end_idx=args.end,
+    )
     print(steps_config.steps)
 
 

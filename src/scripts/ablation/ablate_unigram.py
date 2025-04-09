@@ -47,6 +47,8 @@ def parse_args() -> argparse.Namespace:
         default="config_unigram_ablations.yaml",
         help="Name of the configuration file to use (without .yaml extension)",
     )
+    parser.add_argument("--start", type=int, default=14, help="Start index of step range")
+    parser.add_argument("--end", type=int, default=142, help="End index of step range")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
@@ -82,7 +84,7 @@ class NeuronAblationProcessor:
             )
             threshold_stats = analyzer.analyze_zipf_anomalies(verbose=False)
             longtail_threshold = threshold_stats["threshold_info"]["probability"]
-            self.logger.info("Calculating long-tail threshold using Zipf's law.")
+            self.logger.info(f"Get long-tail threshold {longtail_threshold} fromZipf's law.")
 
             # Save threshold statistics only for the first step
             stats_df = pd.DataFrame([threshold_stats])
@@ -234,8 +236,12 @@ def main():
         logger.info(f"Using configuration: {config_name}")
 
         # Initialize step configurations
-        steps_config = StepConfig(resume=cli_args.resume, debug=cli_args.debug, interval=cli_args.interval)
-
+        steps_config = StepConfig(
+            debug=cli_args.debug,
+            interval=cli_args.interval,
+            start_idx=cli_args.start,
+            end_idx=cli_args.end,
+        )
         # intialize the process class
         abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
         base_save_dir = abalation_processor.get_save_dir()
@@ -248,7 +254,7 @@ def main():
             save_path = base_save_dir / str(step) / str(hydra_args.data_range_end)
             save_path.mkdir(parents=True, exist_ok=True)
             # Check for existing files with pattern matching expected output
-            if (save_path / f"k{hydra_args.k}.feather").is_file():
+            if cli_args.resume and (save_path / f"k{hydra_args.k}.feather").is_file():
                 logger.info(f"Files for step {step} already exist. Skip!")
                 continue
             logger.info(f"Processing step {step}")
