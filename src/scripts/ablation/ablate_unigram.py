@@ -40,14 +40,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments for step range."""
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
-    parser.add_argument("--start", type=int, default=0, help="Start index of step range")
-    parser.add_argument("--end", type=int, default=155, help="End index of step range")
+    parser.add_argument("--interval", type=int, default=10, help="Checkpoint interval sampling")
     parser.add_argument(
         "--config",
         type=str,
         default="config_unigram_ablations.yaml",
         help="Name of the configuration file to use (without .yaml extension)",
     )
+    parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
+    parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
 
 
@@ -76,11 +77,12 @@ class NeuronAblationProcessor:
     def get_tail_threshold(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
         """Calculate threshold for long-tail ablation mode."""
         if self.args.ablation_mode == "longtail":
-            window_size = 2000
-            analyzer = ZipfThresholdAnalyzer(unigram_distrib, window_size=window_size)
+            analyzer = ZipfThresholdAnalyzer(
+                unigram_distrib, window_size=self.args.window_size, apply_elbow=self.args.apply_elbow
+            )
             threshold_stats = analyzer.analyze_zipf_anomalies(verbose=False)
-            longtail_threshold = threshold_stats["elbow_info"]["elbow_probability"]
-            self.logger.info(f"Calculating long-tail threshold using Zipf's law with window size {window_size}.")
+            longtail_threshold = threshold_stats["threshold_info"]["probability"]
+            self.logger.info("Calculating long-tail threshold using Zipf's law.")
 
             # Save threshold statistics only for the first step
             stats_df = pd.DataFrame([threshold_stats])
@@ -92,9 +94,7 @@ class NeuronAblationProcessor:
         # Not in longtail mode, use default threshold
         return None, None
 
-    def process_single_step(
-        self, step: int, unigram_distrib, longtail_threshold, threshold_stats, save_path: Path
-    ) -> None:
+    def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
         """Process a single step with the given configuration."""
         save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -204,6 +204,18 @@ class NeuronAblationProcessor:
         final_df.to_feather(output_path)
         self.logger.info(f"Saved results for step {step} to {output_path}")
 
+    def get_save_dir(self):
+        """Get the savepath based on current configurations."""
+        if self.args.ablation_mode == "longtail" and self.args.apply_elbow:
+            ablation_name = "longtail_elbow"
+        if self.args.ablation_mode == "longtail" and not self.args.apply_elbow:
+            ablation_name = f"longtail_{self.args.tail_threshold}"
+        else:
+            ablation_name = self.args.ablation_mode
+        base_save_dir = settings.PATH.result_dir / self.args.output_dir / ablation_name / self.args.model
+        base_save_dir.mkdir(parents=True, exist_ok=True)
+        return base_save_dir
+
 
 def main():
     """Main entry point that handles both CLI args and Hydra config."""
@@ -221,21 +233,17 @@ def main():
         hydra_args = hydra.compose(config_name=config_name)
         logger.info(f"Using configuration: {config_name}")
 
-        # Initialize configuration with all Pythia checkpoints
-        steps_config = StepConfig()
-        logger.info(f"Processing steps {cli_args.start} to {cli_args.end}")
+        # Initialize step configurations
+        steps_config = StepConfig(resume=cli_args.resume, debug=cli_args.debug, interval=cli_args.interval)
 
         # intialize the process class
-        base_save_dir = settings.PATH.result_dir / hydra_args.output_dir / hydra_args.ablation_mode / hydra_args.model
-        base_save_dir.mkdir(parents=True, exist_ok=True)
         abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
+        base_save_dir = abalation_processor.get_save_dir()
         unigram_distrib = load_unigram(model_name=hydra_args.model, device=device)
-        longtail_threshold, threshold_stats = abalation_processor.get_tail_threshold(
-            unigram_distrib, save_path=base_save_dir
-        )
+        longtail_threshold, _ = abalation_processor.get_tail_threshold(unigram_distrib, save_path=base_save_dir)
 
         # Process each step in range
-        for step in steps_config.steps[cli_args.start : cli_args.end]:
+        for step in steps_config.steps:
             # Create save_path as a directory
             save_path = base_save_dir / str(step) / str(hydra_args.data_range_end)
             save_path.mkdir(parents=True, exist_ok=True)
@@ -245,10 +253,7 @@ def main():
                 continue
             logger.info(f"Processing step {step}")
             try:
-                abalation_processor.process_single_step(
-                    step, unigram_distrib, longtail_threshold, threshold_stats, save_path
-                )
-
+                abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
             except Exception as e:
                 logger.error(f"Error processing step {step}: {e!s}")
                 continue
