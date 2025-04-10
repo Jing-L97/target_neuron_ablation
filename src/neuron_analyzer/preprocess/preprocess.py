@@ -1,11 +1,8 @@
-import json
 import math
 import random
 import typing as t
 from collections import Counter, defaultdict
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any, Dict, List
 
 import spacy
 from datasets import load_dataset
@@ -17,6 +14,7 @@ nlp.add_pipe("sentencizer")
 
 #######################################################
 # Ngram collector classes
+
 
 @dataclass
 class ContextStats:
@@ -54,7 +52,7 @@ class NGramStatisticsComputer:
     def __init__(self, max_context_size: int | None = None):
         """Initialize the n-gram statistics computer."""
         self.max_context_size = max_context_size
-        self.context_stats: t.Dict[str, ContextStats] = defaultdict(
+        self.context_stats: dict[str, ContextStats] = defaultdict(
             lambda: ContextStats(0, 0.0, float("-inf"), Counter())
         )
         self.word_counts = Counter()
@@ -96,13 +94,11 @@ class NGramStatisticsComputer:
     @staticmethod
     def compute_log_freq_per_million(count: int, total: int) -> float:
         """Compute log frequency per million occurrences."""
-
         freq_per_million = (count / total) * 1_000_000
         return math.log10(freq_per_million) if freq_per_million > 0 else float("-inf")
 
     def get_all_ngram_stats(self):
         """Get comprehensive statistics for all n-grams."""
-
         total_words = sum(self.word_counts.values())
 
         return {
@@ -157,20 +153,20 @@ class NGramContextCollector:
 
         self.computer.compute_frequencies()
 
-    def get_all_ngram_stats(self) -> t.Dict[str, t.Any]:
+    def get_all_ngram_stats(self) -> dict[str, t.Any]:
         """Get comprehensive n-gram statistics."""
         return self.computer.get_all_ngram_stats()
 
     @staticmethod
     def filter_contexts(
-        ngram_stats: t.Dict[str, t.Any],
+        ngram_stats: dict[str, t.Any],
         target_words: list[str],
         n_contexts: int,
         mode: str = "frequent",
         min_window_size: int = 1,
-    ) -> t.Dict[str, list[t.Dict[str, t.Any]]]:
+    ) -> dict[str, list[dict[str, t.Any]]]:
         """Filter and select contexts for target words based on specified criteria."""
-        selected_data: t.Dict[str, list[t.Dict[str, t.Any]]] = {}
+        selected_data: dict[str, list[dict[str, t.Any]]] = {}
 
         for word in target_words:
             word_contexts = []
@@ -219,26 +215,14 @@ class NGramContextCollector:
 #######################################################
 # word filter
 
+
 def is_word(word: str) -> bool:
     """Check if a word is correctly spelled."""
     spell = SpellChecker()
     return word.lower() in spell
 
+
 def filter_words(word_list: list[str]) -> list[str]:
     """Filter a list and return only correctly spelled words."""
     spell = SpellChecker()
     return [word for word in word_list if word.lower() in spell]
-
-
-
-#######################################################
-# json file tools
-
-def save_data(data: Dict[str, Any], file_path: Path) -> None:
-    with open(file_path, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
-
-
-def load_data(file_path: Path) -> Dict[str, Any]:
-    with open(file_path, "r", encoding="utf-8") as f:
-        return json.load(f)

@@ -5,7 +5,8 @@ from pathlib import Path
 import pandas as pd
 
 from neuron_analyzer import settings
-from neuron_analyzer.preprocess.preprocess import NGramContextCollector, load_data, save_data
+from neuron_analyzer.load_util import load_json, save_json
+from neuron_analyzer.preprocess.preprocess import NGramContextCollector, 
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -59,7 +60,7 @@ def main():
 
     if ngram_stats_file.exists():
         print(f"Loading existing n-gram statistics from {ngram_stats_file}")
-        ngram_stats = load_data(ngram_stats_file)
+        ngram_stats = load_json(ngram_stats_file)
     else:
         print("Computing n-gram statistics...")
         collector = NGramContextCollector()
@@ -71,7 +72,7 @@ def main():
             return
 
         ngram_stats = collector.get_all_ngram_stats()
-        save_data(ngram_stats, ngram_stats_file)
+        save_json(ngram_stats, ngram_stats_file)
         print(f"Saved n-gram statistics to {ngram_stats_file}")
 
     target_words = load_target_words(words_file)
@@ -80,7 +81,7 @@ def main():
         ngram_stats, target_words, args.n_contexts, args.mode, args.window_size
     )
 
-    save_data(selected_contexts, selected_contexts_file)
+    save_json(selected_contexts, selected_contexts_file)
     print(f"Saved selected contexts to {selected_contexts_file}")
 
 

@@ -4,9 +4,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-from transformers import AutoTokenizer
 
 from neuron_analyzer.analysis.freq import UnigramAnalyzer
+from neuron_analyzer.load_util import load_json
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -16,43 +16,73 @@ logger = logging.getLogger(__name__)
 class NeuronSelector:
     """Class for selecting neurons based on various criteria."""
 
-    def __init__(self, feather_path: Path, top_n: int, step: int, effect: str, model_name: str):
+    def __init__(
+        self,
+        feather_path: Path,
+        top_n: int,
+        step: int,
+        effect: str,
+        tokenizer_name: str,
+        threshold_path: Path,
+        device: str,
+        sel_longtail: bool = False,
+    ):
         """Initialize the NeuronSelector."""
         self.feather_path = feather_path
         self.top_n = top_n
         self.step = step
         self.effect = effect
+        self.sel_longtail = sel_longtail
         # only load the arguments when needing longtail
-
-        tokenizer = AutoTokenizer.from_pretrained(model_name)
-        self.unigram_analyzer = UnigramAnalyzer(model_name=model_name, tokenizer=tokenizer)
+        if self.sel_longtail:
+            self.unigram_analyzer = UnigramAnalyzer(model_name=tokenizer_name, device=device)
+            self.threshold_path = threshold_path
 
     def _prepare_dataframe(self) -> pd.DataFrame | None:
         """Common preprocessing for the DataFrame."""
-        final_df = pd.read_feather(self.feather_path)
+        self.final_df = pd.read_feather(self.feather_path)
         logger.info(f"Analyzing file from {self.feather_path}")
 
         # filter the df by stats
-
+        if self.sel_longtail:
+            self.final_df = self._filter_df()
         # Calculate delta loss metrics
-        final_df["abs_delta_loss_post_ablation"] = np.abs(final_df["loss_post_ablation"] - final_df["loss"])
-        final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
-            final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
+        self.final_df["abs_delta_loss_post_ablation"] = np.abs(self.final_df["loss_post_ablation"] - final_df["loss"])
+        self.final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
+            self.final_df["loss_post_ablation_with_frozen_unigram"] - self.final_df["loss"]
         )
-        final_df["delta_loss_post_ablation"] = final_df["loss_post_ablation"] - final_df["loss"]
-        final_df["delta_loss_post_ablation_with_frozen_unigram"] = (
-            final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
+        self.final_df["delta_loss_post_ablation"] = self.final_df["loss_post_ablation"] - self.final_df["loss"]
+        self.final_df["delta_loss_post_ablation_with_frozen_unigram"] = (
+            self.final_df["loss_post_ablation_with_frozen_unigram"] - self.final_df["loss"]
         )
 
         # Group by neuron idx
-        final_df = final_df.groupby("component_name").mean(numeric_only=True).reset_index()
+        self.final_df = self.final_df.groupby("component_name").mean(numeric_only=True).reset_index()
 
         # Calculate the mediation effect
-        final_df["mediation_effect"] = (
-            1 - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / final_df["abs_delta_loss_post_ablation"]
+        self.final_df["mediation_effect"] = (
+            1
+            - self.final_df["abs_delta_loss_post_ablation_with_frozen_unigram"]
+            / self.final_df["abs_delta_loss_post_ablation"]
         )
 
-        return final_df
+        return self.final_df
+
+    def _filter_df(self):
+        """Filter df by frequency."""
+        # get word freq
+        self.final_df["freq"] = self.final_df["str_tokens"].apply(
+            lambda word: [count for _, count, _ in self.unigram_analyzer.get_unigram_freq(word)]
+            if isinstance(word, str) and not pd.isna(word)
+            else []
+        )
+        logger.info(f"{self.final_df.shape[0]} words before filtering")
+        # filter by the threshold
+        prob_df = load_json(self.threshold_path)
+        prob_threshold = prob_df["threshold_info"]["probability"]
+        self.final_df = self.final_df[self.final_df["freq"] < prob_threshold]
+        logger.info(f"{self.final_df.shape[0]} words after filtering.")
+        return self.final_df
 
     def _create_stats_dataframe(self, ranked_neurons: pd.DataFrame, header_dict: dict[str, str]) -> pd.DataFrame:
         """Create a statistics DataFrame from ranked neurons."""
@@ -129,13 +159,3 @@ class NeuronSelector:
         }
 
         return self._create_stats_dataframe(ranked_neurons, header_dict)
-
-    def _filter_df(self, final_df):
-        """Filter df by frequency."""
-        # get stats
-        final_df["freq"] = final_df["unigram_data"].apply(lambda x: x[0][2] if len(x) > 0 else None)
-        final_df["unigram_count"] = final_df[word_column].apply(
-            lambda word: [count for _, count, _ in unigram_analyzer.get_unigram_freq(word)]
-            if isinstance(word, str) and not pd.isna(word)
-            else []
-        )

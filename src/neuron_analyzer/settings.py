@@ -46,11 +46,11 @@ class _MyPathSettings:
 
     @property
     def unigram_dir(self) -> _Path:
-        return self.DATA_DIR / "datasets"/ "src"/"unigram"
+        return self.DATA_DIR / "datasets" / "src" / "unigram"
 
     @property
     def context_dir(self) -> _Path:
-        return self.DATA_DIR / "datasets"/ "context"
+        return self.DATA_DIR / "datasets" / "context"
 
     @property
     def model_dir(self) -> _Path:
@@ -59,7 +59,7 @@ class _MyPathSettings:
     @property
     def result_dir(self) -> _Path:
         return self.DATA_DIR / "results"
-    
+
     @property
     def surprisal_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "surprisal"
@@ -67,14 +67,15 @@ class _MyPathSettings:
     @property
     def neuron_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "token_freq"
-    
+
     @property
     def direction_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "directions"
+
     @property
     def script_dir(self) -> _Path:
         return self.DATA_DIR / "target_neuron_ablation"
-    
+
 
 #######################################################
 # Instance of Settings

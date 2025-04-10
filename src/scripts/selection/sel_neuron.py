@@ -3,6 +3,7 @@ import argparse
 import logging
 
 import pandas as pd
+import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.selection.neuron import NeuronSelector
@@ -24,7 +25,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
     )
-    parser.add_argument("--top_n", type=int, default=10, help="use_bos_only if enabled")
+    parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
+    parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
+    parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
+    parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
     return parser.parse_args()
@@ -33,7 +37,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
-
+    device: str = "cuda" if torch.cuda.is_available() else "cpu"
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     save_path = (
@@ -55,7 +59,16 @@ def main() -> None:
             feather_path = abl_path / str(step) / str(args.data_range_end) / f"k{args.k}.feather"
             if feather_path.is_file():
                 # initilize the class
-                neuron_selector = NeuronSelector(feather_path, args.top_n, step.name, args.effect)
+                neuron_selector = NeuronSelector(
+                    feather_path=feather_path,
+                    top_n=args.top_n,
+                    step=step.name,
+                    effect=args.effect,
+                    tokenizer_name=args.tokenizer_name,
+                    threshold_path=abl_path / args.stat_file,
+                    sel_longtail=args.sel_longtail,
+                    device=device,
+                )
                 if args.heuristic == "KL":
                     frame = neuron_selector.select_by_KL()
                 if args.heuristic == "prob":

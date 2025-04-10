@@ -26,7 +26,7 @@ from neuron_analyzer.ablation.abl_util import (
 )
 from neuron_analyzer.ablation.ablation import mean_ablate_components
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
-from neuron_analyzer.load_util import load_unigram
+from neuron_analyzer.load_util import load_unigram, save_json
 from neuron_analyzer.model_util import StepConfig
 
 T = t.TypeVar("T")
@@ -86,17 +86,12 @@ class NeuronAblationProcessor:
                 tail_threshold=self.args.tail_threshold,
                 apply_elbow=self.args.apply_elbow,
             )
-            longtail_threshold, threshold_stats = analyzer.get_tail_threshold(verbose=False)
-            self._save_threshold_stat(threshold_stats, save_path)
+            longtail_threshold, threshold_stats = analyzer.get_tail_threshold()
+            save_json(threshold_stats, save_path / "zipf_threshold_stats.json")
+            self.logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.json")
             return longtail_threshold
         # Not in longtail mode, use default threshold
         return None
-
-    def _save_threshold_stat(self, threshold_stats, save_path: Path):
-        # Save threshold only if it's not none
-        stats_df = pd.DataFrame([threshold_stats])
-        stats_df.to_csv(save_path / "zipf_threshold_stats.csv", index=False)
-        self.logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.csv")
 
     def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
         """Process a single step with the given configuration."""
@@ -233,7 +228,7 @@ def main():
         # intialize the process class
         abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
         base_save_dir = abalation_processor.get_save_dir()
-        unigram_distrib = load_unigram(model_name=hydra_args.model, device=device)
+        unigram_distrib, _ = load_unigram(model_name=hydra_args.model, device=device)
         longtail_threshold = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
 
         # Process each step in range

@@ -101,7 +101,7 @@ class TokenSelector:
         """Encapsulated method to perform the entire process."""
         # Step 1: Load unigram distribution
         logger.info("Loading unigram distribution...")
-        self.unigram_distrib = load_unigram(self.model, self.device)
+        self.unigram_distrib, _ = load_unigram(self.model, self.device)
 
         # Step 2: Calculate threshold and identify long-tail tokens
         logger.info("Calculating threshold and identifying long-tail tokens...")

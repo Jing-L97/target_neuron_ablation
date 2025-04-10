@@ -101,7 +101,7 @@ def main() -> None:
     logger.info(f"Compute {args.ablation_mode} surprisal")
 
     # load unigram freq file
-    token_frequencies = load_unigram(args.model_name, device)
+    token_frequencies, _ = load_unigram(args.model_name, device)
 
     ###################################
     # Initialize classes

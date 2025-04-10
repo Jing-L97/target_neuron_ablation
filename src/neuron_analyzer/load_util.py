@@ -4,7 +4,9 @@ import logging
 import random
 import typing as t
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pandas as pd
 import torch
 
@@ -77,13 +79,49 @@ def load_unigram(model_name, device) -> torch.Tensor:
     # Load unigram distribution
     if "pythia" in model_name:
         file_path = settings.PATH.unigram_dir / "pythia-unigrams.npy"
-        unigram_distrib = get_pile_unigram_distribution(device=device, pad_to_match_W_U=True, file_path=file_path)
+        unigram_distrib, unigram_count = get_pile_unigram_distribution(
+            device=device, pad_to_match_W_U=True, file_path=file_path
+        )
         logger.info(f"Loaded unigram freq from {file_path}")
     elif "gpt" in model_name:
         file_path = settings.PATH.unigram_dir / "gpt2-small-unigrams_openwebtext-2M_rows_500000.npy"
-        unigram_distrib = get_pile_unigram_distribution(device=device, pad_to_match_W_U=False, file_path=file_path)
+        unigram_distrib, unigram_count = get_pile_unigram_distribution(
+            device=device, pad_to_match_W_U=False, file_path=file_path
+        )
         logger.info(f"Loading unigram freq from {file_path}")
     else:
         raise Exception(f"No unigram distribution for {model_name}")
 
-    return unigram_distrib
+    return unigram_distrib, unigram_count
+
+
+#######################################################
+# json file tools
+
+
+def save_json(data: dict, filepath: Path | str) -> None:
+    """Save a nested dictionary with float values to a file."""
+    filepath = Path(filepath)
+    filepath.parent.mkdir(parents=True, exist_ok=True)
+
+    # Convert numpy types if present
+    def convert_numpy_types(obj):
+        if isinstance(obj, (np.floating, np.float32, np.float64)):
+            return float(obj)
+        if isinstance(obj, (np.integer, np.int32, np.int64)):
+            return int(obj)
+        if isinstance(obj, dict):
+            return {k: convert_numpy_types(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [convert_numpy_types(item) for item in obj]
+        return obj
+
+    converted_data = convert_numpy_types(data)
+
+    with open(filepath, "w") as f:
+        json.dump(converted_data, f, indent=2)
+
+
+def load_json(file_path: Path) -> dict[str, Any]:
+    with open(file_path, encoding="utf-8") as f:
+        return json.load(f)

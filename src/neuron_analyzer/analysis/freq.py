@@ -357,17 +357,13 @@ class ZipfThresholdAnalyzer:
 class UnigramAnalyzer:
     """Class for analyzing unigram frequencies of words based on model-specific unigram counts."""
 
-    def __init__(
-        self,
-        device: str,
-        model_name: str = "pythia-410m",
-    ):
+    def __init__(self, device: str, model_name: str = "pythia-410m"):
         """Initialize the UnigramAnalyzer with model and tokenizer information."""
         self.model_name = model_name
         self.device = device
         self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
         # Load and prepare unigram data
-        self.unigram_distrib = load_unigram(self.model_name, self.device)
+        self.unigram_distrib, self.unigram_count = load_unigram(self.model_name, self.device)
 
     def get_unigram_freq(self, word: str) -> list[tuple[int, int, float]]:
         """Get the unigram count and frequency for a given word."""
