@@ -56,7 +56,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--interval", type=int, default=10, help="Checkpoint interval sampling")
     parser.add_argument("--use_bos_only", action="store_true", help="use_bos_only if enabled")
-    parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
+    parser.add_argument("--debug", action="store_true", help="Compute the first 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
 

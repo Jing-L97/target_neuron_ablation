@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
     )
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
+    parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
     parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
     parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
@@ -61,6 +62,7 @@ def main() -> None:
                 # initilize the class
                 neuron_selector = NeuronSelector(
                     feather_path=feather_path,
+                    debug=args.debug,
                     top_n=args.top_n,
                     step=step.name,
                     effect=args.effect,

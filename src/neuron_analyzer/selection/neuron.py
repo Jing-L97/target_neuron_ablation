@@ -25,6 +25,7 @@ class NeuronSelector:
         tokenizer_name: str,
         threshold_path: Path,
         device: str,
+        debug: bool,
         sel_longtail: bool = False,
     ):
         """Initialize the NeuronSelector."""
@@ -32,6 +33,7 @@ class NeuronSelector:
         self.top_n = top_n
         self.step = step
         self.effect = effect
+        self.debug = debug
         self.sel_longtail = sel_longtail
         # only load the arguments when needing longtail
         if self.sel_longtail:
@@ -42,7 +44,9 @@ class NeuronSelector:
         """Common preprocessing for the DataFrame."""
         self.final_df = pd.read_feather(self.feather_path)
         logger.info(f"Analyzing file from {self.feather_path}")
-
+        if self.debug:
+            self.final_df = self.final_df.head(500)
+            logger.info("Entering debugging mode. Loading first 500 rows.")
         # filter the df by stats
         if self.sel_longtail:
             self.final_df = self._filter_df()
@@ -73,18 +77,20 @@ class NeuronSelector:
     def _filter_df(self):
         """Filter df by frequency."""
         # get word freq
-        self.final_df["freq"] = self.final_df["str_tokens"].apply(
-            lambda word: [count for _, count, _ in self.unigram_analyzer.get_unigram_freq(word)]
-            if isinstance(word, str) and not pd.isna(word)
-            else []
-        )
+        self.final_df["freq"] = self.final_df["str_tokens"].apply(self.extract_freq)
         logger.info(f"{self.final_df.shape[0]} words before filtering")
         # filter by the threshold
-        prob_df = load_json(self.threshold_path)
-        prob_threshold = prob_df["threshold_info"]["probability"]
+        prob_dict = load_json(self.threshold_path)
+        prob_threshold = prob_dict["threshold_info"]["probability"]
+        print(self.final_df["freq"])
         self.final_df = self.final_df[self.final_df["freq"] < prob_threshold]
         logger.info(f"{self.final_df.shape[0]} words after filtering.")
         return self.final_df
+
+    def _extract_freq(self, word):
+        """Extract frequency from the unifram analyzer."""
+        stat = self.unigram_analyzer.get_unigram_freq(word)
+        return stat[0][2]
 
     def _create_stats_dataframe(self, ranked_neurons: pd.DataFrame, header_dict: dict[str, str]) -> pd.DataFrame:
         """Create a statistics DataFrame from ranked neurons."""
