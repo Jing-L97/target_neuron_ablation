@@ -47,7 +47,9 @@ class NeuronSelector:
         if self.sel_longtail:
             self.final_df = self._filter_df()
         # Calculate delta loss metrics
-        self.final_df["abs_delta_loss_post_ablation"] = np.abs(self.final_df["loss_post_ablation"] - final_df["loss"])
+        self.final_df["abs_delta_loss_post_ablation"] = np.abs(
+            self.final_df["loss_post_ablation"] - self.final_df["loss"]
+        )
         self.final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
             self.final_df["loss_post_ablation_with_frozen_unigram"] - self.final_df["loss"]
         )
