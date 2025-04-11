@@ -4,7 +4,6 @@ import logging
 import random
 import typing as t
 from pathlib import Path
-from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,33 +19,69 @@ random.seed(42)
 T = t.TypeVar("T")
 
 #######################################################
+# json file tools
+
+
+class JsonProcessor:
+    """Class for handling JSON serialization with NumPy type conversion."""
+
+    @staticmethod
+    def convert_numpy_types(obj: t.Any) -> t.Any:
+        """Recursively convert NumPy types in a nested structure to standard Python types."""
+        if isinstance(obj, (np.floating, np.float32, np.float64)):
+            return float(obj)
+        if isinstance(obj, (np.integer, np.int32, np.int64)):
+            return int(obj)
+        if isinstance(obj, dict):
+            return {k: JsonProcessor.convert_numpy_types(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [JsonProcessor.convert_numpy_types(item) for item in obj]
+        return obj
+
+    @classmethod
+    def save_json(cls, data: dict, filepath: Path) -> None:
+        """Save a nested dictionary with float values to a file."""
+        filepath.parent.mkdir(parents=True, exist_ok=True)
+        converted_data = cls.convert_numpy_types(data)
+        with open(filepath, "w") as f:
+            json.dump(converted_data, f, indent=2)
+
+    @staticmethod
+    def load_json(filepath: Path) -> dict:
+        """Load a JSON file into a dictionary."""
+        with open(filepath, encoding="utf-8") as f:
+            return json.load(f)
+
+
+#######################################################
 # load and select eval set
 
 
-def load_eval(
-    word_path, word_header: str = "word", BOS_only: bool = True, prompt_header=None
-) -> tuple[list[str], list[list[str]]]:
+def load_eval(word_path: Path, min_context: int = 2, debug: bool = False) -> tuple[list[str], list[list[str]]]:
     """Load word and context lists from a JSON file."""
-    try:
-        with word_path.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-    except json.JSONDecodeError as e:
-        raise ValueError(f"Invalid JSON format in {word_path}: {e!s}")
+    data = JsonProcessor.load_json(word_path)
     # Extract words
     target_words = list(data.keys())
     words = []
     contexts = []
     for word in target_words:
-        word_contexts = []
-        # Handle different JSON structures
-        word_data = data[word]
-        if len(word_data) == 0:
-            continue
-        words.append(word)
-        for context_data in word_data:
-            word_contexts.append(context_data["context"])
-        contexts.append(word_contexts)
-    logger.info(f"{len(target_words) - len(words)} words have no context!")
+        if len(word) > 1:
+            word_contexts = []
+            # Handle different JSON structures
+            word_data = data[word]
+            if len(word_data) >= min_context:
+                words.append(word)
+                for context_data in word_data:
+                    word_contexts.append(context_data["context"])
+                contexts.append(word_contexts)
+    if debug:
+        target_words, contexts = target_words[:5], contexts[:5]
+        logger.info("Entering debugging mode. Loading first 5 words")
+    if not debug:
+        # filter out the single chracters
+        logger.info(f"{len(target_words) - len(words)} words are filtered.")
+        logger.info(f"Loading {len(words)} words.")
+
     return words, contexts
 
 
@@ -93,35 +128,3 @@ def load_unigram(model_name, device) -> torch.Tensor:
         raise Exception(f"No unigram distribution for {model_name}")
 
     return unigram_distrib, unigram_count
-
-
-#######################################################
-# json file tools
-
-
-def save_json(data: dict, filepath: Path | str) -> None:
-    """Save a nested dictionary with float values to a file."""
-    filepath = Path(filepath)
-    filepath.parent.mkdir(parents=True, exist_ok=True)
-
-    # Convert numpy types if present
-    def convert_numpy_types(obj):
-        if isinstance(obj, (np.floating, np.float32, np.float64)):
-            return float(obj)
-        if isinstance(obj, (np.integer, np.int32, np.int64)):
-            return int(obj)
-        if isinstance(obj, dict):
-            return {k: convert_numpy_types(v) for k, v in obj.items()}
-        if isinstance(obj, (list, tuple)):
-            return [convert_numpy_types(item) for item in obj]
-        return obj
-
-    converted_data = convert_numpy_types(data)
-
-    with open(filepath, "w") as f:
-        json.dump(converted_data, f, indent=2)
-
-
-def load_json(file_path: Path) -> dict[str, Any]:
-    with open(file_path, encoding="utf-8") as f:
-        return json.load(f)

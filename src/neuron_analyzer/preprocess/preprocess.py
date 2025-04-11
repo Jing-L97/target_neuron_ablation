@@ -31,7 +31,7 @@ class TextPreprocessor:
         self.nlp = spacy.load("en_core_web_sm", disable=["tagger", "parser", "ner"])
         self.nlp.add_pipe("sentencizer")
 
-    def process_text(self, text: str) -> List[List[str]]:
+    def process_text(self, text: str) -> list[list[str]]:
         doc = self.nlp(text)
         return [sentence.text.strip().split() for sentence in doc.sents]
 

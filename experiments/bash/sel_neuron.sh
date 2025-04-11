@@ -4,7 +4,7 @@
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=40G
-#SBATCH --time=8:00:00
+#SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_neuron_%a.log
 #SBATCH --array=0-15
 

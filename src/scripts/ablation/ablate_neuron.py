@@ -26,7 +26,7 @@ from neuron_analyzer.ablation.abl_util import (
 )
 from neuron_analyzer.ablation.ablation import mean_ablate_components
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
-from neuron_analyzer.load_util import load_unigram, save_json
+from neuron_analyzer.load_util import JsonProcessor, load_unigram
 from neuron_analyzer.model_util import StepConfig
 
 T = t.TypeVar("T")
@@ -87,7 +87,7 @@ class NeuronAblationProcessor:
                 apply_elbow=self.args.apply_elbow,
             )
             longtail_threshold, threshold_stats = analyzer.get_tail_threshold()
-            save_json(threshold_stats, save_path / "zipf_threshold_stats.json")
+            JsonProcessor.save_json(threshold_stats, save_path / "zipf_threshold_stats.json")
             self.logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.json")
             return longtail_threshold
         # Not in longtail mode, use default threshold

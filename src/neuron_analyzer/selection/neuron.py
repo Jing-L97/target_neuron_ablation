@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from neuron_analyzer.analysis.freq import UnigramAnalyzer
-from neuron_analyzer.load_util import load_json
+from neuron_analyzer.load_util import JsonProcessor
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -77,10 +77,10 @@ class NeuronSelector:
     def _filter_df(self):
         """Filter df by frequency."""
         # get word freq
-        self.final_df["freq"] = self.final_df["str_tokens"].apply(self.extract_freq)
+        self.final_df["freq"] = self.final_df["str_tokens"].apply(self._extract_freq)
         logger.info(f"{self.final_df.shape[0]} words before filtering")
         # filter by the threshold
-        prob_dict = load_json(self.threshold_path)
+        prob_dict = JsonProcessor.load_json(self.threshold_path)
         prob_threshold = prob_dict["threshold_info"]["probability"]
         print(self.final_df["freq"])
         self.final_df = self.final_df[self.final_df["freq"] < prob_threshold]

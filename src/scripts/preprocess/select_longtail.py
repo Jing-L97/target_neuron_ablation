@@ -126,7 +126,7 @@ class TokenSelector:
         logger.info(f"Found {len(words)} long-tail words")
         return word_df
 
-    def get_save_dir(self, word_df):
+    def get_save_dir(self, word_df) -> None:
         """Get the savepath based on current configurations."""
         ablation_name = "longtail_elbow.csv" if self.apply_elbow else f"longtail_{self.tail_threshold}.csv"
         out_path = settings.PATH.dataset_root / "freq" / self.model / ablation_name
