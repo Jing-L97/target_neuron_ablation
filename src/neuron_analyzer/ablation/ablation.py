@@ -91,6 +91,8 @@ def mean_ablate_components(
         unigram_direction_vocab = unigram_distrib.log() - unigram_distrib.log().mean()
         unigram_direction_vocab /= unigram_direction_vocab.norm()
 
+    # TODO: add random vector baseline
+
     # get neuron indices
     neuron_indices = [int(neuron_name.split(".")[1]) for neuron_name in components_to_ablate]
 

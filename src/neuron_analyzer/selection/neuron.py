@@ -148,10 +148,10 @@ class NeuronSelector:
         # Apply effect filtering
         if self.effect == "suppress":
             # Filter the neurons that push towards the unigram freq
-            final_df = final_df[final_df["delta_loss_post_ablation_with_frozen_unigram"] < 0]
+            final_df = final_df[final_df["delta_loss_post_ablation_with_frozen_unigram"] > 0]
         elif self.effect == "boost":
             # Filter the neurons that push away from the unigram freq
-            final_df = final_df[final_df["delta_loss_post_ablation_with_frozen_unigram"] > 0]
+            final_df = final_df[final_df["delta_loss_post_ablation_with_frozen_unigram"] < 0]
 
         # Rank neurons
         ranked_neurons = final_df.sort_values(

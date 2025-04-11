@@ -55,6 +55,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+#######################################################################################################
+# Fucntions applied in the main scripts
+#######################################################################################################
+
+
 class NeuronAblationProcessor:
     """Class to handle neural network ablation processing."""
 
@@ -204,6 +209,11 @@ class NeuronAblationProcessor:
         base_save_dir = settings.PATH.result_dir / self.args.output_dir / ablation_name / self.args.model
         base_save_dir.mkdir(parents=True, exist_ok=True)
         return base_save_dir
+
+
+#######################################################################################################
+# Entry point of the script
+#######################################################################################################
 
 
 def main():

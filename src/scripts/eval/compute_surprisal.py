@@ -67,6 +67,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+#######################################################################################################
+# Fucntions applied in the main scripts
+#######################################################################################################
+
+
 def get_count(filename: str) -> str:
     return filename.split(".")[0].split("_")[1]
 
@@ -128,6 +133,11 @@ def save_results(args, results_df: Path, result_dir: Path, result_file: Path, fi
                 sel_eval(results_df, eval_path, result_dir, filename)
     else:
         logger.warning("No results were generated")
+
+
+#######################################################################################################
+# Entry point of the script
+#######################################################################################################
 
 
 def main() -> None:

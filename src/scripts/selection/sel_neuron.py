@@ -35,6 +35,11 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+#######################################################################################################
+# Entry point of the script
+#######################################################################################################
+
+
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()

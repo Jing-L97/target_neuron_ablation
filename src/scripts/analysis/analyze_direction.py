@@ -93,9 +93,6 @@ def analyze_neuron_directions(model, layer_num=-1, chunk_size=1024, device=None)
     return cosine_df
 
 
-# TODO: add seleted neuron analyses
-
-
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
