@@ -45,6 +45,21 @@ python $SCRIPT_ROOT/analyze_unigram.py \
     --vector "$VECTOR"
 ```
 
+Step 3: Select neuron groups based on the same heuristics
+
+```
+Following stats are recorded to inspect the activation space
+
+Mean ablation results (with/out) projecting along the certain direction; in this case, the following aspects are recoded:
+
+- activation values across all the neurons
+- loss/prob from the prediction
+- KL divergence (it won't hurt to record)
+
+```
+
+
+
 
 ## Neuron intervention
 

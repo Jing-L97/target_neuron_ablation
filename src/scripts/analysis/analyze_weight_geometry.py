@@ -7,7 +7,7 @@ import pandas as pd
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.geometry import NeuronGeometricAnalyzer
+from neuron_analyzer.analysis.w_geometry import WeightGeometricAnalyzer
 from neuron_analyzer.eval.surprisal import StepSurprisalExtractor
 from neuron_analyzer.model_util import NeuronLoader, StepConfig
 
@@ -112,7 +112,7 @@ def main() -> None:
             # load model
             model, _ = extractor.load_model_for_step(step)
             # initilize the analyzer class
-            geometry_analyzer = NeuronGeometricAnalyzer(
+            geometry_analyzer = WeightGeometricAnalyzer(
                 model=model,
                 layer_num=layer_num,
                 boost_neurons=boost_step_ablations[step],

@@ -27,6 +27,7 @@ class NeuronSelector:
         device: str,
         debug: bool,
         sel_longtail: bool = False,
+        sel_by_med: bool = False,
     ):
         """Initialize the NeuronSelector."""
         self.feather_path = feather_path
@@ -35,6 +36,7 @@ class NeuronSelector:
         self.effect = effect
         self.debug = debug
         self.sel_longtail = sel_longtail
+        self.sel_by_med = sel_by_med
         # only load the arguments when needing longtail
         if self.sel_longtail:
             self.unigram_analyzer = UnigramAnalyzer(model_name=tokenizer_name, device=device)
@@ -124,9 +126,12 @@ class NeuronSelector:
             final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
 
         # Rank neurons
-        ranked_neurons = final_df.sort_values(
-            by=["mediation_effect", "abs_kl_from_unigram_diff"], ascending=[False, False]
-        )
+        if self.sel_by_med:
+            ranked_neurons = final_df.sort_values(
+                by=["mediation_effect", "abs_kl_from_unigram_diff"], ascending=[False, False]
+            )
+        else:
+            ranked_neurons = final_df.sort_values(by="abs_kl_from_unigram_diff", ascending=False)
 
         # Define header dictionary
         header_dict = {
@@ -154,9 +159,12 @@ class NeuronSelector:
             final_df = final_df[final_df["delta_loss_post_ablation_with_frozen_unigram"] < 0]
 
         # Rank neurons
-        ranked_neurons = final_df.sort_values(
-            by=["mediation_effect", "abs_delta_loss_post_ablation_with_frozen_unigram"], ascending=[False, False]
-        )
+        if self.sel_by_med:
+            ranked_neurons = final_df.sort_values(
+                by=["mediation_effect", "abs_delta_loss_post_ablation_with_frozen_unigram"], ascending=[False, False]
+            )
+        else:
+            ranked_neurons = final_df.sort_values(by="abs_delta_loss_post_ablation", ascending=False)
 
         # Define header dictionary
         header_dict = {

@@ -153,14 +153,14 @@ class NeuronLoader:
 
     def load_neuron_dict(
         self,
-        file_path: Path,
+        file_path: Path | pd.DataFrame,
         key_col: str = "step",
         value_col: str = "top_neurons",
         random_base: bool = False,
         top_n: int = 0,
     ) -> tuple[dict[int, list[int]], int]:
         """Load a DataFrame and convert neuron values to integers."""
-        df = pd.read_csv(file_path)
+        df = pd.read_csv(file_path) if isinstance(file_path, Path) else file_path
         result = {}
         layer_num = 0
 

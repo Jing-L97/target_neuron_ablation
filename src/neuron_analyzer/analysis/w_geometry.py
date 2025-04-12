@@ -7,7 +7,7 @@ from scipy.linalg import subspace_angles
 # Neuron group subspace direction analysis
 
 
-class NeuronGeometricAnalyzer:
+class WeightGeometricAnalyzer:
     def __init__(self, model, layer_num: int, boost_neurons: list[int], suppress_neurons: list[int], device):
         """Initialize the analyzer with model and previously identified neuron sets."""
         self.model = model

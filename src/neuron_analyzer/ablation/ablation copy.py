@@ -39,120 +39,6 @@ def adjust_vectors_3dim(v, u, target_values):
     return adjusted_v
 
 
-def build_vector(ablation_mode: str, unigram_distrib, longtail_threshold):
-    """Build freq-related vectors."""
-    if ablation_mode == "longtail":
-        # Create long-tail token mask (1 for long-tail tokens, 0 for common tokens)
-        longtail_mask = (unigram_distrib < longtail_threshold).float()
-        logger.info(f"Number of long-tail tokens: {longtail_mask.sum().item()} out of {len(longtail_mask)}")
-
-        # Create token frequency vector focusing on long-tail tokens only
-        # Original token frequency vector from the unigram distribution
-        full_unigram_direction_vocab = unigram_distrib.log() - unigram_distrib.log().mean()
-        full_unigram_direction_vocab /= full_unigram_direction_vocab.norm()
-
-        # This makes the vector only consider contributions from long-tail tokens
-        unigram_direction_vocab = full_unigram_direction_vocab * longtail_mask
-        # Re-normalize to keep it a unit vector
-        if unigram_direction_vocab.norm() > 0:
-            unigram_direction_vocab /= unigram_direction_vocab.norm()
-    else:
-        # Standard frequency direction for regular mean ablation
-        unigram_direction_vocab = unigram_distrib.log() - unigram_distrib.log().mean()
-        unigram_direction_vocab /= unigram_direction_vocab.norm()
-        longtail_mask = None
-    return unigram_direction_vocab, longtail_mask
-
-
-def project_logits(logits, unigram_direction_vocab):
-    # get the value of the logits projected onto the b_U direction
-    unigram_projection_values = logits @ unigram_direction_vocab
-    return unigram_projection_values.squeeze()
-
-
-def project_neurons(
-    ablation_mode: str,
-    logits,
-    unigram_direction_vocab,
-    unigram_projection_values,
-    ablated_logits_chunk,
-    res_deltas_chunk,
-    longtail_mask,
-):
-    # If we're in long-tail mode, apply the mask
-    if ablation_mode == "longtail":
-        # Get the original logits to preserve for common tokens
-        original_logits = logits.repeat(res_deltas_chunk.shape[0], 1, 1)
-        # Create a binary mask for the vocabulary dimension
-        # 1 for long-tail tokens (to be modified), 0 for common tokens (to keep original)
-        vocab_mask = longtail_mask.unsqueeze(0).unsqueeze(0)  # Shape: 1 x 1 x vocab_size
-        # Apply the mask: use original_logits where mask is 0, use ablated_logits where mask is 1
-        ablated_logits_chunk = (1 - vocab_mask) * original_logits + vocab_mask * ablated_logits_chunk
-
-    # Adjust vectors to maintain unigram projections
-    if ablation_mode == "longtail":
-        # Use the long-tail-specific unigram direction
-        ablated_logits_with_frozen_unigram_chunk = adjust_vectors_3dim(
-            ablated_logits_chunk, unigram_direction_vocab, unigram_projection_values
-        )
-    else:
-        # Use the standard unigram direction
-        ablated_logits_with_frozen_unigram_chunk = adjust_vectors_3dim(
-            ablated_logits_chunk, unigram_direction_vocab, unigram_projection_values
-        )
-    return ablated_logits_with_frozen_unigram_chunk
-
-
-def compute_kl():
-    # compute KL divergence between the distribution ablated with frozen unigram and the og distribution
-    abl_logprobs_with_frozen_unigram = ablated_logits_with_frozen_unigram_chunk.log_softmax(dim=-1)
-
-    # compute KL divergence between the ablated distribution and the distribution from the unigram direction
-    kl_divergence_after_chunk = (
-        kl_div(abl_logprobs, log_unigram_distrib.expand_as(abl_logprobs), reduction="none", log_target=True)
-        .sum(axis=-1)
-        .cpu()
-        .numpy()
-    )
-
-    del abl_logprobs
-    kl_divergence_after.append(kl_divergence_after_chunk)
-
-    if ablation_mode == "longtail":
-        # For long-tail mode, compute KL divergence with focus on the long-tail tokens
-        masked_logprobs = abl_logprobs_with_frozen_unigram.clone()
-        masked_logprobs = masked_logprobs + (1 - longtail_mask).unsqueeze(0).unsqueeze(0) * -1e10
-        masked_logprobs = torch.nn.functional.log_softmax(masked_logprobs, dim=-1)
-        kl_divergence_after_frozen_unigram_chunk = (
-            kl_div(
-                masked_logprobs,
-                log_unigram_distrib.expand_as(masked_logprobs),
-                reduction="none",
-                log_target=True,
-            )
-            .sum(axis=-1)
-            .cpu()
-            .numpy()
-        )
-    else:
-        # Standard KL divergence for regular mean ablation
-        kl_divergence_after_frozen_unigram_chunk = (
-            kl_div(
-                abl_logprobs_with_frozen_unigram,
-                log_unigram_distrib.expand_as(abl_logprobs_with_frozen_unigram),
-                reduction="none",
-                log_target=True,
-            )
-            .sum(axis=-1)
-            .cpu()
-            .numpy()
-        )
-    del abl_logprobs_with_frozen_unigram
-    kl_divergence_after_frozen_unigram.append(kl_divergence_after_frozen_unigram_chunk)
-
-    del ablated_logits_with_frozen_unigram_chunk
-
-
 def mean_ablate_components(
     components_to_ablate=None,
     unigram_distrib=None,
@@ -183,7 +69,27 @@ def mean_ablate_components(
     )
 
     # This section is now handled in the ablation_mode conditional above
-    unigram_direction_vocab, longtail_mask = build_vector(ablation_mode, unigram_distrib, longtail_threshold)
+
+    if ablation_mode == "longtail":
+        # Create long-tail token mask (1 for long-tail tokens, 0 for common tokens)
+        longtail_mask = (unigram_distrib < longtail_threshold).float()
+        logger.info(f"Number of long-tail tokens: {longtail_mask.sum().item()} out of {len(longtail_mask)}")
+
+        # Create token frequency vector focusing on long-tail tokens only
+        # Original token frequency vector from the unigram distribution
+        full_unigram_direction_vocab = unigram_distrib.log() - unigram_distrib.log().mean()
+        full_unigram_direction_vocab /= full_unigram_direction_vocab.norm()
+
+        # Modified token frequency vector that zeros out common tokens
+        # This makes the vector only consider contributions from long-tail tokens
+        longtail_unigram_direction_vocab = full_unigram_direction_vocab * longtail_mask
+        # Re-normalize to keep it a unit vector
+        if longtail_unigram_direction_vocab.norm() > 0:
+            longtail_unigram_direction_vocab /= longtail_unigram_direction_vocab.norm()
+    else:
+        # Standard frequency direction for regular mean ablation
+        unigram_direction_vocab = unigram_distrib.log() - unigram_distrib.log().mean()
+        unigram_direction_vocab /= unigram_direction_vocab.norm()
 
     # get neuron indices
     neuron_indices = [int(neuron_name.split(".")[1]) for neuron_name in components_to_ablate]
@@ -208,7 +114,13 @@ def mean_ablate_components(
         assert len(rows) == len(tok_seq), f"len(rows) = {len(rows)}, len(tok_seq) = {len(tok_seq)}"
 
         # get the value of the logits projected onto the b_U direction
-        unigram_projection_values = project_logits(logits, unigram_direction_vocab)
+        if ablation_mode == "longtail":
+            # For long-tail mode, project onto our modified frequency direction
+            unigram_projection_values = logits @ longtail_unigram_direction_vocab
+        else:
+            # Regular projection for standard mean ablation
+            unigram_projection_values = logits @ unigram_direction_vocab
+        unigram_projection_values = unigram_projection_values.squeeze()
         previous_activation = cache[utils.get_act_name("post", layer_idx)][0, :, neuron_indices]
         del cache
         activation_deltas = activation_mean_values.to(previous_activation.device) - previous_activation
@@ -242,15 +154,29 @@ def mean_ablate_components(
             # Project to logit space
             ablated_logits_chunk = updated_res_stream_chunk @ model.W_U + model.b_U
 
-            ablated_logits_with_frozen_unigram_chunk = project_neurons(
-                ablation_mode,
-                logits,
-                unigram_direction_vocab,
-                unigram_projection_values,
-                ablated_logits_chunk,
-                res_deltas_chunk,
-                longtail_mask,
-            )
+            # If we're in long-tail mode, apply the mask
+            if ablation_mode == "longtail":
+                # Get the original logits to preserve for common tokens
+                original_logits = logits.repeat(res_deltas_chunk.shape[0], 1, 1)
+
+                # Create a binary mask for the vocabulary dimension
+                # 1 for long-tail tokens (to be modified), 0 for common tokens (to keep original)
+                vocab_mask = longtail_mask.unsqueeze(0).unsqueeze(0)  # Shape: 1 x 1 x vocab_size
+
+                # Apply the mask: use original_logits where mask is 0, use ablated_logits where mask is 1
+                ablated_logits_chunk = (1 - vocab_mask) * original_logits + vocab_mask * ablated_logits_chunk
+
+            # Adjust vectors to maintain unigram projections
+            if ablation_mode == "longtail":
+                # Use the long-tail-specific unigram direction
+                ablated_logits_with_frozen_unigram_chunk = adjust_vectors_3dim(
+                    ablated_logits_chunk, longtail_unigram_direction_vocab, unigram_projection_values
+                )
+            else:
+                # Use the standard unigram direction
+                ablated_logits_with_frozen_unigram_chunk = adjust_vectors_3dim(
+                    ablated_logits_chunk, unigram_direction_vocab, unigram_projection_values
+                )
 
             # compute loss for the chunk
             loss_post_ablation_chunk = model.loss_fn(
