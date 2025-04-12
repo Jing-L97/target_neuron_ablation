@@ -44,14 +44,7 @@ class NeuronSelector:
 
     def _prepare_dataframe(self) -> pd.DataFrame | None:
         """Common preprocessing for the DataFrame."""
-        self.final_df = pd.read_feather(self.feather_path)
-        logger.info(f"Analyzing file from {self.feather_path}")
-        if self.debug:
-            self.final_df = self.final_df.head(500)
-            logger.info("Entering debugging mode. Loading first 500 rows.")
-        # filter the df by stats
-        if self.sel_longtail:
-            self.final_df = self._filter_df()
+        self.final_df = self.load_and_filter_df()
         # Calculate delta loss metrics
         self.final_df["abs_delta_loss_post_ablation"] = np.abs(
             self.final_df["loss_post_ablation"] - self.final_df["loss"]
@@ -67,26 +60,33 @@ class NeuronSelector:
         # Group by neuron idx
         self.final_df = self.final_df.groupby("component_name").mean(numeric_only=True).reset_index()
 
-        # Calculate the mediation effect
-        self.final_df["mediation_effect"] = (
-            1
-            - self.final_df["abs_delta_loss_post_ablation_with_frozen_unigram"]
-            / self.final_df["abs_delta_loss_post_ablation"]
-        )
+        # Calculate the mediation effect if required
+        if self.sel_by_med:
+            self.final_df["mediation_effect"] = (
+                1
+                - self.final_df["abs_delta_loss_post_ablation_with_frozen_unigram"]
+                / self.final_df["abs_delta_loss_post_ablation"]
+            )
 
         return self.final_df
 
-    def _filter_df(self):
-        """Filter df by frequency."""
-        # get word freq
-        self.final_df["freq"] = self.final_df["str_tokens"].apply(self._extract_freq)
-        logger.info(f"{self.final_df.shape[0]} words before filtering")
-        # filter by the threshold
-        prob_dict = JsonProcessor.load_json(self.threshold_path)
-        prob_threshold = prob_dict["threshold_info"]["probability"]
-        print(self.final_df["freq"])
-        self.final_df = self.final_df[self.final_df["freq"] < prob_threshold]
-        logger.info(f"{self.final_df.shape[0]} words after filtering.")
+    def load_and_filter_df(self):
+        """Load and filter df by frequency if required."""
+        self.final_df = pd.read_feather(self.feather_path)
+        logger.info(f"Analyzing file from {self.feather_path}")
+        if self.debug:
+            self.final_df = self.final_df.head(500)
+            logger.info("Entering debugging mode. Loading first 500 rows.")
+        # filter the df by stats
+        if self.sel_longtail:
+            # get word freq
+            self.final_df["freq"] = self.final_df["str_tokens"].apply(self._extract_freq)
+            logger.info(f"{self.final_df.shape[0]} words before filtering")
+            # filter by the threshold
+            prob_dict = JsonProcessor.load_json(self.threshold_path)
+            prob_threshold = prob_dict["threshold_info"]["probability"]
+            self.final_df = self.final_df[self.final_df["freq"] < prob_threshold]
+            logger.info(f"{self.final_df.shape[0]} words after filtering.")
         return self.final_df
 
     def _extract_freq(self, word):
@@ -130,17 +130,23 @@ class NeuronSelector:
             ranked_neurons = final_df.sort_values(
                 by=["mediation_effect", "abs_kl_from_unigram_diff"], ascending=[False, False]
             )
+            # Define header dictionary
+            header_dict = {
+                "component_name": "top_neurons",
+                "mediation_effect": "med_effect",
+                "kl_from_unigram_diff": "kl_diff",
+                "delta_loss_post_ablation": "delta_loss_post",
+                "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
+            }
         else:
             ranked_neurons = final_df.sort_values(by="abs_kl_from_unigram_diff", ascending=False)
-
-        # Define header dictionary
-        header_dict = {
-            "component_name": "top_neurons",
-            "mediation_effect": "med_effect",
-            "kl_from_unigram_diff": "kl_diff",
-            "delta_loss_post_ablation": "delta_loss_post",
-            "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
-        }
+            # Define header dictionary
+            header_dict = {
+                "component_name": "top_neurons",
+                "kl_from_unigram_diff": "kl_diff",
+                "delta_loss_post_ablation": "delta_loss_post",
+                "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
+            }
 
         return self._create_stats_dataframe(ranked_neurons, header_dict)
 
@@ -163,15 +169,19 @@ class NeuronSelector:
             ranked_neurons = final_df.sort_values(
                 by=["mediation_effect", "abs_delta_loss_post_ablation_with_frozen_unigram"], ascending=[False, False]
             )
+            # Define header dictionary
+            header_dict = {
+                "component_name": "top_neurons",
+                "mediation_effect": "med_effect",
+                "delta_loss_post_ablation": "delta_loss_post",
+                "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
+            }
         else:
             ranked_neurons = final_df.sort_values(by="abs_delta_loss_post_ablation", ascending=False)
-
-        # Define header dictionary
-        header_dict = {
-            "component_name": "top_neurons",
-            "mediation_effect": "med_effect",
-            "delta_loss_post_ablation": "delta_loss_post",
-            "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
-        }
-
+            # Define header dictionary
+            header_dict = {
+                "component_name": "top_neurons",
+                "delta_loss_post_ablation": "delta_loss_post",
+                "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
+            }
         return self._create_stats_dataframe(ranked_neurons, header_dict)

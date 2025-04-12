@@ -8,13 +8,16 @@ from sklearn.decomposition import PCA
 
 
 class ActivationGeometricAnalyzer:
-    """Analyzes the geometric properties of neuron activations to determine if special neuron groups"""
+    """Analyzes the geometric properties of neuron activations to determine if special neuron groups
+    work synergistically in a geometric sense using the context-centric vector approach.
+    """
 
     def __init__(
         self,
         activation_data: pd.DataFrame,
         special_neuron_indices: list[int],
         activation_column: str = "activation",
+        token_column: str = "str_tokens",
         context_column: str = "context",
         component_column: str = "component_name",
         num_random_groups: int = 1,
@@ -23,12 +26,18 @@ class ActivationGeometricAnalyzer:
         self.data = activation_data
         self.special_neuron_indices = special_neuron_indices
         self.activation_column = activation_column
+        self.token_column = token_column
         self.context_column = context_column
         self.component_column = component_column
         self.num_random_groups = num_random_groups
 
-        # Extract unique contexts and components
-        self.contexts = self.data[self.context_column].unique()
+        # Create a unique token-context identifier
+        self.data["token_context_id"] = (
+            self.data[token_column].astype(str) + "_" + self.data[context_column].astype(str)
+        )
+
+        # Extract unique token-context pairs and components
+        self.token_contexts = self.data["token_context_id"].unique()
         self.all_neuron_indices = self.data[self.component_column].unique()
 
         # Check if special neuron indices are valid
@@ -48,13 +57,21 @@ class ActivationGeometricAnalyzer:
         self.comparative_results = {}
 
     def _create_activation_matrix(self, neuron_indices: list[int]) -> np.ndarray:
-        """Create an activation matrix where rows are contexts and columns are neurons."""
+        """Create an activation matrix where rows are token-context pairs and columns are neurons.
+
+        Args:
+            neuron_indices: List of neuron indices to include in the matrix
+
+        Returns:
+            Activation matrix with shape [n_token_contexts, n_neurons]
+
+        """
         # Filter data to only include specified neurons
         filtered_data = self.data[self.data[self.component_column].isin(neuron_indices)]
 
-        # Pivot to create matrix with contexts as rows and neurons as columns
+        # Pivot to create matrix with token-context pairs as rows and neurons as columns
         pivot_table = filtered_data.pivot_table(
-            index=self.context_column,
+            index="token_context_id",
             columns=self.component_column,
             values=self.activation_column,
             aggfunc="first",  # In case of duplicates, take the first value
@@ -65,8 +82,33 @@ class ActivationGeometricAnalyzer:
 
         return pivot_table.values
 
+    def get_token_groups(self):
+        """Group token-context IDs by their token value."""
+        token_groups = {}
+        for token_context in self.token_contexts:
+            token = token_context.split("_")[0]
+            if token not in token_groups:
+                token_groups[token] = []
+            token_groups[token].append(token_context)
+        return token_groups
+
+    def get_context_groups(self):
+        """Group token-context IDs by their context value."""
+        context_groups = {}
+        for token_context in self.token_contexts:
+            context = token_context.split("_")[1]
+            if context not in context_groups:
+                context_groups[context] = []
+            context_groups[context].append(token_context)
+        return context_groups
+
     def _generate_random_groups(self) -> list[np.ndarray]:
-        """Generate random neuron groups of the same size as the special group for comparison."""
+        """Generate random neuron groups of the same size as the special group for comparison.
+
+        Returns:
+            List of activation matrices for random neuron groups
+
+        """
         group_size = len(self.special_neuron_indices)
         non_special_indices = [idx for idx in self.all_neuron_indices if idx not in self.special_neuron_indices]
 
@@ -84,7 +126,16 @@ class ActivationGeometricAnalyzer:
         return random_groups
 
     def analyze_dimensionality(self, variance_threshold: float = 0.95) -> dict[str, Any]:
-        """Analyze the dimensionality of the neuron group's activation space."""
+        """Analyze the dimensionality of the neuron group's activation space.
+
+        Args:
+            variance_threshold: Threshold for cumulative explained variance to determine
+                                effective dimensionality (default: 0.95 or 95%)
+
+        Returns:
+            Dictionary containing dimensionality analysis results
+
+        """
         # Normalize the activation matrix
         normalized_matrix = self.special_activation_matrix
         if normalized_matrix.shape[0] > 0 and normalized_matrix.shape[1] > 0:
@@ -142,8 +193,13 @@ class ActivationGeometricAnalyzer:
         return results
 
     def analyze_orthogonality(self) -> dict[str, Any]:
-        """Analyze the orthogonality/alignment between neurons in the special group."""
-        # Transpose to get neuron x context matrix for analyzing neuron relationships
+        """Analyze the orthogonality/alignment between neurons in the special group.
+
+        Returns:
+            Dictionary containing orthogonality analysis results
+
+        """
+        # Transpose to get neuron x token-context matrix for analyzing neuron relationships
         neuron_matrix = self.special_activation_matrix.T
 
         # Normalize neuron vectors
@@ -223,15 +279,26 @@ class ActivationGeometricAnalyzer:
         self.orthogonality_results = results
         return results
 
-    def analyze_coactivation_hierarchical(self):
+    def analyze_coactivation(self) -> dict[str, Any]:
+        """Analyze coactivation patterns among neurons in the special group using
+        hierarchical clustering.
+
+        Returns:
+            Dictionary containing coactivation analysis results
+
+        """
         # Transpose to get neurons as rows
         neuron_matrix = self.special_activation_matrix.T
+
         # Calculate correlation matrix
         correlation_matrix = np.corrcoef(neuron_matrix)
+
         # Convert correlations to distances (highly correlated neurons = small distance)
         distance_matrix = 1 - np.abs(correlation_matrix)
+
         # Perform hierarchical clustering
         Z = linkage(distance_matrix[np.triu_indices(len(distance_matrix), k=1)], method="ward")
+
         # Get clusters at different thresholds
         clusters_tight = fcluster(Z, t=3, criterion="distance")
         clusters_medium = fcluster(Z, t=5, criterion="distance")
@@ -242,20 +309,47 @@ class ActivationGeometricAnalyzer:
         n_clusters_medium = len(np.unique(clusters_medium))
         n_clusters_loose = len(np.unique(clusters_loose))
 
+        # Extract upper triangle for distribution analysis
+        upper_indices = np.triu_indices_from(correlation_matrix, k=1)
+        correlation_distribution = correlation_matrix[upper_indices]
+
+        # Calculate correlation statistics
+        mean_correlation = np.mean(correlation_distribution)
+        median_correlation = np.median(correlation_distribution)
+        positive_correlation = np.mean(correlation_distribution > 0) * 100
+        strong_correlation = np.mean(np.abs(correlation_distribution) > 0.5) * 100
+
         # Do the same for random groups for comparison
         random_n_clusters_medium = []
+        random_mean_correlations = []
+
         for random_matrix in self.random_groups:
             r_neuron_matrix = random_matrix.T
             r_corr = np.corrcoef(r_neuron_matrix)
             r_dist = 1 - np.abs(r_corr)
+
+            # Hierarchical clustering
             r_Z = linkage(r_dist[np.triu_indices(len(r_dist), k=1)], method="ward")
             r_clusters = fcluster(r_Z, t=5, criterion="distance")
             random_n_clusters_medium.append(len(np.unique(r_clusters)))
 
-        # Statistical comparison
-        tstat, pvalue = ttest_ind([n_clusters_medium], random_n_clusters_medium, equal_var=False)
+            # Correlation statistics
+            r_upper = r_corr[np.triu_indices_from(r_corr, k=1)]
+            random_mean_correlations.append(np.mean(r_upper))
 
-        return {
+        # Statistical comparison for clustering
+        tstat_clust, pvalue_clust = ttest_ind([n_clusters_medium], random_n_clusters_medium, equal_var=False)
+
+        # Statistical comparison for correlation
+        tstat_corr, pvalue_corr = ttest_ind([mean_correlation], random_mean_correlations, equal_var=False)
+
+        results = {
+            "correlation_matrix": correlation_matrix,
+            "mean_correlation": mean_correlation,
+            "median_correlation": median_correlation,
+            "pct_positive_correlation": positive_correlation,
+            "pct_strong_correlation": strong_correlation,
+            "correlation_distribution": correlation_distribution,
             "linkage": Z,
             "clusters_tight": clusters_tight,
             "clusters_medium": clusters_medium,
@@ -264,16 +358,33 @@ class ActivationGeometricAnalyzer:
             "n_clusters_medium": n_clusters_medium,
             "n_clusters_loose": n_clusters_loose,
             "random_n_clusters_medium": random_n_clusters_medium,
-            "ttest_stat": tstat,
-            "ttest_p": pvalue,
-            "is_significant": pvalue < 0.05,
-            "comparison": "fewer clusters"
-            if n_clusters_medium < np.mean(random_n_clusters_medium)
-            else "more clusters",
+            "random_mean_correlations": random_mean_correlations,
+            "clustering_ttest": {
+                "statistic": tstat_clust,
+                "pvalue": pvalue_clust,
+                "is_significant": pvalue_clust < 0.05,
+                "comparison": "fewer clusters"
+                if n_clusters_medium < np.mean(random_n_clusters_medium)
+                else "more clusters",
+            },
+            "correlation_ttest": {
+                "statistic": tstat_corr,
+                "pvalue": pvalue_corr,
+                "is_significant": pvalue_corr < 0.05,
+                "comparison": "higher" if mean_correlation > np.mean(random_mean_correlations) else "lower",
+            },
         }
 
+        self.coactivation_results = results
+        return results
+
     def run_all_analyses(self) -> dict[str, dict[str, Any]]:
-        """Run all geometric analyses at once."""
+        """Run all geometric analyses at once.
+
+        Returns:
+            Dictionary containing all analysis results
+
+        """
         self.analyze_dimensionality()
         self.analyze_orthogonality()
         self.analyze_coactivation()
@@ -282,6 +393,8 @@ class ActivationGeometricAnalyzer:
             "dimensionality": self.dimensionality_results,
             "orthogonality": self.orthogonality_results,
             "coactivation": self.coactivation_results,
+            "special_neuron_indices": self.special_neuron_indices,
+            "random_indices": self.random_groups,
         }
 
         # Compile summary findings
@@ -334,6 +447,23 @@ class ActivationGeometricAnalyzer:
         else:
             summary["coactivation"] = (
                 "The neuron group's coactivation patterns are not significantly different from random groups."
+            )
+
+        # Add clustering findings
+        if self.coactivation_results["clustering_ttest"]["is_significant"]:
+            if self.coactivation_results["clustering_ttest"]["comparison"] == "fewer clusters":
+                summary["clustering"] = (
+                    "The neuron group forms significantly fewer functional clusters than random groups, "
+                    "suggesting more coordinated organization."
+                )
+            else:
+                summary["clustering"] = (
+                    "The neuron group forms significantly more functional clusters than random groups, "
+                    "suggesting more specialized subgroups."
+                )
+        else:
+            summary["clustering"] = (
+                "The neuron group's clustering structure is not significantly different from random groups."
             )
 
         combined_results["summary"] = summary
