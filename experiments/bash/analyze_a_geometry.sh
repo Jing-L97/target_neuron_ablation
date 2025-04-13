@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=med_geometry
+#SBATCH --job-name=KL_geometry
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --exclude=puck5
@@ -7,8 +7,8 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=10
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/med_geometry_%a.log
-#SBATCH --array=0-23
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/KL_geometry_%a.log
+#SBATCH --array=0-11
 
 # Define constants
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/analysis"
@@ -34,7 +34,6 @@ TOP_NS=(
 
 HEURISTICS=(
   "KL"
-  "prob"
 )
 
 # Calculate total combinations
@@ -80,7 +79,6 @@ python "$SCRIPT_ROOT/analyze_activation_geometry.py" \
   --effect "$EFFECT" \
   --vector "$VECTOR" \
   --top_n "$TOP_N" \
-  --heuristic  "$HEURISTIC" \
-  --sel_by_med "$Sel_by_Med"
+  --heuristic  "$HEURISTIC" 
 
 echo "Analysis complete for combination $SLURM_ARRAY_TASK_ID"

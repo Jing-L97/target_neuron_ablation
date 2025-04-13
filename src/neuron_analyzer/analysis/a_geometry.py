@@ -55,7 +55,7 @@ class ActivationGeometricAnalyzer:
         self.special_activation_tensor = torch.tensor(self.special_activation_matrix, dtype=self.dtype).to(self.device)
 
         # Generate random groups but keep them on CPU until needed
-        self.random_groups = self._generate_random_groups()
+        self.random_groups, self.random_indices = self._generate_random_groups()
         # Don't preload all random groups to GPU
         self.random_groups_tensors = None
 
@@ -128,7 +128,7 @@ class ActivationGeometricAnalyzer:
             random_activation_matrix = self._create_activation_matrix(random_indices)
             random_groups.append(random_activation_matrix)
 
-        return random_groups
+        return random_groups, random_indices
 
     def _safe_ttest(self, value: float, comparison_values: list[float]) -> tuple[float, float, bool, str]:
         """Safely perform a t-test handling edge cases and potential errors."""
@@ -591,7 +591,7 @@ class ActivationGeometricAnalyzer:
             )
 
         # record indices
-        neuron_indices = {"special": self.special_neuron_indices, "random": self.random_groups}
+        neuron_indices = {"special": self.special_neuron_indices, "random": self.random_indices}
         # Create combined results without including large matrices
         combined_results = {
             "dimensionality": {

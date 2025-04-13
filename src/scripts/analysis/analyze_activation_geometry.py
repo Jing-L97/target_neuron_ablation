@@ -128,7 +128,7 @@ def main() -> None:
                 final_results[step.name] = results
                 # assign col headers
                 JsonProcessor.save_json(final_results, save_path)
-                logger.info(f"Finish processing step {step}. Save file to {save_path}")
+                logger.info(f"Save file to {save_path}")
 
 
 if __name__ == "__main__":

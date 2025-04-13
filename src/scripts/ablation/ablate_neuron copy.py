@@ -24,7 +24,7 @@ from neuron_analyzer.ablation.abl_util import (
     get_entropy_activation_df,
     load_model_from_tl_name,
 )
-from neuron_analyzer.ablation.ablation import ModelAblationAnalyzer
+from neuron_analyzer.ablation.ablation import mean_ablate_components
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
 from neuron_analyzer.load_util import JsonProcessor, load_unigram
 from neuron_analyzer.model_util import StepConfig
@@ -149,17 +149,14 @@ class NeuronAblationProcessor:
         # Ablate the dimensions
         model.set_use_attn_result(False)
 
-        analyzer = ModelAblationAnalyzer(
+        results = mean_ablate_components(
             components_to_ablate=all_neurons,
-            model=model,
-            device=self.device,
-            unigram_distrib=unigram_distrib,
             tokenized_data=tokenized_data,
             entropy_df=entropy_df,
-        )
-
-        results = analyzer.mean_ablate_components(
+            model=model,
             k=self.args.k,
+            device=self.device,
+            unigram_distrib=unigram_distrib,
             ablation_mode=self.args.ablation_mode,
             longtail_threshold=longtail_threshold,
         )
