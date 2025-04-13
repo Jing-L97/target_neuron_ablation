@@ -28,14 +28,42 @@ class JsonProcessor:
     @staticmethod
     def convert_numpy_types(obj: t.Any) -> t.Any:
         """Recursively convert NumPy types in a nested structure to standard Python types."""
-        if isinstance(obj, (np.floating, np.float32, np.float64)):
+        # Handle None
+        if obj is None:
+            return None
+
+        # Handle NumPy arrays
+        if isinstance(obj, np.ndarray):
+            return JsonProcessor.convert_numpy_types(obj.tolist())
+
+        # Handle NumPy scalars
+        if isinstance(obj, (np.floating, np.float16, np.float32, np.float64)):
             return float(obj)
-        if isinstance(obj, (np.integer, np.int32, np.int64)):
+        if isinstance(
+            obj, (np.integer, np.int8, np.int16, np.int32, np.int64, np.uint8, np.uint16, np.uint32, np.uint64)
+        ):
             return int(obj)
+        if isinstance(obj, np.bool_):
+            return bool(obj)
+        if isinstance(obj, np.complex128):
+            return complex(obj)
+
+        # Handle Path objects
+        if isinstance(obj, Path):
+            return str(obj)
+
+        # Handle dictionaries
         if isinstance(obj, dict):
-            return {k: JsonProcessor.convert_numpy_types(v) for k, v in obj.items()}
+            return {JsonProcessor.convert_numpy_types(k): JsonProcessor.convert_numpy_types(v) for k, v in obj.items()}
+
+        # Handle lists and tuples
         if isinstance(obj, (list, tuple)):
             return [JsonProcessor.convert_numpy_types(item) for item in obj]
+
+        # Handle sets by converting to list
+        if isinstance(obj, set):
+            return [JsonProcessor.convert_numpy_types(item) for item in obj]
+        # Return the object as is if no conversion is needed
         return obj
 
     @classmethod

@@ -31,6 +31,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
+    parser.add_argument("--resume", action="store_true", help="Check existing file and resume when setting this")
     parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
     parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
     parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
@@ -70,7 +71,6 @@ def get_neuron_index(args, feather_path: Path, step, abl_path: Path, device: str
     neuron_loader = NeuronLoader()
     neuron_value = frame.head(1)["top_neurons"].item()
     special_neuron_indices, _ = neuron_loader.extract_neurons(neuron_value, args.top_n)
-    logger.info(f"{len(special_neuron_indices)} neurons have been loaded.")
     return activation_data, special_neuron_indices
 
 
@@ -96,7 +96,7 @@ def main() -> None:
         / f"{args.data_range_end}_{args.top_n}.json"
     )
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    if save_path.is_file():
+    if save_path.is_file() and args.resume:
         logger.info(f"{save_path} already exists, skip!")
     else:
         final_results = {}
@@ -104,7 +104,6 @@ def main() -> None:
             feather_path = abl_path / str(step) / str(args.data_range_end) / f"k{args.k}.feather"
             if feather_path.is_file():
                 activation_data, special_neuron_indices = get_neuron_index(args, feather_path, step, abl_path, device)
-
                 # initilize the class
                 geometry_analyzer = ActivationGeometricAnalyzer(
                     activation_data=activation_data,
@@ -114,12 +113,13 @@ def main() -> None:
                     context_column="context",
                     component_column="component_name",
                     num_random_groups=1,
+                    device=device,
                 )
                 results = geometry_analyzer.run_all_analyses()
-                final_results[step] = results
-        # assign col headers
-        JsonProcessor.save_json(final_results, save_path)
-        logger.info(f"Save file to {save_path}")
+                final_results[step.name] = results
+                # assign col headers
+                JsonProcessor.save_json(final_results, save_path)
+                logger.info(f"Finish processing step {step}. Save file to {save_path}")
 
 
 if __name__ == "__main__":

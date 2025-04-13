@@ -1,14 +1,19 @@
+import gc
+import logging
 from typing import Any
 
 import numpy as np
 import pandas as pd
+import torch
 from scipy.cluster.hierarchy import fcluster, linkage
 from scipy.stats import ttest_ind
 from sklearn.decomposition import PCA
 
+logger = logging.getLogger(__name__)
+
 
 class ActivationGeometricAnalyzer:
-    """Analyzes the geometric properties of neuron activations."""
+    """Analyzes the geometric properties of neuron activations with optimized memory usage."""
 
     def __init__(
         self,
@@ -19,8 +24,15 @@ class ActivationGeometricAnalyzer:
         context_column: str = "context",
         component_column: str = "component_name",
         num_random_groups: int = 1,
+        device: str | None = None,
+        use_mixed_precision: bool = True,
     ):
         """Initialize the analyzer with activation data and special neuron indices."""
+        self.device = device
+        self.use_mixed_precision = use_mixed_precision
+        self.dtype = torch.float16 if self.use_mixed_precision else torch.float32
+        logger.info(f"Using device: {self.device}, Mixed precision: {self.use_mixed_precision}")
+
         self.data = activation_data
         self.special_neuron_indices = special_neuron_indices
         self.activation_column = activation_column
@@ -38,17 +50,31 @@ class ActivationGeometricAnalyzer:
         self.token_contexts = self.data["token_context_id"].unique()
         self.all_neuron_indices = self.data[self.component_column].unique()
 
-        # Create activation matrices
+        # Create activation matrices and convert to PyTorch tensors on the specified device
         self.special_activation_matrix = self._create_activation_matrix(special_neuron_indices)
+        self.special_activation_tensor = torch.tensor(self.special_activation_matrix, dtype=self.dtype).to(self.device)
 
-        # Generate random groups for comparison
+        # Generate random groups but keep them on CPU until needed
         self.random_groups = self._generate_random_groups()
+        # Don't preload all random groups to GPU
+        self.random_groups_tensors = None
+
+        # Pre-compute reusable masks for upper triangular operations
+        n_special_neurons = len(self.special_neuron_indices)
+        if n_special_neurons > 0:
+            self.triu_mask = torch.triu(
+                torch.ones(n_special_neurons, n_special_neurons, device=self.device), diagonal=1
+            ).bool()
 
         # Results storage
         self.dimensionality_results = {}
         self.orthogonality_results = {}
         self.coactivation_results = {}
         self.comparative_results = {}
+
+    def _to_numpy(self, tensor: torch.Tensor) -> np.ndarray:
+        """Convert a PyTorch tensor to NumPy array."""
+        return tensor.detach().cpu().numpy()
 
     def _create_activation_matrix(self, neuron_indices: list[int]) -> np.ndarray:
         """Create an activation matrix where rows are token-context pairs and columns are neurons."""
@@ -62,13 +88,11 @@ class ActivationGeometricAnalyzer:
             values=self.activation_column,
             aggfunc="first",  # In case of duplicates, take the first value
         )
-
         # Handle missing values if any
         pivot_table = pivot_table.fillna(0)
-
         return pivot_table.values
 
-    def get_token_groups(self):
+    def get_token_groups(self) -> dict[str, list[str]]:
         """Group token-context IDs by their token value."""
         token_groups = {}
         for token_context in self.token_contexts:
@@ -78,7 +102,7 @@ class ActivationGeometricAnalyzer:
             token_groups[token].append(token_context)
         return token_groups
 
-    def get_context_groups(self):
+    def get_context_groups(self) -> dict[str, list[str]]:
         """Group token-context IDs by their context value."""
         context_groups = {}
         for token_context in self.token_contexts:
@@ -89,12 +113,7 @@ class ActivationGeometricAnalyzer:
         return context_groups
 
     def _generate_random_groups(self) -> list[np.ndarray]:
-        """Generate random neuron groups of the same size as the special group for comparison.
-
-        Returns:
-            List of activation matrices for random neuron groups
-
-        """
+        """Generate random neuron groups of the same size as the special group for comparison."""
         group_size = len(self.special_neuron_indices)
         non_special_indices = [idx for idx in self.all_neuron_indices if idx not in self.special_neuron_indices]
 
@@ -111,17 +130,52 @@ class ActivationGeometricAnalyzer:
 
         return random_groups
 
+    def _safe_ttest(self, value: float, comparison_values: list[float]) -> tuple[float, float, bool, str]:
+        """Safely perform a t-test handling edge cases and potential errors."""
+        if not comparison_values:
+            return 0.0, 1.0, False, "unknown"
+
+        # If all values are identical, no statistical test is needed
+        if all(v == comparison_values[0] for v in comparison_values) and value == comparison_values[0]:
+            return 0.0, 1.0, False, "equal"
+
+        try:
+            # Use one-sample t-test against the mean
+            mean_comparison = np.mean(comparison_values)
+            std_comparison = np.std(comparison_values)
+
+            # If standard deviation is zero, we can't perform t-test
+            if std_comparison == 0:
+                return 0.0, 1.0, False, "higher" if value > mean_comparison else "lower"
+
+            # Use independent t-test with proper handling
+            tstat, pvalue = ttest_ind([value], comparison_values, equal_var=False)
+
+            # Determine the direction of the difference
+            comparison = "higher" if value > mean_comparison else "lower"
+
+            return float(tstat), float(pvalue), bool(pvalue < 0.05), comparison
+
+        except Exception as e:
+            logger.warning(f"Error performing t-test: {e}")
+            return 0.0, 1.0, False, "unknown"
+
     def analyze_dimensionality(self, variance_threshold: float = 0.95) -> dict[str, Any]:
-        """Analyze the dimensionality of the neuron group's activation space."""
-        # Normalize the activation matrix
-        normalized_matrix = self.special_activation_matrix
-        if normalized_matrix.shape[0] > 0 and normalized_matrix.shape[1] > 0:
+        """Analyze the dimensionality of the neuron group's activation space.
+        Uses GPU acceleration for matrix operations and normalizations.
+        """
+        # Normalize the activation tensor
+        tensor = self.special_activation_tensor
+        if tensor.shape[0] > 0 and tensor.shape[1] > 0:
             # Calculate mean and std for each neuron (column)
-            means = np.mean(normalized_matrix, axis=0)
-            stds = np.std(normalized_matrix, axis=0)
+            means = torch.mean(tensor, dim=0)
+            stds = torch.std(tensor, dim=0)
             # Replace zero stds with 1 to avoid division by zero
             stds[stds == 0] = 1.0
-            normalized_matrix = (normalized_matrix - means) / stds
+            normalized_tensor = (tensor - means) / stds
+
+        # Convert to CPU for PCA (scikit-learn doesn't support GPU)
+        normalized_matrix = self._to_numpy(normalized_tensor)
 
         # Run PCA
         pca = PCA()
@@ -134,135 +188,184 @@ class ActivationGeometricAnalyzer:
 
         # Calculate random group dimensionality for comparison
         random_dims = []
-        for random_matrix in self.random_groups:
-            # Normalize
-            r_normalized = random_matrix
-            if r_normalized.shape[0] > 0 and r_normalized.shape[1] > 0:
-                r_means = np.mean(r_normalized, axis=0)
-                r_stds = np.std(r_normalized, axis=0)
-                r_stds[r_stds == 0] = 1.0
-                r_normalized = (r_normalized - r_means) / r_stds
 
-            r_pca = PCA()
-            r_pca.fit(r_normalized)
-            r_cumulative = np.cumsum(r_pca.explained_variance_ratio_)
-            r_effective_dim = np.argmax(r_cumulative >= variance_threshold) + 1
-            random_dims.append(r_effective_dim)
+        # Process random groups one at a time to save memory
+        for i in range(self.num_random_groups):
+            # Create tensor on-demand
+            random_tensor = torch.tensor(self.random_groups[i], dtype=self.dtype).to(self.device)
+
+            # Normalize
+            if random_tensor.shape[0] > 0 and random_tensor.shape[1] > 0:
+                r_means = torch.mean(random_tensor, dim=0)
+                r_stds = torch.std(random_tensor, dim=0)
+                r_stds[r_stds == 0] = 1.0
+                r_normalized_tensor = (random_tensor - r_means) / r_stds
+
+                # Convert to CPU for PCA
+                r_normalized = self._to_numpy(r_normalized_tensor)
+
+                # Free up GPU memory
+                del r_normalized_tensor
+
+                r_pca = PCA()
+                r_pca.fit(r_normalized)
+                r_cumulative = np.cumsum(r_pca.explained_variance_ratio_)
+                r_effective_dim = np.argmax(r_cumulative >= variance_threshold) + 1
+                random_dims.append(r_effective_dim)
+
+            # Free GPU memory
+            del random_tensor
+            torch.cuda.empty_cache()
 
         # Statistical comparison
-        tstat, pvalue = ttest_ind([effective_dim], random_dims, equal_var=False)
+        tstat, pvalue, is_significant, comparison = self._safe_ttest(effective_dim, random_dims)
 
         results = {
-            "effective_dim": effective_dim,
+            "effective_dim": int(effective_dim),
             "total_dim": len(self.special_neuron_indices),
-            "dim_prop": effective_dim / len(self.special_neuron_indices),
+            "dim_prop": float(effective_dim / len(self.special_neuron_indices)),
             "explained_variance_ratio": explained_variance_ratio,
             "cumulative_variance": cumulative_variance,
             "random_effective_dim": random_dims,
-            "random_mean_dim": np.mean(random_dims),
-            "ttest_stat": tstat,
-            "ttest_p": pvalue,
-            "is_significantly_different": pvalue < 0.05,
-            "comparison": "lower" if effective_dim < np.mean(random_dims) else "higher",
+            "random_mean_dim": float(np.mean(random_dims)),
+            "ttest_stat": float(tstat),
+            "ttest_p": float(pvalue),
+            "is_significantly_different": bool(is_significant),
+            "comparison": comparison,
         }
 
         self.dimensionality_results = results
+
+        # Clear some memory
+        torch.cuda.empty_cache()
+
         return results
 
     def analyze_orthogonality(self) -> dict[str, Any]:
         """Analyze the orthogonality/alignment between neurons in the special group."""
-        # Transpose to get neuron x token-context matrix for analyzing neuron relationships
-        neuron_matrix = self.special_activation_matrix.T
+        # Transpose to get neuron x token-context matrix
+        neuron_tensor = self.special_activation_tensor.t()
 
         # Normalize neuron vectors
-        normalized_neurons = neuron_matrix.copy()
-        norms = np.linalg.norm(normalized_neurons, axis=1, keepdims=True)
+        norms = torch.norm(neuron_tensor, dim=1, keepdim=True)
         norms[norms == 0] = 1.0  # Avoid division by zero
-        normalized_neurons = normalized_neurons / norms
+        normalized_neurons = neuron_tensor / norms
 
-        # Compute cosine similarity matrix (inner products of normalized vectors)
-        cosine_similarity = normalized_neurons @ normalized_neurons.T
+        # Compute cosine similarity matrix
+        cosine_similarity = torch.mm(normalized_neurons, normalized_neurons.t())
 
-        # Extract upper triangle (excluding diagonal) for distribution analysis
-        upper_indices = np.triu_indices_from(cosine_similarity, k=1)
-        similarity_distribution = cosine_similarity[upper_indices]
+        # Extract upper triangle (excluding diagonal) using pre-computed mask
+        similarity_distribution = cosine_similarity[self.triu_mask]
 
         # Calculate statistics
-        mean_similarity = np.mean(similarity_distribution)
-        median_similarity = np.median(similarity_distribution)
-        max_similarity = np.max(similarity_distribution)
-        min_similarity = np.min(similarity_distribution)
+        mean_similarity = torch.mean(similarity_distribution).item()
+        median_similarity = torch.median(similarity_distribution).item()
+        max_similarity = torch.max(similarity_distribution).item()
+        min_similarity = torch.min(similarity_distribution).item()
 
         # Calculate angle distribution (in degrees)
-        angle_distribution = np.degrees(np.arccos(np.clip(similarity_distribution, -1.0, 1.0)))
-        mean_angle = np.mean(angle_distribution)
+        angle_distribution = torch.acos(torch.clamp(similarity_distribution, -1.0, 1.0)) * (180 / np.pi)
+        mean_angle = torch.mean(angle_distribution).item()
 
         # Calculate orthogonality measures
-        near_orthogonal = np.mean((angle_distribution >= 80) & (angle_distribution <= 100)) * 100
+        near_orthogonal = torch.mean(((angle_distribution >= 80) & (angle_distribution <= 100)).float()).item() * 100
 
         # Analyze random groups for comparison
         random_mean_similarities = []
         random_near_orthogonal = []
 
-        for random_matrix in self.random_groups:
-            r_neuron_matrix = random_matrix.T
-            r_normalized = r_neuron_matrix.copy()
-            r_norms = np.linalg.norm(r_normalized, axis=1, keepdims=True)
+        # Process random groups sequentially to save memory
+        for i in range(self.num_random_groups):
+            random_tensor = torch.tensor(self.random_groups[i], dtype=self.dtype).to(self.device)
+            r_neuron_tensor = random_tensor.t()
+
+            r_norms = torch.norm(r_neuron_tensor, dim=1, keepdim=True)
             r_norms[r_norms == 0] = 1.0
-            r_normalized = r_normalized / r_norms
+            r_normalized = r_neuron_tensor / r_norms
 
-            r_cosine = r_normalized @ r_normalized.T
-            r_upper = r_cosine[np.triu_indices_from(r_cosine, k=1)]
-            r_angles = np.degrees(np.arccos(np.clip(r_upper, -1.0, 1.0)))
+            r_cosine = torch.mm(r_normalized, r_normalized.t())
+            r_upper = r_cosine[self.triu_mask]
+            r_angles = torch.acos(torch.clamp(r_upper, -1.0, 1.0)) * (180 / np.pi)
 
-            random_mean_similarities.append(np.mean(r_upper))
-            random_near_orthogonal.append(np.mean((r_angles >= 80) & (r_angles <= 100)) * 100)
+            random_mean_similarities.append(torch.mean(r_upper).item())
+            random_near_orthogonal.append(torch.mean(((r_angles >= 80) & (r_angles <= 100)).float()).item() * 100)
+
+            # Free GPU memory
+            del random_tensor, r_neuron_tensor, r_normalized, r_cosine, r_upper, r_angles
+            torch.cuda.empty_cache()
+
+        # Move tensors to CPU for final results
+        cosine_similarity_np = self._to_numpy(cosine_similarity)
+        angle_distribution_np = self._to_numpy(angle_distribution)
+
+        # Free GPU memory
+        del cosine_similarity, angle_distribution
+        torch.cuda.empty_cache()
 
         # Statistical comparison
-        tstat_sim, pvalue_sim = ttest_ind([mean_similarity], random_mean_similarities, equal_var=False)
+        tstat_sim, pvalue_sim, is_significant_sim, comparison_sim = self._safe_ttest(
+            mean_similarity, random_mean_similarities
+        )
 
-        tstat_orth, pvalue_orth = ttest_ind([near_orthogonal], random_near_orthogonal, equal_var=False)
+        tstat_orth, pvalue_orth, is_significant_orth, comparison_orth = self._safe_ttest(
+            near_orthogonal, random_near_orthogonal
+        )
 
         results = {
-            "cosine_similarity_matrix": cosine_similarity,
-            "mean_cosine_similarity": mean_similarity,
-            "median_cosine_similarity": median_similarity,
-            "max_cosine_similarity": max_similarity,
-            "min_cosine_similarity": min_similarity,
-            "angle_distribution": angle_distribution,
-            "mean_angle_degrees": mean_angle,
-            "pct_near_orthogonal": near_orthogonal,
+            "cosine_similarity_matrix": cosine_similarity_np,
+            "mean_cosine_similarity": float(mean_similarity),
+            "median_cosine_similarity": float(median_similarity),
+            "max_cosine_similarity": float(max_similarity),
+            "min_cosine_similarity": float(min_similarity),
+            "angle_distribution": angle_distribution_np,
+            "mean_angle_degrees": float(mean_angle),
+            "pct_near_orthogonal": float(near_orthogonal),
             "random_mean_similarities": random_mean_similarities,
             "random_near_orthogonal": random_near_orthogonal,
             "similarity_ttest": {
-                "statistic": tstat_sim,
-                "pvalue": pvalue_sim,
-                "is_significant": pvalue_sim < 0.05,
-                "comparison": "higher" if mean_similarity > np.mean(random_mean_similarities) else "lower",
+                "statistic": float(tstat_sim),
+                "pvalue": float(pvalue_sim),
+                "is_significant": bool(is_significant_sim),
+                "comparison": comparison_sim,
             },
             "orthogonality_ttest": {
-                "statistic": tstat_orth,
-                "pvalue": pvalue_orth,
-                "is_significant": pvalue_orth < 0.05,
-                "comparison": "higher" if near_orthogonal > np.mean(random_near_orthogonal) else "lower",
+                "statistic": float(tstat_orth),
+                "pvalue": float(pvalue_orth),
+                "is_significant": bool(is_significant_orth),
+                "comparison": comparison_orth,
             },
         }
 
         self.orthogonality_results = results
+
+        # Clear memory again
+        gc.collect()
+        torch.cuda.empty_cache()
         return results
 
     def analyze_coactivation(self) -> dict[str, Any]:
         """Analyze coactivation patterns among neurons with hierarchical clustering."""
         # Transpose to get neurons as rows
-        neuron_matrix = self.special_activation_matrix.T
+        neuron_tensor = self.special_activation_tensor.t()
 
-        # Calculate correlation matrix
-        correlation_matrix = np.corrcoef(neuron_matrix)
+        # Calculate correlation matrix using GPU
+        # First normalize
+        centered = neuron_tensor - torch.mean(neuron_tensor, dim=1, keepdim=True)
+        normalized = centered / (torch.std(neuron_tensor, dim=1, keepdim=True) + 1e-8)
 
-        # Convert correlations to distances (highly correlated neurons = small distance)
+        # Compute correlation matrix
+        n_samples = normalized.shape[1]
+        correlation_matrix_tensor = torch.mm(normalized, normalized.t()) / n_samples
+
+        # Move correlation matrix to CPU for scipy operations and free GPU memory
+        correlation_matrix = self._to_numpy(correlation_matrix_tensor)
+        del correlation_matrix_tensor, normalized, centered
+        torch.cuda.empty_cache()
+
+        # Convert correlations to distances
         distance_matrix = 1 - np.abs(correlation_matrix)
 
-        # Perform hierarchical clustering
+        # Perform hierarchical clustering (CPU operation)
         Z = linkage(distance_matrix[np.triu_indices(len(distance_matrix), k=1)], method="ward")
 
         # Get clusters at different thresholds
@@ -289,9 +392,18 @@ class ActivationGeometricAnalyzer:
         random_n_clusters_medium = []
         random_mean_correlations = []
 
-        for random_matrix in self.random_groups:
-            r_neuron_matrix = random_matrix.T
-            r_corr = np.corrcoef(r_neuron_matrix)
+        # Process random groups sequentially to save memory
+        for i in range(self.num_random_groups):
+            random_tensor = torch.tensor(self.random_groups[i], dtype=self.dtype).to(self.device)
+            r_neuron_tensor = random_tensor.t()
+
+            # Calculate correlation on GPU
+            r_centered = r_neuron_tensor - torch.mean(r_neuron_tensor, dim=1, keepdim=True)
+            r_normalized = r_centered / (torch.std(r_neuron_tensor, dim=1, keepdim=True) + 1e-8)
+            r_corr_tensor = torch.mm(r_normalized, r_normalized.t()) / n_samples
+
+            # Move to CPU for further processing
+            r_corr = self._to_numpy(r_corr_tensor)
             r_dist = 1 - np.abs(r_corr)
 
             # Hierarchical clustering
@@ -303,45 +415,56 @@ class ActivationGeometricAnalyzer:
             r_upper = r_corr[np.triu_indices_from(r_corr, k=1)]
             random_mean_correlations.append(np.mean(r_upper))
 
+            # Free GPU memory
+            del random_tensor, r_neuron_tensor, r_normalized, r_centered, r_corr_tensor
+            torch.cuda.empty_cache()
+
         # Statistical comparison for clustering
-        tstat_clust, pvalue_clust = ttest_ind([n_clusters_medium], random_n_clusters_medium, equal_var=False)
+        tstat_clust, pvalue_clust, is_significant_clust, comparison_clust = self._safe_ttest(
+            n_clusters_medium, random_n_clusters_medium
+        )
 
         # Statistical comparison for correlation
-        tstat_corr, pvalue_corr = ttest_ind([mean_correlation], random_mean_correlations, equal_var=False)
+        tstat_corr, pvalue_corr, is_significant_corr, comparison_corr = self._safe_ttest(
+            mean_correlation, random_mean_correlations
+        )
 
         results = {
             "correlation_matrix": correlation_matrix,
-            "mean_correlation": mean_correlation,
-            "median_correlation": median_correlation,
-            "pct_positive_correlation": positive_correlation,
-            "pct_strong_correlation": strong_correlation,
+            "mean_correlation": float(mean_correlation),
+            "median_correlation": float(median_correlation),
+            "pct_positive_correlation": float(positive_correlation),
+            "pct_strong_correlation": float(strong_correlation),
             "correlation_distribution": correlation_distribution,
             "linkage": Z,
             "clusters_tight": clusters_tight,
             "clusters_medium": clusters_medium,
             "clusters_loose": clusters_loose,
-            "n_clusters_tight": n_clusters_tight,
-            "n_clusters_medium": n_clusters_medium,
-            "n_clusters_loose": n_clusters_loose,
+            "n_clusters_tight": int(n_clusters_tight),
+            "n_clusters_medium": int(n_clusters_medium),
+            "n_clusters_loose": int(n_clusters_loose),
             "random_n_clusters_medium": random_n_clusters_medium,
             "random_mean_correlations": random_mean_correlations,
             "clustering_ttest": {
-                "statistic": tstat_clust,
-                "pvalue": pvalue_clust,
-                "is_significant": pvalue_clust < 0.05,
-                "comparison": "fewer clusters"
-                if n_clusters_medium < np.mean(random_n_clusters_medium)
-                else "more clusters",
+                "statistic": float(tstat_clust),
+                "pvalue": float(pvalue_clust),
+                "is_significant": bool(is_significant_clust),
+                "comparison": comparison_clust,
             },
             "correlation_ttest": {
-                "statistic": tstat_corr,
-                "pvalue": pvalue_corr,
-                "is_significant": pvalue_corr < 0.05,
-                "comparison": "higher" if mean_correlation > np.mean(random_mean_correlations) else "lower",
+                "statistic": float(tstat_corr),
+                "pvalue": float(pvalue_corr),
+                "is_significant": bool(is_significant_corr),
+                "comparison": comparison_corr,
             },
         }
 
         self.coactivation_results = results
+
+        # Clear memory
+        gc.collect()
+        torch.cuda.empty_cache()
+
         return results
 
     def run_all_analyses(self) -> dict[str, dict[str, Any]]:
@@ -349,14 +472,6 @@ class ActivationGeometricAnalyzer:
         self.analyze_dimensionality()
         self.analyze_orthogonality()
         self.analyze_coactivation()
-
-        combined_results = {
-            "dimensionality": self.dimensionality_results,
-            "orthogonality": self.orthogonality_results,
-            "coactivation": self.coactivation_results,
-            "special_neuron_indices": self.special_neuron_indices,
-            "random_indices": self.random_groups,
-        }
 
         # Compile summary findings
         summary = {}
@@ -427,7 +542,27 @@ class ActivationGeometricAnalyzer:
                 "The neuron group's clustering structure is not significantly different from random groups."
             )
 
-        combined_results["summary"] = summary
+        # Create combined results without including large matrices
+        combined_results = {
+            "dimensionality": {
+                k: v
+                for k, v in self.dimensionality_results.items()
+                if not (isinstance(v, np.ndarray) and v.size > 1000)
+            },
+            "orthogonality": {
+                k: v for k, v in self.orthogonality_results.items() if not (isinstance(v, np.ndarray) and v.size > 1000)
+            },
+            "coactivation": {
+                k: v for k, v in self.coactivation_results.items() if not (isinstance(v, np.ndarray) and v.size > 1000)
+            },
+            "special_neuron_indices": self.special_neuron_indices,
+            "summary": summary,
+        }
+
         self.comparative_results = combined_results
+
+        # Final memory cleanup
+        gc.collect()
+        torch.cuda.empty_cache()
 
         return combined_results
