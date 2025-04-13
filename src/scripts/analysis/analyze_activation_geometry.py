@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument(
-        "--effect", type=str, choices=["boost", "suppress"], default="suppress", help="boost or suppress long-tail prob"
+        "--effect", type=str, choices=["boost", "suppress"], default="boost", help="boost or suppress long-tail prob"
     )
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
@@ -66,9 +66,10 @@ def get_neuron_index(args, feather_path: Path, step, abl_path: Path, device: str
         frame = neuron_selector.select_by_KL()
     if args.heuristic == "prob":
         frame = neuron_selector.select_by_prob()
-    # generate neuron index list
+    # convert neuron index format
     neuron_loader = NeuronLoader()
-    special_neuron_indices = neuron_loader.load_neuron_dict(frame, args.top_n)
+    neuron_value = frame.head(1)["top_neurons"].item()
+    special_neuron_indices, _ = neuron_loader.extract_neurons(neuron_value, args.top_n)
     logger.info(f"{len(special_neuron_indices)} neurons have been loaded.")
     return activation_data, special_neuron_indices
 
@@ -103,6 +104,7 @@ def main() -> None:
             feather_path = abl_path / str(step) / str(args.data_range_end) / f"k{args.k}.feather"
             if feather_path.is_file():
                 activation_data, special_neuron_indices = get_neuron_index(args, feather_path, step, abl_path, device)
+
                 # initilize the class
                 geometry_analyzer = ActivationGeometricAnalyzer(
                     activation_data=activation_data,

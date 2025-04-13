@@ -163,34 +163,35 @@ class NeuronLoader:
         df = pd.read_csv(file_path) if isinstance(file_path, Path) else file_path
         result = {}
         layer_num = 0
-
         for _, row in df.iterrows():
             try:
-                # Parse the string to list of floats
-                float_neurons = ast.literal_eval(row[value_col])
-
-                # Extract the decimal part as integer; Converts '5.2021' format to 2021.
-                neurons = [int(str(float(x)).split(".")[1]) for x in float_neurons]
-
+                neuron_value = row[value_col]
+                neurons, layer_num = self.extract_neurons(neuron_value, top_n)
                 # Generate random neurons if requested
                 if random_base:
                     neurons = self._generate_neurons(neurons)
-
-                # Limit to top_n if requested
-                if top_n != 0:
-                    neurons = neurons[:top_n]
-
                 result[row[key_col]] = neurons
-
-                # Get layer number from the first neuron (assuming all neurons are from the same layer)
-                layer_num = int(str(float(float_neurons[0])).split(".")[0])
-
             except (ValueError, SyntaxError) as e:
                 print(f"Error parsing neuron list for step {row[key_col]}: {e}")
                 result[row[key_col]] = []
-
         logger.info(f"Computing on {top_n} neurons")
         return result, layer_num
+
+    def extract_neurons(self, neuron_value, top_n) -> list[int]:
+        """Extract neuron indices from the inputs strings.."""
+        try:
+            # Parse the string to list of floats
+            float_neurons = ast.literal_eval(neuron_value)
+        except:
+            float_neurons = neuron_value
+        # Extract the decimal part as integer; Converts '5.2021' format to 2021.
+        neurons = [int(str(float(x)).split(".")[1]) for x in float_neurons]
+        # Limit to top_n if requested
+        if top_n > 0 and len(neurons) > top_n:
+            neurons = neurons[:top_n]
+        # Get layer number from the first neuron (assuming all neurons are from the same layer)
+        layer_num = int(str(float(float_neurons[0])).split(".")[0])
+        return neurons, layer_num
 
     def generate_neurons(self, exclude_list: list[int]) -> list[int]:
         """Generate a list of non-repeating random neuron indices with the same size as the input list."""

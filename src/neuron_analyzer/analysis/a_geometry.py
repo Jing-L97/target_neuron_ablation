@@ -8,9 +8,7 @@ from sklearn.decomposition import PCA
 
 
 class ActivationGeometricAnalyzer:
-    """Analyzes the geometric properties of neuron activations to determine if special neuron groups
-    work synergistically in a geometric sense using the context-centric vector approach.
-    """
+    """Analyzes the geometric properties of neuron activations."""
 
     def __init__(
         self,
@@ -40,10 +38,6 @@ class ActivationGeometricAnalyzer:
         self.token_contexts = self.data["token_context_id"].unique()
         self.all_neuron_indices = self.data[self.component_column].unique()
 
-        # Check if special neuron indices are valid
-        if not set(special_neuron_indices).issubset(set(self.all_neuron_indices)):
-            raise ValueError("Some special neuron indices are not present in the data")
-
         # Create activation matrices
         self.special_activation_matrix = self._create_activation_matrix(special_neuron_indices)
 
@@ -57,15 +51,7 @@ class ActivationGeometricAnalyzer:
         self.comparative_results = {}
 
     def _create_activation_matrix(self, neuron_indices: list[int]) -> np.ndarray:
-        """Create an activation matrix where rows are token-context pairs and columns are neurons.
-
-        Args:
-            neuron_indices: List of neuron indices to include in the matrix
-
-        Returns:
-            Activation matrix with shape [n_token_contexts, n_neurons]
-
-        """
+        """Create an activation matrix where rows are token-context pairs and columns are neurons."""
         # Filter data to only include specified neurons
         filtered_data = self.data[self.data[self.component_column].isin(neuron_indices)]
 
@@ -126,16 +112,7 @@ class ActivationGeometricAnalyzer:
         return random_groups
 
     def analyze_dimensionality(self, variance_threshold: float = 0.95) -> dict[str, Any]:
-        """Analyze the dimensionality of the neuron group's activation space.
-
-        Args:
-            variance_threshold: Threshold for cumulative explained variance to determine
-                                effective dimensionality (default: 0.95 or 95%)
-
-        Returns:
-            Dictionary containing dimensionality analysis results
-
-        """
+        """Analyze the dimensionality of the neuron group's activation space."""
         # Normalize the activation matrix
         normalized_matrix = self.special_activation_matrix
         if normalized_matrix.shape[0] > 0 and normalized_matrix.shape[1] > 0:
@@ -193,12 +170,7 @@ class ActivationGeometricAnalyzer:
         return results
 
     def analyze_orthogonality(self) -> dict[str, Any]:
-        """Analyze the orthogonality/alignment between neurons in the special group.
-
-        Returns:
-            Dictionary containing orthogonality analysis results
-
-        """
+        """Analyze the orthogonality/alignment between neurons in the special group."""
         # Transpose to get neuron x token-context matrix for analyzing neuron relationships
         neuron_matrix = self.special_activation_matrix.T
 
@@ -280,13 +252,7 @@ class ActivationGeometricAnalyzer:
         return results
 
     def analyze_coactivation(self) -> dict[str, Any]:
-        """Analyze coactivation patterns among neurons in the special group using
-        hierarchical clustering.
-
-        Returns:
-            Dictionary containing coactivation analysis results
-
-        """
+        """Analyze coactivation patterns among neurons with hierarchical clustering."""
         # Transpose to get neurons as rows
         neuron_matrix = self.special_activation_matrix.T
 
@@ -379,12 +345,7 @@ class ActivationGeometricAnalyzer:
         return results
 
     def run_all_analyses(self) -> dict[str, dict[str, Any]]:
-        """Run all geometric analyses at once.
-
-        Returns:
-            Dictionary containing all analysis results
-
-        """
+        """Run all geometric analyses at once."""
         self.analyze_dimensionality()
         self.analyze_orthogonality()
         self.analyze_coactivation()
