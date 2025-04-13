@@ -76,6 +76,23 @@ def get_neuron_index(args, feather_path: Path, step, abl_path: Path, device: str
     return activation_data, special_neuron_indices
 
 
+def configure_save_path(args):
+    """Configure save path based on the setting."""
+    save_heuristic = f"{args.heuristic}_med" if args.sel_by_med else args.heuristic
+    save_path = (
+        settings.PATH.result_dir
+        / "geometry"
+        / "activation"
+        / args.vector
+        / args.model
+        / save_heuristic
+        / args.effect
+        / f"{args.data_range_end}_{args.top_n}.json"
+    )
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    return save_path
+
+
 #######################################################################################################
 # Entry point of the script
 #######################################################################################################
@@ -87,17 +104,7 @@ def main() -> None:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
-    save_path = (
-        settings.PATH.result_dir
-        / "geometry"
-        / "activation"
-        / args.vector
-        / args.model
-        / args.heuristic
-        / args.effect
-        / f"{args.data_range_end}_{args.top_n}.json"
-    )
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_path = configure_save_path(args)
     if save_path.is_file() and args.resume:
         logger.info(f"{save_path} already exists, skip!")
     else:

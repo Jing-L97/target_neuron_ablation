@@ -105,11 +105,11 @@ def project_neurons(
 
 def compute_kl(
     ablation_mode: str,
-    logits,
-    unigram_direction_vocab,
-    unigram_projection_values,
-    ablated_logits_chunk,
-    res_deltas_chunk,
+    ablated_logits_with_frozen_unigram_chunk,
+    abl_logprobs,
+    log_unigram_distrib,
+    kl_divergence_after,
+    kl_divergence_after_frozen_unigram,
     longtail_mask,
 ):
     # compute KL divergence between the distribution ablated with frozen unigram and the og distribution
@@ -294,53 +294,17 @@ def mean_ablate_components(
             entropy_post_ablation_with_frozen_unigram_chunk = get_entropy(ablated_logits_with_frozen_unigram_chunk)
             entropy_post_ablation_with_frozen_unigram.append(entropy_post_ablation_with_frozen_unigram_chunk.cpu())
 
-            # compute KL divergence between the distribution ablated with frozen unigram and the og distribution
-            abl_logprobs_with_frozen_unigram = ablated_logits_with_frozen_unigram_chunk.log_softmax(dim=-1)
-
-            # compute KL divergence between the ablated distribution and the distribution from the unigram direction
-            kl_divergence_after_chunk = (
-                kl_div(abl_logprobs, log_unigram_distrib.expand_as(abl_logprobs), reduction="none", log_target=True)
-                .sum(axis=-1)
-                .cpu()
-                .numpy()
+            # start from here
+            compute_kl(
+                ablation_mode,
+                ablated_logits_with_frozen_unigram_chunk,
+                abl_logprobs,
+                log_unigram_distrib,
+                kl_divergence_after,
+                kl_divergence_after_frozen_unigram,
+                longtail_mask,
             )
 
-            del abl_logprobs
-            kl_divergence_after.append(kl_divergence_after_chunk)
-
-            if ablation_mode == "longtail":
-                # For long-tail mode, compute KL divergence with focus on the long-tail tokens
-                masked_logprobs = abl_logprobs_with_frozen_unigram.clone()
-                masked_logprobs = masked_logprobs + (1 - longtail_mask).unsqueeze(0).unsqueeze(0) * -1e10
-                masked_logprobs = torch.nn.functional.log_softmax(masked_logprobs, dim=-1)
-                kl_divergence_after_frozen_unigram_chunk = (
-                    kl_div(
-                        masked_logprobs,
-                        log_unigram_distrib.expand_as(masked_logprobs),
-                        reduction="none",
-                        log_target=True,
-                    )
-                    .sum(axis=-1)
-                    .cpu()
-                    .numpy()
-                )
-            else:
-                # Standard KL divergence for regular mean ablation
-                kl_divergence_after_frozen_unigram_chunk = (
-                    kl_div(
-                        abl_logprobs_with_frozen_unigram,
-                        log_unigram_distrib.expand_as(abl_logprobs_with_frozen_unigram),
-                        reduction="none",
-                        log_target=True,
-                    )
-                    .sum(axis=-1)
-                    .cpu()
-                    .numpy()
-                )
-            del abl_logprobs_with_frozen_unigram
-            kl_divergence_after_frozen_unigram.append(kl_divergence_after_frozen_unigram_chunk)
-
-            del ablated_logits_with_frozen_unigram_chunk
         # Concatenate results
         loss_post_ablation = np.concatenate(loss_post_ablation, axis=0)
         entropy_post_ablation = np.concatenate(entropy_post_ablation, axis=0)

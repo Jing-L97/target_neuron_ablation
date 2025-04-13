@@ -328,12 +328,7 @@ class ActivationGeometricAnalyzer:
         }
 
     def _calculate_random_group_orthogonality(self) -> dict[str, Any]:
-        """Calculate orthogonality metrics for random neuron groups.
-
-        Returns:
-            Dictionary of random group metrics
-
-        """
+        """Calculate orthogonality metrics for random neuron groups."""
         random_mean_similarities = []
         random_near_orthogonal = []
 
@@ -595,6 +590,8 @@ class ActivationGeometricAnalyzer:
                 "The neuron group's clustering structure is not significantly different from random groups."
             )
 
+        # record indices
+        neuron_indices = {"special": self.special_neuron_indices, "random": self.random_groups}
         # Create combined results without including large matrices
         combined_results = {
             "dimensionality": {
@@ -610,6 +607,7 @@ class ActivationGeometricAnalyzer:
             },
             "special_neuron_indices": self.special_neuron_indices,
             "summary": summary,
+            "neuron_indices": neuron_indices,
         }
 
         self.comparative_results = combined_results
