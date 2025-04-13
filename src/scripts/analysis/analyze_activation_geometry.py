@@ -71,6 +71,8 @@ def get_neuron_index(args, feather_path: Path, step, abl_path: Path, device: str
     neuron_loader = NeuronLoader()
     neuron_value = frame.head(1)["top_neurons"].item()
     special_neuron_indices, _ = neuron_loader.extract_neurons(neuron_value, args.top_n)
+    # convert the component name into target format
+    activation_data["component_name"] = activation_data["component_name"].apply(neuron_loader.parse_neurons)
     return activation_data, special_neuron_indices
 
 

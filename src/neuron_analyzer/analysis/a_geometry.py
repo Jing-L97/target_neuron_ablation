@@ -48,7 +48,7 @@ class ActivationGeometricAnalyzer:
 
         # Extract unique token-context pairs and components
         self.token_contexts = self.data["token_context_id"].unique()
-        self.all_neuron_indices = self.data[self.component_column].unique()
+        self.all_neuron_indices = self.data[self.component_column].astype(int).unique()
 
         # Create activation matrices and convert to PyTorch tensors on the specified device
         self.special_activation_matrix = self._create_activation_matrix(special_neuron_indices)

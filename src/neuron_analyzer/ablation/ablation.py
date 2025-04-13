@@ -103,7 +103,15 @@ def project_neurons(
     return ablated_logits_with_frozen_unigram_chunk
 
 
-def compute_kl():
+def compute_kl(
+    ablation_mode: str,
+    logits,
+    unigram_direction_vocab,
+    unigram_projection_values,
+    ablated_logits_chunk,
+    res_deltas_chunk,
+    longtail_mask,
+):
     # compute KL divergence between the distribution ablated with frozen unigram and the og distribution
     abl_logprobs_with_frozen_unigram = ablated_logits_with_frozen_unigram_chunk.log_softmax(dim=-1)
 

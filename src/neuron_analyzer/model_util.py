@@ -185,13 +185,17 @@ class NeuronLoader:
         except:
             float_neurons = neuron_value
         # Extract the decimal part as integer; Converts '5.2021' format to 2021.
-        neurons = [int(str(float(x)).split(".")[1]) for x in float_neurons]
+        neurons = [self.parse_neurons(str(neuron)) for neuron in float_neurons]
         # Limit to top_n if requested
         if top_n > 0 and len(neurons) > top_n:
             neurons = neurons[:top_n]
         # Get layer number from the first neuron (assuming all neurons are from the same layer)
         layer_num = int(str(float(float_neurons[0])).split(".")[0])
         return neurons, layer_num
+
+    def parse_neurons(self, neuron: str) -> int:
+        """Parse neuron index."""
+        return int(str(float(neuron)).split(".")[1])
 
     def generate_neurons(self, exclude_list: list[int]) -> list[int]:
         """Generate a list of non-repeating random neuron indices with the same size as the input list."""
