@@ -243,105 +243,158 @@ class ActivationGeometricAnalyzer:
 
     def analyze_orthogonality(self) -> dict[str, Any]:
         """Analyze the orthogonality/alignment between neurons in the special group."""
-        # Transpose to get neuron x token-context matrix
-        neuron_tensor = self.special_activation_tensor.t()
+        # Calculate special group orthogonality metrics
+        special_metrics = self._calculate_orthogonality_metrics(self.special_activation_matrix)
+
+        # Calculate metrics for random groups
+        random_metrics = self._calculate_random_group_orthogonality()
+
+        # Statistical comparison
+        comparison_results = self._compare_orthogonality_to_random(special_metrics, random_metrics)
+
+        # Combine all results
+        results = {**special_metrics, **random_metrics, **comparison_results}
+
+        self.orthogonality_results = results
+        return results
+
+    def _calculate_orthogonality_metrics(self, activation_matrix: np.ndarray) -> dict[str, Any]:
+        """Calculate orthogonality metrics for a given activation matrix."""
+        # Transpose to get neuron x token-context matrix for analyzing neuron relationships
+        neuron_matrix = activation_matrix.T
+
+        # Skip calculation if not enough neurons or contexts
+        if neuron_matrix.shape[0] <= 1 or neuron_matrix.shape[1] == 0:
+            return {
+                "cosine_similarity_matrix": np.array([[1.0]]),
+                "mean_cosine_similarity": 0.0,
+                "median_cosine_similarity": 0.0,
+                "max_cosine_similarity": 0.0,
+                "min_cosine_similarity": 0.0,
+                "angle_distribution": np.array([]),
+                "mean_angle_degrees": 0.0,
+                "pct_near_orthogonal": 0.0,
+            }
 
         # Normalize neuron vectors
-        norms = torch.norm(neuron_tensor, dim=1, keepdim=True)
+        normalized_neurons = neuron_matrix.copy()
+        norms = np.linalg.norm(normalized_neurons, axis=1, keepdims=True)
         norms[norms == 0] = 1.0  # Avoid division by zero
-        normalized_neurons = neuron_tensor / norms
+        normalized_neurons = normalized_neurons / norms
 
-        # Compute cosine similarity matrix
-        cosine_similarity = torch.mm(normalized_neurons, normalized_neurons.t())
+        # Compute cosine similarity matrix (inner products of normalized vectors)
+        cosine_similarity = normalized_neurons @ normalized_neurons.T
 
-        # Extract upper triangle (excluding diagonal) using pre-computed mask
-        similarity_distribution = cosine_similarity[self.triu_mask]
+        # Extract upper triangle (excluding diagonal) for distribution analysis
+        upper_indices = np.triu_indices_from(cosine_similarity, k=1)
+
+        # Handle case with only one neuron (no upper triangle)
+        if len(upper_indices[0]) == 0:
+            return {
+                "cosine_similarity_matrix": cosine_similarity,
+                "mean_cosine_similarity": 0.0,
+                "median_cosine_similarity": 0.0,
+                "max_cosine_similarity": 0.0,
+                "min_cosine_similarity": 0.0,
+                "angle_distribution": np.array([]),
+                "mean_angle_degrees": 0.0,
+                "pct_near_orthogonal": 0.0,
+            }
+
+        similarity_distribution = cosine_similarity[upper_indices]
 
         # Calculate statistics
-        mean_similarity = torch.mean(similarity_distribution).item()
-        median_similarity = torch.median(similarity_distribution).item()
-        max_similarity = torch.max(similarity_distribution).item()
-        min_similarity = torch.min(similarity_distribution).item()
+        mean_similarity = np.mean(similarity_distribution)
+        median_similarity = np.median(similarity_distribution)
+        max_similarity = np.max(similarity_distribution)
+        min_similarity = np.min(similarity_distribution)
 
         # Calculate angle distribution (in degrees)
-        angle_distribution = torch.acos(torch.clamp(similarity_distribution, -1.0, 1.0)) * (180 / np.pi)
-        mean_angle = torch.mean(angle_distribution).item()
+        angle_distribution = np.degrees(np.arccos(np.clip(similarity_distribution, -1.0, 1.0)))
+        mean_angle = np.mean(angle_distribution)
 
         # Calculate orthogonality measures
-        near_orthogonal = torch.mean(((angle_distribution >= 80) & (angle_distribution <= 100)).float()).item() * 100
+        near_orthogonal = np.mean((angle_distribution >= 80) & (angle_distribution <= 100)) * 100
 
-        # Analyze random groups for comparison
+        return {
+            "cosine_similarity_matrix": cosine_similarity,
+            "mean_cosine_similarity": mean_similarity,
+            "median_cosine_similarity": median_similarity,
+            "max_cosine_similarity": max_similarity,
+            "min_cosine_similarity": min_similarity,
+            "angle_distribution": angle_distribution,
+            "mean_angle_degrees": mean_angle,
+            "pct_near_orthogonal": near_orthogonal,
+        }
+
+    def _calculate_random_group_orthogonality(self) -> dict[str, Any]:
+        """Calculate orthogonality metrics for random neuron groups.
+
+        Returns:
+            Dictionary of random group metrics
+
+        """
         random_mean_similarities = []
         random_near_orthogonal = []
 
-        # Process random groups sequentially to save memory
-        for i in range(self.num_random_groups):
-            random_tensor = torch.tensor(self.random_groups[i], dtype=self.dtype).to(self.device)
-            r_neuron_tensor = random_tensor.t()
+        for random_matrix in self.random_groups:
+            # Calculate metrics for this random group
+            metrics = self._calculate_orthogonality_metrics(random_matrix)
 
-            r_norms = torch.norm(r_neuron_tensor, dim=1, keepdim=True)
-            r_norms[r_norms == 0] = 1.0
-            r_normalized = r_neuron_tensor / r_norms
+            # Only add to our statistics if we got valid measurements
+            if len(metrics["angle_distribution"]) > 0:
+                random_mean_similarities.append(metrics["mean_cosine_similarity"])
+                random_near_orthogonal.append(metrics["pct_near_orthogonal"])
 
-            r_cosine = torch.mm(r_normalized, r_normalized.t())
-            r_upper = r_cosine[self.triu_mask]
-            r_angles = torch.acos(torch.clamp(r_upper, -1.0, 1.0)) * (180 / np.pi)
+        # If no valid random groups, provide defaults
+        if not random_mean_similarities:
+            random_mean_similarities = [0.0]
+            random_near_orthogonal = [0.0]
 
-            random_mean_similarities.append(torch.mean(r_upper).item())
-            random_near_orthogonal.append(torch.mean(((r_angles >= 80) & (r_angles <= 100)).float()).item() * 100)
+        return {"random_mean_similarities": random_mean_similarities, "random_near_orthogonal": random_near_orthogonal}
 
-            # Free GPU memory
-            del random_tensor, r_neuron_tensor, r_normalized, r_cosine, r_upper, r_angles
-            torch.cuda.empty_cache()
+    def _compare_orthogonality_to_random(
+        self, special_metrics: dict[str, Any], random_metrics: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Compare special group orthogonality metrics to random groups."""
+        random_mean_similarities = random_metrics["random_mean_similarities"]
+        random_near_orthogonal = random_metrics["random_near_orthogonal"]
 
-        # Move tensors to CPU for final results
-        cosine_similarity_np = self._to_numpy(cosine_similarity)
-        angle_distribution_np = self._to_numpy(angle_distribution)
+        # Skip statistical tests if no angle distribution for special group
+        if len(special_metrics["angle_distribution"]) == 0:
+            return {
+                "similarity_ttest": {"statistic": 0.0, "pvalue": 1.0, "is_significant": False, "comparison": "none"},
+                "orthogonality_ttest": {"statistic": 0.0, "pvalue": 1.0, "is_significant": False, "comparison": "none"},
+            }
 
-        # Free GPU memory
-        del cosine_similarity, angle_distribution
-        torch.cuda.empty_cache()
-
-        # Statistical comparison
-        tstat_sim, pvalue_sim, is_significant_sim, comparison_sim = self._safe_ttest(
-            mean_similarity, random_mean_similarities
+        # Statistical comparison for similarity
+        tstat_sim, pvalue_sim = ttest_ind(
+            [special_metrics["mean_cosine_similarity"]], random_mean_similarities, equal_var=False
         )
 
-        tstat_orth, pvalue_orth, is_significant_orth, comparison_orth = self._safe_ttest(
-            near_orthogonal, random_near_orthogonal
+        # Statistical comparison for orthogonality
+        tstat_orth, pvalue_orth = ttest_ind(
+            [special_metrics["pct_near_orthogonal"]], random_near_orthogonal, equal_var=False
         )
 
-        results = {
-            "cosine_similarity_matrix": cosine_similarity_np,
-            "mean_cosine_similarity": float(mean_similarity),
-            "median_cosine_similarity": float(median_similarity),
-            "max_cosine_similarity": float(max_similarity),
-            "min_cosine_similarity": float(min_similarity),
-            "angle_distribution": angle_distribution_np,
-            "mean_angle_degrees": float(mean_angle),
-            "pct_near_orthogonal": float(near_orthogonal),
-            "random_mean_similarities": random_mean_similarities,
-            "random_near_orthogonal": random_near_orthogonal,
+        return {
             "similarity_ttest": {
-                "statistic": float(tstat_sim),
-                "pvalue": float(pvalue_sim),
-                "is_significant": bool(is_significant_sim),
-                "comparison": comparison_sim,
+                "statistic": tstat_sim,
+                "pvalue": pvalue_sim,
+                "is_significant": pvalue_sim < 0.05,
+                "comparison": "higher"
+                if special_metrics["mean_cosine_similarity"] > np.mean(random_mean_similarities)
+                else "lower",
             },
             "orthogonality_ttest": {
-                "statistic": float(tstat_orth),
-                "pvalue": float(pvalue_orth),
-                "is_significant": bool(is_significant_orth),
-                "comparison": comparison_orth,
+                "statistic": tstat_orth,
+                "pvalue": pvalue_orth,
+                "is_significant": pvalue_orth < 0.05,
+                "comparison": "higher"
+                if special_metrics["pct_near_orthogonal"] > np.mean(random_near_orthogonal)
+                else "lower",
             },
         }
-
-        self.orthogonality_results = results
-
-        # Clear memory again
-        gc.collect()
-        torch.cuda.empty_cache()
-        return results
 
     def analyze_coactivation(self) -> dict[str, Any]:
         """Analyze coactivation patterns among neurons with hierarchical clustering."""
