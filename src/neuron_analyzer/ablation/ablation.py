@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 import torch
 import tqdm
+from transformer_lens import utils
 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
@@ -22,32 +23,40 @@ T = t.TypeVar("T")
 class ModelAblationAnalyzer:
     """Class for analyzing neural network components through ablations."""
 
-    def __init__(self, model, unigram_distrib, tokenized_data, entropy_df, device: str, logger=None):
+    def __init__(
+        self,
+        model,
+        unigram_distrib,
+        tokenized_data,
+        entropy_df,
+        components_to_ablate,
+        device: str,
+        k: int = 10,
+        chunk_size: int = 20,
+        ablation_mode: str = "mean",  # "mean" or "longtail"
+        longtail_threshold: float = 0.001,  # Threshold for long-tail tokens
+    ):
         """Initialize the ModelAblationAnalyzer."""
         self.model = model
         self.unigram_distrib = unigram_distrib
         self.tokenized_data = tokenized_data
         self.entropy_df = entropy_df
         self.device = device
-        self.logger = logger
-
+        self.k = k
+        self.chunk_size = chunk_size
+        self.ablation_mode = ablation_mode
         # Storage for analysis results
+        self.longtail_threshold = longtail_threshold
         self.results = {}
         self.log_unigram_distrib = self.unigram_distrib.log()
-        self.components_to_ablate = None
-        self.neuron_indices = None
-        self.layer_idx = None
-        self.ablation_mode = None
-        self.longtail_threshold = None
-        self.unigram_direction_vocab = None
-        self.longtail_mask = None
+        self.components_to_ablate = components_to_ablate
 
     def build_vector(self) -> None:
         """Build frequency-related vectors for ablation analysis."""
         if self.ablation_mode == "longtail":
             # Create long-tail token mask (1 for long-tail tokens, 0 for common tokens)
             self.longtail_mask = (self.unigram_distrib < self.longtail_threshold).float()
-            self.logger.info(
+            logger.info(
                 f"Number of long-tail tokens: {self.longtail_mask.sum().item()} out of {len(self.longtail_mask)}"
             )
 
@@ -111,7 +120,6 @@ class ModelAblationAnalyzer:
         ablated_logits_with_frozen_unigram_chunk = self.adjust_vectors_3dim(
             ablated_logits_chunk, self.unigram_direction_vocab, unigram_projection_values
         )
-
         return ablated_logits_with_frozen_unigram_chunk
 
     def get_entropy(self, logits: torch.Tensor) -> torch.Tensor:
@@ -247,42 +255,30 @@ class ModelAblationAnalyzer:
 
         return final_df
 
-    def mean_ablate_components(
-        self,
-        components_to_ablate: list[str],
-        k: int = 10,
-        chunk_size: int = 20,
-        ablation_mode: str = "mean",  # "mean" or "longtail"
-        longtail_threshold: float = 0.001,  # Threshold for long-tail tokens
-    ) -> dict[int, pd.DataFrame]:
+    def mean_ablate_components(self) -> dict[int, pd.DataFrame]:
         """Perform mean ablation on specified components."""
-        # Store parameters as class attributes
-        self.components_to_ablate = components_to_ablate
-        self.ablation_mode = ablation_mode
-        self.longtail_threshold = longtail_threshold
-
         # Sample a set of random batch indices
-        random_sequence_indices = np.random.choice(self.entropy_df.batch.unique(), k, replace=False)
+        random_sequence_indices = np.random.choice(self.entropy_df.batch.unique(), self.k, replace=False)
 
-        self.logger.info(f"ablate_components: ablate with k = {k}, long-tail threshold = {longtail_threshold}")
+        logger.info(f"ablate_components: ablate with k = {self.k}, long-tail threshold = {self.longtail_threshold}")
 
-        pbar = tqdm.tqdm(total=k, file=sys.stdout)
+        pbar = tqdm.tqdm(total=self.k, file=sys.stdout)
 
         # new_entropy_df with only the random sequences
         filtered_entropy_df = self.entropy_df[self.entropy_df.batch.isin(random_sequence_indices)].copy()
 
         activation_mean_values = torch.tensor(
-            self.entropy_df[[f"{component_name}_activation" for component_name in components_to_ablate]].mean()
+            self.entropy_df[[f"{component_name}_activation" for component_name in self.components_to_ablate]].mean()
         )
 
         # Build frequency vectors
         self.build_vector()
 
         # get neuron indices
-        self.neuron_indices = [int(neuron_name.split(".")[1]) for neuron_name in components_to_ablate]
+        self.neuron_indices = [int(neuron_name.split(".")[1]) for neuron_name in self.components_to_ablate]
 
         # get layer indices
-        layer_indices = [int(neuron_name.split(".")[0]) for neuron_name in components_to_ablate]
+        layer_indices = [int(neuron_name.split(".")[0]) for neuron_name in self.components_to_ablate]
         self.layer_idx = layer_indices[0]
 
         for batch_n in filtered_entropy_df.batch.unique():
@@ -294,7 +290,7 @@ class ModelAblationAnalyzer:
             logits, cache = self.model.run_with_cache(inp)
             logprobs = logits[0, :, :].log_softmax(dim=-1)
 
-            res_stream = cache[self.utils.get_act_name("resid_post", self.layer_idx)][0]
+            res_stream = cache[utils.get_act_name("resid_post", self.layer_idx)][0]
 
             # get the entropy_df entries for the current sequence
             rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
@@ -302,7 +298,7 @@ class ModelAblationAnalyzer:
 
             # get the value of the logits projected onto the b_U direction
             unigram_projection_values = self.project_logits(logits)
-            previous_activation = cache[self.utils.get_act_name("post", self.layer_idx)][0, :, self.neuron_indices]
+            previous_activation = cache[utils.get_act_name("post", self.layer_idx)][0, :, self.neuron_indices]
             del cache
             activation_deltas = activation_mean_values.to(previous_activation.device) - previous_activation
             # activation deltas is seq_n x n_neurons
@@ -328,8 +324,8 @@ class ModelAblationAnalyzer:
             )
 
             # Process in chunks to manage memory
-            for i in range(0, res_deltas.shape[0], chunk_size):
-                res_deltas_chunk = res_deltas[i : i + chunk_size]
+            for i in range(0, res_deltas.shape[0], self.chunk_size):
+                res_deltas_chunk = res_deltas[i : i + self.chunk_size]
                 updated_res_stream_chunk = res_stream.repeat(res_deltas_chunk.shape[0], 1, 1) + res_deltas_chunk
                 # apply ln_final
                 updated_res_stream_chunk = self.model.ln_final(updated_res_stream_chunk)

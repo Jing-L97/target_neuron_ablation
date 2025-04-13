@@ -107,7 +107,7 @@ def main() -> None:
     save_path = configure_save_path(args)
     if save_path.is_file() and args.resume:
         logger.info(f"{save_path} already exists, skip!")
-    else:
+    else:  # TODO: add file checking to resume from the exisitng checkpoints
         final_results = {}
         for step in abl_path.iterdir():
             feather_path = abl_path / str(step) / str(args.data_range_end) / f"k{args.k}.feather"

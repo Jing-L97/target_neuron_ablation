@@ -156,13 +156,12 @@ class NeuronAblationProcessor:
             unigram_distrib=unigram_distrib,
             tokenized_data=tokenized_data,
             entropy_df=entropy_df,
-        )
-
-        results = analyzer.mean_ablate_components(
             k=self.args.k,
             ablation_mode=self.args.ablation_mode,
             longtail_threshold=longtail_threshold,
         )
+
+        results = analyzer.mean_ablate_components()
 
         self.logger.info("Finished ablations!")
 
