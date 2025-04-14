@@ -2,7 +2,6 @@
 #SBATCH --job-name=KL_geometry
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
-#SBATCH --exclude=puck5
 #SBATCH --mem=70G
 #SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
