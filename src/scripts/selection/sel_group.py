@@ -138,11 +138,12 @@ class NeuronGroupSelector:
         )
         logger.info("Finished initializing the search")
         # Get the best result using all methods
-        best_method, results = search.get_best_result()
+        best_method, results, results_all = search.get_best_result()
 
         logger.info(f"Best method: {best_method}")
-        logger.info(f"Best neurons: {results.neurons}")
-        logger.info(f"Delta loss: {results.delta_loss}")
+        # logger.info(f"Best neurons: {results.neurons}")
+        # logger.info(f"Delta loss: {results.delta_loss}")
+        logger.info(f"Overall results: {results_all}")
         return best_method, results
 
     def _get_save_path(self, step) -> Path:

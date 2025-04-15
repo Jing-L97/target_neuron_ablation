@@ -86,10 +86,6 @@ class NeuronGroupEvaluator:
             # If saving fails, we continue without caching
             pass
 
-    def get_act_name1(self, prefix: str, layer_idx: int) -> str:
-        """Get the activation name for a layer."""
-        return f"blocks.{layer_idx}.{prefix}"
-
     def get_act_name(self, hook_type: str, layer_idx: int) -> str:
         # Based on your actual cache keys
         if hook_type == "post":
@@ -149,7 +145,6 @@ class NeuronGroupEvaluator:
         # dimenison handling for the right shape: [batch_size, sequence_length]
         # Make sure we have the right shape: [batch_size, sequence_length]
         inp = tok_seq.unsqueeze(0).to(self.device) if tok_seq.dim() == 1 else tok_seq.to(self.device)
-        # inp = tok_seq.unsqueeze(0).to(self.device)
 
         # Get original loss
         self.model.reset_hooks()
@@ -191,94 +186,6 @@ class NeuronGroupEvaluator:
         delta_loss = original_loss - ablated_loss
 
         return delta_loss
-
-    def _compute_delta_loss_for_batch1(self, batch_idx: int, neuron_group: list[int]) -> float:
-        """Compute delta loss for a specific batch and neuron group with NaN protection."""
-        try:
-            # Get the input sequence
-            tok_seq = self.tokenized_data["tokens"][batch_idx]
-
-            # Dimension handling for the right shape: [batch_size, sequence_length]
-            inp = tok_seq.unsqueeze(0).to(self.device) if tok_seq.dim() == 1 else tok_seq.to(self.device)
-
-            # Get original loss with error handling
-            self.model.reset_hooks()
-            original_logits, cache = self.model.run_with_cache(inp)
-            original_loss = self.model.loss_fn(original_logits, inp, per_token=True).mean().item()
-
-            # Verify original_loss is not NaN
-            if np.isnan(original_loss):
-                logger.warning(f"Original loss is NaN for batch {batch_idx}")
-                return 0.0
-
-            # Get neuron activations
-            act_key = self.get_act_name("post", self.layer_idx)
-            if act_key not in cache:
-                logger.warning(f"Activation key {act_key} not found in cache")
-                return 0.0
-
-            activations = cache[act_key][0]
-
-            # Verify activations are valid
-            if torch.isnan(activations).any():
-                logger.warning(f"NaN found in activations for batch {batch_idx}")
-                return 0.0
-
-            # Calculate mean activation values across the dataset
-            neuron_means = activations.mean(dim=0)
-
-            # Apply neuron updates safely
-            activation_deltas = torch.zeros_like(activations)
-            for neuron_idx in neuron_group:
-                if neuron_idx >= activations.shape[1]:
-                    logger.warning(f"Neuron index {neuron_idx} out of bounds")
-                    continue
-                activation_deltas[:, neuron_idx] = neuron_means[neuron_idx] - activations[:, neuron_idx]
-
-            # Compute residual stream deltas safely
-            try:
-                res_deltas = activation_deltas.unsqueeze(-1) * self.model.W_out[self.layer_idx]
-                res_key = self.get_act_name("resid_post", self.layer_idx)
-
-                if res_key not in cache:
-                    logger.warning(f"Residual key {res_key} not found in cache")
-                    return 0.0
-
-                res_stream = cache[res_key][0]
-
-                # Apply the deltas to the residual stream
-                updated_res_stream = res_stream + res_deltas.sum(dim=1)
-
-                # Check for NaNs
-                if torch.isnan(updated_res_stream).any():
-                    logger.warning(f"NaN found in updated residual stream for batch {batch_idx}")
-                    return 0.0
-
-                # Apply layer normalization
-                normalized_res_stream = self.model.ln_final(updated_res_stream.unsqueeze(0))[0]
-
-                # Project to logit space
-                ablated_logits = normalized_res_stream @ self.model.W_U + self.model.b_U
-
-                # Compute ablated loss
-                ablated_loss = self.model.loss_fn(ablated_logits.unsqueeze(0), inp, per_token=True).mean().item()
-
-                # Check for NaN in ablated loss
-                if np.isnan(ablated_loss):
-                    logger.warning(f"Ablated loss is NaN for batch {batch_idx}")
-                    return 0.0
-
-                # Calculate delta loss
-                delta_loss = original_loss - ablated_loss
-                return delta_loss
-
-            except Exception as e:
-                logger.error(f"Error in delta loss computation: {e}")
-                return 0.0
-
-        except Exception as e:
-            logger.error(f"Error processing batch {batch_idx}: {e}")
-            return 0.0
 
     def ablate_and_record(self, neuron_group: list[int], batch_indices: list[int]) -> pd.DataFrame:
         """Ablate neurons in the specified group and record results."""
@@ -354,6 +261,7 @@ class NeuronGroupEvaluator:
 class SearchResult:
     neurons: list[int]
     delta_loss: float
+    is_target_size: bool = False
 
 
 class NeuronGroupSearch:
@@ -366,7 +274,7 @@ class NeuronGroupSearch:
         cache_dir: str | Path | None = None,
     ):
         self.neurons = neurons
-        self.evaluator = evaluator  # the class should be properly initilialized
+        self.evaluator = evaluator  # the class should be properly initialized
         self.target_size = min(target_size, len(neurons))
         self.cache_dir = Path(cache_dir) if cache_dir else None
 
@@ -408,18 +316,70 @@ class NeuronGroupSearch:
 
         return None
 
-    def progressive_beam_search(self, beam_width: int = 2) -> SearchResult:
+    def _ensure_target_size_group(self, result: SearchResult) -> tuple[SearchResult, SearchResult]:
+        """Ensures we have a group with the target size.
+        Returns tuple of (best_result, target_size_result)
+        """
+        best_result = result
+
+        # If result already has target size, both results are the same
+        if len(result.neurons) == self.target_size:
+            target_size_result = SearchResult(
+                neurons=result.neurons.copy(), delta_loss=result.delta_loss, is_target_size=True
+            )
+            return best_result, target_size_result
+
+        # Create a target size group
+        if len(result.neurons) < self.target_size:
+            # Add more neurons to reach target size
+            sorted_neurons = self._get_sorted_neurons()
+
+            # Find neurons that aren't already in the result
+            available_neurons = []
+            for idx, _ in sorted_neurons:
+                neuron = self.neurons[idx]
+                if neuron not in result.neurons:
+                    available_neurons.append(neuron)
+
+            # Add neurons until we reach target size
+            neurons_to_add = min(self.target_size - len(result.neurons), len(available_neurons))
+            target_size_group = result.neurons.copy()
+            target_size_group.extend(available_neurons[:neurons_to_add])
+
+            # Evaluate the new group
+            delta_loss = self._evaluate_group(target_size_group)
+            target_size_result = SearchResult(neurons=target_size_group, delta_loss=delta_loss, is_target_size=True)
+
+        else:  # len(result.neurons) > self.target_size
+            # Sort neurons by individual importance
+            neuron_scores = [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in result.neurons]
+            neuron_scores.sort(key=lambda x: x[1], reverse=True)
+
+            # Keep the top neurons
+            target_size_group = [n for n, _ in neuron_scores[: self.target_size]]
+            delta_loss = self._evaluate_group(target_size_group)
+            target_size_result = SearchResult(neurons=target_size_group, delta_loss=delta_loss, is_target_size=True)
+
+        return best_result, target_size_result
+
+    def progressive_beam_search(self, beam_width: int = 2) -> tuple[SearchResult, SearchResult]:
+        """Progressive beam search for finding neuron groups.
+        Returns (best_result, target_size_result)
+        """
         state = self._load_search_state("progressive_beam")
 
-        # Check if state exists AND is marked as completed AND contains the result key
-        if state and state.get("completed") and "result" in state:
-            return SearchResult(**state["result"])
+        # Check if state exists AND is marked as completed AND contains both result keys
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
 
         # If we have a partial state but it's not completed
         if state and not state.get("completed"):
             current_beam = state.get("current_beam", [])
             start_size = state.get("next_size", 2)
-            best_result = state.get("best_result")  # Use .get() to handle missing key
+            best_overall = state.get("best_overall")
+            best_per_size = state.get("best_per_size", {})
         else:
             # Start from scratch
             sorted_indices = self._get_sorted_neurons()
@@ -429,9 +389,17 @@ class NeuronGroupSearch:
                 neuron = self.neurons[idx]
                 delta_loss = self.individual_delta_loss[idx]
                 current_beam.append(({neuron}, delta_loss))
-            start_size = 2
-            best_result = None
 
+            # Initialize tracking variables
+            start_size = 2
+            best_overall = None
+            best_per_size = (
+                {1: {"neurons": [self.neurons[sorted_indices[0][0]]], "delta_loss": sorted_indices[0][1]}}
+                if sorted_indices
+                else {}
+            )
+
+        # Progressive beam search
         for size in range(start_size, self.target_size + 1):
             candidates = []
             sorted_indices = self._get_sorted_neurons()
@@ -451,52 +419,85 @@ class NeuronGroupSearch:
                                 {
                                     "current_beam": current_beam,
                                     "next_size": size,
-                                    "best_result": best_result,
+                                    "best_overall": best_overall,
+                                    "best_per_size": best_per_size,
                                     "completed": False,
                                 },
                             )
 
+            if not candidates:
+                break
+
             candidates.sort(key=lambda x: x[1], reverse=True)
             current_beam = candidates[:beam_width]
 
+            # Update best for current size
             if current_beam:
                 best_candidate = max(current_beam, key=lambda x: x[1])
-                if best_result is None or best_candidate[1] > best_result["delta_loss"]:
-                    best_result = {
+                best_per_size[size] = {
+                    "neurons": list(best_candidate[0]),
+                    "delta_loss": best_candidate[1],
+                }
+
+                # Update best overall if needed
+                if best_overall is None or best_candidate[1] > best_overall["delta_loss"]:
+                    best_overall = {
                         "neurons": list(best_candidate[0]),
                         "delta_loss": best_candidate[1],
                     }
 
-        if self.cache_dir:
-            final_result = (
-                best_result
-                if best_result
-                else {
-                    "neurons": list(current_beam[0][0]) if current_beam else [],
-                    "delta_loss": current_beam[0][1] if current_beam else 0.0,
-                }
+        # Create the best overall result
+        best_result = None
+        if best_overall:
+            best_result = SearchResult(neurons=best_overall["neurons"], delta_loss=best_overall["delta_loss"])
+        elif current_beam:
+            best_group = max(current_beam, key=lambda x: x[1])
+            best_result = SearchResult(neurons=list(best_group[0]), delta_loss=best_group[1])
+        else:
+            # Fallback to empty result
+            best_result = SearchResult(neurons=[], delta_loss=0.0)
+
+        # Get target size result
+        target_size_result = None
+        if self.target_size in best_per_size:
+            # We have a result with exactly the target size
+            target_size_result = SearchResult(
+                neurons=best_per_size[self.target_size]["neurons"],
+                delta_loss=best_per_size[self.target_size]["delta_loss"],
+                is_target_size=True,
             )
+        else:
+            # Need to create a target size group
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+        # Save final state
+        if self.cache_dir:
             self._save_search_state(
                 "progressive_beam",
                 {
                     "current_beam": current_beam,
                     "next_size": self.target_size + 1,
-                    "best_result": final_result,
-                    "result": final_result,  # Add result key for completed state
+                    "best_overall": best_overall,
+                    "best_per_size": best_per_size,
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
                     "completed": True,
                 },
             )
-            return SearchResult(**final_result)
 
-        if not current_beam:
-            return SearchResult(neurons=[], delta_loss=0.0)
-        best_group = max(current_beam, key=lambda x: x[1])
-        return SearchResult(neurons=list(best_group[0]), delta_loss=best_group[1])
+        return best_result, target_size_result
 
-    def hierarchical_cluster_search(self, n_clusters: int = 5, expansion_factor: int = 3) -> SearchResult:
+    def hierarchical_cluster_search(
+        self, n_clusters: int = 5, expansion_factor: int = 3
+    ) -> tuple[SearchResult, SearchResult]:
+        """Hierarchical clustering search for finding neuron groups.
+        Returns (best_result, target_size_result)
+        """
         state = self._load_search_state("hierarchical_cluster")
-        if state and state.get("completed") and "result" in state:
-            return SearchResult(**state["result"])
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
 
         features = np.array(self.individual_delta_loss).reshape(-1, 1)
         if features.std() > 0:
@@ -518,96 +519,213 @@ class NeuronGroupSearch:
             )
             representatives.extend([n for n, _ in sorted_cluster[:expansion_factor]])
 
+        # Track best result of any size
+        best_result = None
+
+        # Handle case where representatives are fewer than target size
         if len(representatives) <= self.target_size:
             delta_loss = self._evaluate_group(representatives)
-            result = {"neurons": representatives, "delta_loss": delta_loss}
-            self._save_search_state("hierarchical_cluster", {"result": result, "completed": True})
-            return SearchResult(**result)
+            best_result = SearchResult(neurons=representatives, delta_loss=delta_loss)
 
+            # Create target size result
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+            if self.cache_dir:
+                self._save_search_state(
+                    "hierarchical_cluster",
+                    {
+                        "best_result": best_result.__dict__,
+                        "target_size_result": target_size_result.__dict__,
+                        "completed": True,
+                    },
+                )
+
+            return best_result, target_size_result
+
+        # Sort representatives by importance
         sorted_reps = sorted(
             [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in representatives],
             key=lambda x: x[1],
             reverse=True,
         )
-        current_group = [n for n, _ in sorted_reps[: min(5, self.target_size)]]
 
+        # Initialize with top representatives
+        current_group = [n for n, _ in sorted_reps[: min(5, self.target_size)]]
+        best_per_size = {len(current_group): (current_group.copy(), self._evaluate_group(current_group))}
+
+        # Keep track of best group of any size
+        best_group = current_group.copy()
+        best_score = self._evaluate_group(best_group)
+
+        # Continue adding neurons
         while len(current_group) < self.target_size:
             best_candidate = None
-            best_score = -float("inf")
+            best_candidate_score = -float("inf")
+
             for n, _ in sorted_reps:
                 if n in current_group:
                     continue
+
                 test_group = current_group + [n]
                 delta_loss = self._evaluate_group(test_group)
-                if delta_loss > best_score:
+
+                # Update best candidate
+                if delta_loss > best_candidate_score:
                     best_candidate = n
+                    best_candidate_score = delta_loss
+
+                # Update best overall if better
+                if delta_loss > best_score:
+                    best_group = test_group.copy()
                     best_score = delta_loss
+
                 if self.cache_dir and len(current_group) % 2 == 0:
                     self._save_search_state(
                         "hierarchical_cluster",
                         {
                             "current_group": current_group,
+                            "best_per_size": best_per_size,
+                            "best_group": best_group,
+                            "best_score": best_score,
                             "completed": False,
                         },
                     )
+
             if best_candidate:
                 current_group.append(best_candidate)
+                # Store best for this size
+                best_per_size[len(current_group)] = (current_group.copy(), best_candidate_score)
             else:
                 break
 
-        delta_loss = self._evaluate_group(current_group)
-        result = {"neurons": current_group, "delta_loss": delta_loss}
-        self._save_search_state("hierarchical_cluster", {"result": result, "completed": True})
-        return SearchResult(**result)
+        # Create best overall result
+        best_result = SearchResult(neurons=best_group, delta_loss=best_score)
 
-    def iterative_pruning(self) -> SearchResult:
+        # Create target size result
+        if len(current_group) == self.target_size:
+            target_loss = self._evaluate_group(current_group)
+            target_size_result = SearchResult(neurons=current_group, delta_loss=target_loss, is_target_size=True)
+        else:
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+        # Save state
+        if self.cache_dir:
+            self._save_search_state(
+                "hierarchical_cluster",
+                {
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
+                    "completed": True,
+                },
+            )
+
+        return best_result, target_size_result
+
+    def iterative_pruning(self) -> tuple[SearchResult, SearchResult]:
+        """Iterative pruning search for finding neuron groups.
+        Returns (best_result, target_size_result)
+        """
         state = self._load_search_state("iterative_pruning")
-        if state and state.get("completed") and "result" in state:
-            return SearchResult(**state["result"])
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
 
-        current_group = state.get("current_group") if state else self.neurons.copy()
+        # Initialize variables
+        current_group = state.get("current_group") if state and state.get("current_group") else self.neurons.copy()
+        best_per_size = state.get("best_per_size", {})
 
+        # Track best group of any size
+        best_group = current_group.copy()
+        best_score = self._evaluate_group(best_group)
+
+        # Start with full set and record initial score
+        initial_score = self._evaluate_group(current_group)
+        best_per_size[len(current_group)] = (current_group.copy(), initial_score)
+
+        # Prune until we reach target size
         while len(current_group) > self.target_size:
             worst_neuron = None
-            best_score = -float("inf")
+            best_pruned_score = -float("inf")
+
+            # Try removing each neuron and find the one that hurts performance least
             for n in current_group:
                 test_group = [x for x in current_group if x != n]
                 delta_loss = self._evaluate_group(test_group)
-                if delta_loss > best_score:
-                    best_score = delta_loss
+
+                if delta_loss > best_pruned_score:
+                    best_pruned_score = delta_loss
                     worst_neuron = n
+
+                # Update best overall if better
+                if delta_loss > best_score:
+                    best_group = test_group.copy()
+                    best_score = delta_loss
+
+            # Remove worst neuron
             if worst_neuron is not None:
                 current_group.remove(worst_neuron)
+                # Store best for this size
+                best_per_size[len(current_group)] = (current_group.copy(), best_pruned_score)
+
                 if self.cache_dir and len(current_group) % 5 == 0:
                     self._save_search_state(
                         "iterative_pruning",
                         {
                             "current_group": current_group,
+                            "best_per_size": best_per_size,
+                            "best_group": best_group,
+                            "best_score": best_score,
                             "completed": False,
                         },
                     )
             else:
                 break
 
-        delta_loss = self._evaluate_group(current_group)
-        result = {"neurons": current_group, "delta_loss": delta_loss}
-        self._save_search_state("iterative_pruning", {"result": result, "completed": True})
-        return SearchResult(**result)
+        # Create best overall result
+        best_result = SearchResult(neurons=best_group, delta_loss=best_score)
+
+        # Create target size result
+        if self.target_size in best_per_size:
+            target_group, target_loss = best_per_size[self.target_size]
+            target_size_result = SearchResult(neurons=target_group, delta_loss=target_loss, is_target_size=True)
+        else:
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+        # Save state
+        if self.cache_dir:
+            self._save_search_state(
+                "iterative_pruning",
+                {
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
+                    "completed": True,
+                },
+            )
+
+        return best_result, target_size_result
 
     def importance_weighted_sampling(
         self, n_iterations: int = 100, learning_rate: float = 0.1, checkpoint_freq: int = 20
-    ) -> SearchResult:
-        """Find the best neuron group using importance weighted sampling with checkpointing."""
+    ) -> tuple[SearchResult, SearchResult]:
+        """Find neuron groups using importance weighted sampling.
+        Returns (best_result, target_size_result)
+        """
         method = "importance_weighted"
         state = self._load_search_state(method)
 
-        if state and state.get("completed") and "result" in state:
-            return SearchResult(**state["result"])
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
 
+        # Initialize variables
         if state and not state.get("completed"):
             weights = state["weights"]
             best_group = state["best_group"]
             best_score = state["best_score"]
+            best_target_size_group = state.get("best_target_size_group")
+            best_target_size_score = state.get("best_target_size_score", -float("inf"))
             start_iteration = state["iteration"]
         else:
             # Start from scratch
@@ -617,25 +735,36 @@ class NeuronGroupSearch:
             weights = weights / weights.sum()
             best_group = None
             best_score = -float("inf")
+            best_target_size_group = None
+            best_target_size_score = -float("inf")
             start_iteration = 0
 
+        # Run the sampling
         for i in range(start_iteration, n_iterations):
             if len(self.neurons) <= self.target_size:
                 sampled_indices = np.arange(len(self.neurons))
             else:
                 sampled_indices = np.random.choice(len(self.neurons), size=self.target_size, replace=False, p=weights)
+
             sampled_group = [self.neurons[idx] for idx in sampled_indices]
             score = self._evaluate_group(sampled_group)
 
+            # Update best overall
             if score > best_score:
-                best_group = sampled_group
+                best_group = sampled_group.copy()
                 best_score = score
 
-            # Optional weight update (if you want adaptive sampling)
+            # Update best target size (if exactly target size)
+            if len(sampled_group) == self.target_size and score > best_target_size_score:
+                best_target_size_group = sampled_group.copy()
+                best_target_size_score = score
+
+            # Update weights
             for idx in sampled_indices:
                 weights[idx] += learning_rate * score
             weights = weights / weights.sum()
 
+            # Checkpoint
             if self.cache_dir and (i + 1) % checkpoint_freq == 0:
                 self._save_search_state(
                     method,
@@ -644,18 +773,49 @@ class NeuronGroupSearch:
                         "weights": weights,
                         "best_group": best_group,
                         "best_score": best_score,
+                        "best_target_size_group": best_target_size_group,
+                        "best_target_size_score": best_target_size_score,
                         "completed": False,
                     },
                 )
 
-        result = {"neurons": best_group, "delta_loss": best_score}
-        self._save_search_state(method, {"result": result, "completed": True})
-        return SearchResult(**result)
+        # Create best overall result
+        best_result = SearchResult(
+            neurons=best_group if best_group else [], delta_loss=best_score if best_score > -float("inf") else 0.0
+        )
 
-    def hybrid_search(self, n_clusters: int = 5, expansion_factor: int = 3, beam_width: int = 2) -> SearchResult:
+        # Create target size result
+        if best_target_size_group:
+            target_size_result = SearchResult(
+                neurons=best_target_size_group, delta_loss=best_target_size_score, is_target_size=True
+            )
+        else:
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+        # Save state
+        if self.cache_dir:
+            self._save_search_state(
+                method,
+                {
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
+                    "completed": True,
+                },
+            )
+
+        return best_result, target_size_result
+
+    def hybrid_search(
+        self, n_clusters: int = 5, expansion_factor: int = 3, beam_width: int = 2
+    ) -> tuple[SearchResult, SearchResult]:
+        """Hybrid clustering and beam search for finding neuron groups.
+        Returns (best_result, target_size_result)
+        """
         state = self._load_search_state("hybrid")
-        if state and state.get("completed") and "result" in state:
-            return SearchResult(**state["result"])
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
 
         # Step 1: Get representatives using clustering
         features = np.array(self.individual_delta_loss).reshape(-1, 1)
@@ -685,53 +845,71 @@ class NeuronGroupSearch:
             target_size=self.target_size,
             individual_delta_loss=[self.individual_delta_loss[self.neurons.index(n)] for n in representatives],
         )
-        result = reduced_search.progressive_beam_search(beam_width=beam_width)
+        best_result, target_size_result = reduced_search.progressive_beam_search(beam_width=beam_width)
 
+        # Save state
         if self.cache_dir:
-            self._save_search_state("hybrid", {"result": result.__dict__, "completed": True})
+            self._save_search_state(
+                "hybrid",
+                {
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
+                    "completed": True,
+                },
+            )
 
-        return result
+        return best_result, target_size_result
 
-    def run_all_methods(self) -> dict[str, SearchResult]:
-        """Run all search methods and return the results."""
+    def run_all_methods(self) -> dict[str, tuple[SearchResult, SearchResult]]:
+        """Run all search methods and return the results.
+        Returns dict mapping method name to (best_result, target_size_result)
+        """
         results = {}
 
         # Run all methods with error handling
         try:
             results["progressive_beam"] = self.progressive_beam_search()
         except Exception as e:
-            print(f"Error in progressive_beam_search: {e}")
-            results["progressive_beam"] = SearchResult(neurons=[], delta_loss=0.0)
+            logger.error(f"Error in progressive_beam_search: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["progressive_beam"] = (empty_result, empty_result)
 
         try:
             results["hierarchical_cluster"] = self.hierarchical_cluster_search()
         except Exception as e:
-            print(f"Error in hierarchical_cluster_search: {e}")
-            results["hierarchical_cluster"] = SearchResult(neurons=[], delta_loss=0.0)
+            logger.error(f"Error in hierarchical_cluster_search: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["hierarchical_cluster"] = (empty_result, empty_result)
 
         try:
             results["iterative_pruning"] = self.iterative_pruning()
         except Exception as e:
-            print(f"Error in iterative_pruning: {e}")
-            results["iterative_pruning"] = SearchResult(neurons=[], delta_loss=0.0)
+            logger.error(f"Error in iterative_pruning: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["iterative_pruning"] = (empty_result, empty_result)
 
         try:
             results["importance_weighted"] = self.importance_weighted_sampling()
         except Exception as e:
-            print(f"Error in importance_weighted_sampling: {e}")
-            results["importance_weighted"] = SearchResult(neurons=[], delta_loss=0.0)
+            logger.error(f"Error in importance_weighted_sampling: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["importance_weighted"] = (empty_result, empty_result)
 
         try:
             results["hybrid"] = self.hybrid_search()
         except Exception as e:
-            print(f"Error in hybrid_search: {e}")
-            results["hybrid"] = SearchResult(neurons=[], delta_loss=0.0)
+            logger.error(f"Error in hybrid_search: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["hybrid"] = (empty_result, empty_result)
 
         return results
 
-    def get_best_result(self) -> tuple[str, SearchResult]:
-        """Run all methods and return the best result."""
+    def get_best_result(self) -> tuple[str, tuple[SearchResult, SearchResult]]:
+        """Run all methods and return the best method and its results.
+        Returns (method_name, (best_result, target_size_result))
+        """
         results = self.run_all_methods()
-        # Find the best method (highest delta loss)
-        best_method = max(results.items(), key=lambda x: x[1].delta_loss)
-        return best_method
+
+        # Find the best method (highest delta loss from the 'best' result, not target size result)
+        best_method_name = max(results.keys(), key=lambda x: results[x][0].delta_loss)
+        return best_method_name, results[best_method_name], results
