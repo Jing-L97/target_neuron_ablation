@@ -86,9 +86,23 @@ class NeuronGroupEvaluator:
             # If saving fails, we continue without caching
             pass
 
-    def get_act_name(self, prefix: str, layer_idx: int) -> str:
+    def get_act_name1(self, prefix: str, layer_idx: int) -> str:
         """Get the activation name for a layer."""
         return f"blocks.{layer_idx}.{prefix}"
+
+    def get_act_name(self, hook_type: str, layer_idx: int) -> str:
+        # Based on your actual cache keys
+        if hook_type == "post":
+            # This should fix the KeyError: 'blocks.5.post'
+            return f"blocks.{layer_idx}.mlp.hook_post"
+        if hook_type == "resid_post":
+            return f"blocks.{layer_idx}.hook_resid_post"
+        if hook_type == "mlp_post":
+            return f"blocks.{layer_idx}.mlp.hook_post"
+        if hook_type == "mlp_out":
+            return f"blocks.{layer_idx}.hook_mlp_out"
+        # For other hook types
+        return f"blocks.{layer_idx}.{hook_type}"
 
     def evaluate_neuron_group(self, neuron_group: list[int], sample_batches: int = 3) -> float:
         """Evaluate the impact of a neuron group by measuring delta loss."""
@@ -140,6 +154,7 @@ class NeuronGroupEvaluator:
         # Get original loss
         self.model.reset_hooks()
         original_logits, cache = self.model.run_with_cache(inp)
+        logger.info(cache)
         original_loss = self.model.loss_fn(original_logits, inp, per_token=True).mean().item()
 
         # Get neuron activations
@@ -485,6 +500,64 @@ class NeuronGroupSearch:
         delta_loss = self._evaluate_group(current_group)
         result = {"neurons": current_group, "delta_loss": delta_loss}
         self._save_search_state("iterative_pruning", {"result": result, "completed": True})
+        return SearchResult(**result)
+
+    def importance_weighted_sampling(
+        self, n_iterations: int = 100, learning_rate: float = 0.1, checkpoint_freq: int = 20
+    ) -> SearchResult:
+        """Find the best neuron group using importance weighted sampling with checkpointing."""
+        method = "importance_weighted"
+        state = self._load_search_state(method)
+
+        if state and state.get("completed"):
+            return SearchResult(**state["result"])
+
+        if state:
+            weights = state["weights"]
+            best_group = state["best_group"]
+            best_score = state["best_score"]
+            start_iteration = state["iteration"]
+        else:
+            # Start from scratch
+            scores = np.array(self.individual_delta_loss)
+            min_score = scores.min()
+            weights = scores - min_score + 1e-6
+            weights = weights / weights.sum()
+            best_group = None
+            best_score = -float("inf")
+            start_iteration = 0
+
+        for i in range(start_iteration, n_iterations):
+            if len(self.neurons) <= self.target_size:
+                sampled_indices = np.arange(len(self.neurons))
+            else:
+                sampled_indices = np.random.choice(len(self.neurons), size=self.target_size, replace=False, p=weights)
+            sampled_group = [self.neurons[idx] for idx in sampled_indices]
+            score = self._evaluate_group(sampled_group)
+
+            if score > best_score:
+                best_group = sampled_group
+                best_score = score
+
+            # Optional weight update (if you want adaptive sampling)
+            for idx in sampled_indices:
+                weights[idx] += learning_rate * score
+            weights = weights / weights.sum()
+
+            if self.cache_dir and (i + 1) % checkpoint_freq == 0:
+                self._save_search_state(
+                    method,
+                    {
+                        "iteration": i + 1,
+                        "weights": weights,
+                        "best_group": best_group,
+                        "best_score": best_score,
+                        "completed": False,
+                    },
+                )
+
+        result = {"neurons": best_group, "delta_loss": best_score}
+        self._save_search_state(method, {"result": result, "completed": True})
         return SearchResult(**result)
 
     def hybrid_search(self, n_clusters: int = 5, expansion_factor: int = 3, beam_width: int = 2) -> SearchResult:

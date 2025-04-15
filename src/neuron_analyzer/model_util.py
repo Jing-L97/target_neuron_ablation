@@ -268,7 +268,6 @@ class ModelHandler:
         """Load and tokenize data."""
         data = load_dataset(dataset, split="train")
         data_slice = data.select(list(range(data_range_start, data_range_end)))
-
         tokenized_data = utils.tokenize_and_concatenate(data_slice, self.tokenizer, max_length=256, column_name="text")
         tokenized_data = tokenized_data.shuffle(seed)
         token_df = nutils.make_token_df(tokenized_data["tokens"], model=self.model)
