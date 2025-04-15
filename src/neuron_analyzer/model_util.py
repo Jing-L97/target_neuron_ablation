@@ -5,7 +5,6 @@ import random
 from pathlib import Path
 from typing import Any
 
-import neel.utils as nutils
 import pandas as pd
 from datasets import load_dataset
 from transformer_lens import utils
@@ -270,5 +269,5 @@ class ModelHandler:
         data_slice = data.select(list(range(data_range_start, data_range_end)))
         tokenized_data = utils.tokenize_and_concatenate(data_slice, self.tokenizer, max_length=256, column_name="text")
         tokenized_data = tokenized_data.shuffle(seed)
-        token_df = nutils.make_token_df(tokenized_data["tokens"], model=self.model)
-        return token_df
+        # token_df = nutils.make_token_df(tokenized_data["tokens"], model=self.model)
+        return tokenized_data

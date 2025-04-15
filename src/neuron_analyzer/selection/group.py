@@ -116,7 +116,7 @@ class NeuronGroupEvaluator:
             return self.eval_cache[cache_key]
 
         # Sample random batches for evaluation
-        available_batches = list(range(len(self.tokenized_data["str_tokens"])))
+        available_batches = list(range(len(self.tokenized_data["tokens"])))
         batch_indices = np.random.choice(available_batches, min(sample_batches, len(available_batches)), replace=False)
 
         total_delta_loss = 0.0
@@ -141,7 +141,7 @@ class NeuronGroupEvaluator:
     def _compute_delta_loss_for_batch(self, batch_idx: int, neuron_group: list[int]) -> float:
         """Compute delta loss for a specific batch and neuron group."""
         # Get the input sequence
-        tok_seq = self.tokenized_data["str_tokens"][batch_idx]
+        tok_seq = self.tokenized_data["tokens"][batch_idx]
         if isinstance(tok_seq, str):
             tok_seq = self.tokenizer(tok_seq, return_tensors="pt")["input_ids"]
             logger.info("Tokenizing the input string")
@@ -154,7 +154,6 @@ class NeuronGroupEvaluator:
         # Get original loss
         self.model.reset_hooks()
         original_logits, cache = self.model.run_with_cache(inp)
-        logger.info(cache)
         original_loss = self.model.loss_fn(original_logits, inp, per_token=True).mean().item()
 
         # Get neuron activations
@@ -193,13 +192,101 @@ class NeuronGroupEvaluator:
 
         return delta_loss
 
+    def _compute_delta_loss_for_batch1(self, batch_idx: int, neuron_group: list[int]) -> float:
+        """Compute delta loss for a specific batch and neuron group with NaN protection."""
+        try:
+            # Get the input sequence
+            tok_seq = self.tokenized_data["tokens"][batch_idx]
+
+            # Dimension handling for the right shape: [batch_size, sequence_length]
+            inp = tok_seq.unsqueeze(0).to(self.device) if tok_seq.dim() == 1 else tok_seq.to(self.device)
+
+            # Get original loss with error handling
+            self.model.reset_hooks()
+            original_logits, cache = self.model.run_with_cache(inp)
+            original_loss = self.model.loss_fn(original_logits, inp, per_token=True).mean().item()
+
+            # Verify original_loss is not NaN
+            if np.isnan(original_loss):
+                logger.warning(f"Original loss is NaN for batch {batch_idx}")
+                return 0.0
+
+            # Get neuron activations
+            act_key = self.get_act_name("post", self.layer_idx)
+            if act_key not in cache:
+                logger.warning(f"Activation key {act_key} not found in cache")
+                return 0.0
+
+            activations = cache[act_key][0]
+
+            # Verify activations are valid
+            if torch.isnan(activations).any():
+                logger.warning(f"NaN found in activations for batch {batch_idx}")
+                return 0.0
+
+            # Calculate mean activation values across the dataset
+            neuron_means = activations.mean(dim=0)
+
+            # Apply neuron updates safely
+            activation_deltas = torch.zeros_like(activations)
+            for neuron_idx in neuron_group:
+                if neuron_idx >= activations.shape[1]:
+                    logger.warning(f"Neuron index {neuron_idx} out of bounds")
+                    continue
+                activation_deltas[:, neuron_idx] = neuron_means[neuron_idx] - activations[:, neuron_idx]
+
+            # Compute residual stream deltas safely
+            try:
+                res_deltas = activation_deltas.unsqueeze(-1) * self.model.W_out[self.layer_idx]
+                res_key = self.get_act_name("resid_post", self.layer_idx)
+
+                if res_key not in cache:
+                    logger.warning(f"Residual key {res_key} not found in cache")
+                    return 0.0
+
+                res_stream = cache[res_key][0]
+
+                # Apply the deltas to the residual stream
+                updated_res_stream = res_stream + res_deltas.sum(dim=1)
+
+                # Check for NaNs
+                if torch.isnan(updated_res_stream).any():
+                    logger.warning(f"NaN found in updated residual stream for batch {batch_idx}")
+                    return 0.0
+
+                # Apply layer normalization
+                normalized_res_stream = self.model.ln_final(updated_res_stream.unsqueeze(0))[0]
+
+                # Project to logit space
+                ablated_logits = normalized_res_stream @ self.model.W_U + self.model.b_U
+
+                # Compute ablated loss
+                ablated_loss = self.model.loss_fn(ablated_logits.unsqueeze(0), inp, per_token=True).mean().item()
+
+                # Check for NaN in ablated loss
+                if np.isnan(ablated_loss):
+                    logger.warning(f"Ablated loss is NaN for batch {batch_idx}")
+                    return 0.0
+
+                # Calculate delta loss
+                delta_loss = original_loss - ablated_loss
+                return delta_loss
+
+            except Exception as e:
+                logger.error(f"Error in delta loss computation: {e}")
+                return 0.0
+
+        except Exception as e:
+            logger.error(f"Error processing batch {batch_idx}: {e}")
+            return 0.0
+
     def ablate_and_record(self, neuron_group: list[int], batch_indices: list[int]) -> pd.DataFrame:
         """Ablate neurons in the specified group and record results."""
         results = []
 
         for batch_idx in batch_indices:
             # Get the input sequence
-            tok_seq = self.tokenized_data["str_tokens"][batch_idx]
+            tok_seq = self.tokenized_data["tokens"][batch_idx]
             inp = tok_seq.unsqueeze(0).to(self.device)
 
             # Get original loss and cache
@@ -237,8 +324,8 @@ class NeuronGroupEvaluator:
             )
 
             # Get token string representations if available
-            if hasattr(self.tokenized_data, "str_tokens") and self.tokenized_data["str_tokens"] is not None:
-                tokens_str = self.tokenized_data["str_tokens"][batch_idx]
+            if hasattr(self.tokenized_data, "tokens") and self.tokenized_data["tokens"] is not None:
+                tokens_str = self.tokenized_data["tokens"][batch_idx]
             else:
                 tokens_str = [f"<token_{t.item()}>" for t in tok_seq]
 
@@ -323,14 +410,18 @@ class NeuronGroupSearch:
 
     def progressive_beam_search(self, beam_width: int = 2) -> SearchResult:
         state = self._load_search_state("progressive_beam")
-        if state and state.get("completed"):
+
+        # Check if state exists AND is marked as completed AND contains the result key
+        if state and state.get("completed") and "result" in state:
             return SearchResult(**state["result"])
 
-        if state:
-            current_beam = state["current_beam"]
-            start_size = state["next_size"]
-            best_result = state["best_result"]
+        # If we have a partial state but it's not completed
+        if state and not state.get("completed"):
+            current_beam = state.get("current_beam", [])
+            start_size = state.get("next_size", 2)
+            best_result = state.get("best_result")  # Use .get() to handle missing key
         else:
+            # Start from scratch
             sorted_indices = self._get_sorted_neurons()
             current_beam = []
             for i in range(min(beam_width, len(sorted_indices))):
@@ -391,6 +482,7 @@ class NeuronGroupSearch:
                     "current_beam": current_beam,
                     "next_size": self.target_size + 1,
                     "best_result": final_result,
+                    "result": final_result,  # Add result key for completed state
                     "completed": True,
                 },
             )
@@ -403,7 +495,7 @@ class NeuronGroupSearch:
 
     def hierarchical_cluster_search(self, n_clusters: int = 5, expansion_factor: int = 3) -> SearchResult:
         state = self._load_search_state("hierarchical_cluster")
-        if state and state.get("completed"):
+        if state and state.get("completed") and "result" in state:
             return SearchResult(**state["result"])
 
         features = np.array(self.individual_delta_loss).reshape(-1, 1)
@@ -470,10 +562,10 @@ class NeuronGroupSearch:
 
     def iterative_pruning(self) -> SearchResult:
         state = self._load_search_state("iterative_pruning")
-        if state and state.get("completed"):
+        if state and state.get("completed") and "result" in state:
             return SearchResult(**state["result"])
 
-        current_group = state["current_group"] if state else self.neurons.copy()
+        current_group = state.get("current_group") if state else self.neurons.copy()
 
         while len(current_group) > self.target_size:
             worst_neuron = None
@@ -509,10 +601,10 @@ class NeuronGroupSearch:
         method = "importance_weighted"
         state = self._load_search_state(method)
 
-        if state and state.get("completed"):
+        if state and state.get("completed") and "result" in state:
             return SearchResult(**state["result"])
 
-        if state:
+        if state and not state.get("completed"):
             weights = state["weights"]
             best_group = state["best_group"]
             best_score = state["best_score"]
@@ -562,7 +654,7 @@ class NeuronGroupSearch:
 
     def hybrid_search(self, n_clusters: int = 5, expansion_factor: int = 3, beam_width: int = 2) -> SearchResult:
         state = self._load_search_state("hybrid")
-        if state and state.get("completed"):
+        if state and state.get("completed") and "result" in state:
             return SearchResult(**state["result"])
 
         # Step 1: Get representatives using clustering
@@ -604,12 +696,36 @@ class NeuronGroupSearch:
         """Run all search methods and return the results."""
         results = {}
 
-        # Run all methods
-        results["progressive_beam"] = self.progressive_beam_search()
-        results["hierarchical_cluster"] = self.hierarchical_cluster_search()
-        results["iterative_pruning"] = self.iterative_pruning()
-        results["importance_weighted"] = self.importance_weighted_sampling()
-        results["hybrid"] = self.hybrid_search()
+        # Run all methods with error handling
+        try:
+            results["progressive_beam"] = self.progressive_beam_search()
+        except Exception as e:
+            print(f"Error in progressive_beam_search: {e}")
+            results["progressive_beam"] = SearchResult(neurons=[], delta_loss=0.0)
+
+        try:
+            results["hierarchical_cluster"] = self.hierarchical_cluster_search()
+        except Exception as e:
+            print(f"Error in hierarchical_cluster_search: {e}")
+            results["hierarchical_cluster"] = SearchResult(neurons=[], delta_loss=0.0)
+
+        try:
+            results["iterative_pruning"] = self.iterative_pruning()
+        except Exception as e:
+            print(f"Error in iterative_pruning: {e}")
+            results["iterative_pruning"] = SearchResult(neurons=[], delta_loss=0.0)
+
+        try:
+            results["importance_weighted"] = self.importance_weighted_sampling()
+        except Exception as e:
+            print(f"Error in importance_weighted_sampling: {e}")
+            results["importance_weighted"] = SearchResult(neurons=[], delta_loss=0.0)
+
+        try:
+            results["hybrid"] = self.hybrid_search()
+        except Exception as e:
+            print(f"Error in hybrid_search: {e}")
+            results["hybrid"] = SearchResult(neurons=[], delta_loss=0.0)
 
         return results
 
@@ -618,4 +734,4 @@ class NeuronGroupSearch:
         results = self.run_all_methods()
         # Find the best method (highest delta loss)
         best_method = max(results.items(), key=lambda x: x[1].delta_loss)
-        return best_method, results
+        return best_method
