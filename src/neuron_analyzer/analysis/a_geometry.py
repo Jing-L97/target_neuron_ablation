@@ -605,7 +605,6 @@ class ActivationGeometricAnalyzer:
             "coactivation": {
                 k: v for k, v in self.coactivation_results.items() if not (isinstance(v, np.ndarray) and v.size > 1000)
             },
-            "special_neuron_indices": self.special_neuron_indices,
             "summary": summary,
             "neuron_indices": neuron_indices,
         }

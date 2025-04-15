@@ -98,8 +98,10 @@ class NeuronSelector:
         """Create a statistics DataFrame from ranked neurons."""
         df_lst = []
         for sel_header, _ in header_dict.items():
-            df_lst.append([ranked_neurons[sel_header].head(self.top_n).tolist()])
-
+            if self.top_n != -1:
+                df_lst.append([ranked_neurons[sel_header].head(self.top_n).tolist()])
+            else:
+                df_lst.append([ranked_neurons[sel_header].tolist()])
         stat_df = pd.DataFrame(df_lst).T
         stat_df.columns = header_dict.values()
         stat_df.insert(0, "step", self.step)

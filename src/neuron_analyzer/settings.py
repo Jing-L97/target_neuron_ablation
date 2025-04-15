@@ -45,12 +45,8 @@ class _MyPathSettings:
         return self.DATA_DIR / "datasets"
 
     @property
-    def unigram_dir(self) -> _Path:
-        return self.DATA_DIR / "datasets" / "src" / "unigram"
-
-    @property
-    def context_dir(self) -> _Path:
-        return self.DATA_DIR / "datasets" / "context"
+    def script_dir(self) -> _Path:
+        return self.DATA_DIR / "target_neuron_ablation"
 
     @property
     def model_dir(self) -> _Path:
@@ -61,20 +57,24 @@ class _MyPathSettings:
         return self.DATA_DIR / "results"
 
     @property
+    def unigram_dir(self) -> _Path:
+        return self.DATA_DIR / "datasets" / "src" / "unigram"
+
+    @property
+    def context_dir(self) -> _Path:
+        return self.DATA_DIR / "datasets" / "context"
+
+    @property
     def surprisal_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "surprisal"
 
     @property
     def neuron_dir(self) -> _Path:
-        return self.DATA_DIR / "results" / "token_freq"
+        return self.DATA_DIR / "results" / "selection"
 
     @property
     def direction_dir(self) -> _Path:
-        return self.DATA_DIR / "results" / "directions"
-
-    @property
-    def script_dir(self) -> _Path:
-        return self.DATA_DIR / "target_neuron_ablation"
+        return self.DATA_DIR / "results" / "geometry"
 
 
 #######################################################

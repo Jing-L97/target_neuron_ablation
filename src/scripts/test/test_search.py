@@ -1,7 +1,7 @@
 import argparse
 import logging
 
-from neuron_analyzer.selection.search import NeuronGroupSearch
+from neuron_analyzer.selection.group import NeuronGroupSearch
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -29,9 +29,10 @@ def test_neuron_search():
         # Here we'll just return a value based on the sum of neuron IDs
         return sum(neurons) / 100
 
-    # Create a list of neuron IDs
+    # load neuron indices and selta loss from the feather file
     neurons = list(range(100))
-
+    # load from the
+    individual_delta_loss = list(range(100))
     # Initialize the search
     search = NeuronGroupSearch(neurons=neurons, evaluation_fn=evaluate_neurons, target_size=10)
 

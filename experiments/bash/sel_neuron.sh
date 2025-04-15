@@ -2,11 +2,11 @@
 #SBATCH --job-name=sel_neuron
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=40G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=80G
 #SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_neuron_%a.log
-#SBATCH --array=0-15
+#SBATCH --array=0-3
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
@@ -22,10 +22,7 @@ VECTORS=(
 )
 
 TOP_NS=(
-    10
-    50
-    100
-    500
+    -1
 )
 
 MODELS=(

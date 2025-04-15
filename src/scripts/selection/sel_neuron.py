@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import logging
+from pathlib import Path
 
 import pandas as pd
 import torch
@@ -26,7 +27,7 @@ def parse_args() -> argparse.Namespace:
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
     )
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
-    parser.add_argument("--sel_by_med", type=bool, default=True, help="whether to select by mediation effect")
+    parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
     parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
@@ -34,6 +35,29 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
     return parser.parse_args()
+
+
+#######################################################################################################
+# Fucntions applied in the main scripts
+#######################################################################################################
+
+
+def set_path(args) -> Path:
+    """Set the saving path based on differnt configurations."""
+    top_n_name = "all" if args.top_n == -1 else args.top_n
+    filename = f"{args.data_range_end}_{top_n_name}.debug" if args.debug else f"{args.data_range_end}_{top_n_name}.csv"
+    save_path = (
+        settings.PATH.result_dir
+        / "selection"
+        / "neuron"
+        / args.vector
+        / args.model
+        / args.heuristic
+        / args.effect
+        / filename
+    )
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    return save_path
 
 
 #######################################################################################################
@@ -47,16 +71,7 @@ def main() -> None:
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
-    save_path = (
-        settings.PATH.result_dir
-        / "token_freq"
-        / args.vector
-        / args.model
-        / args.heuristic
-        / args.effect
-        / f"{args.data_range_end}_{args.top_n}.csv"
-    )
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+    save_path = set_path(args)
     if save_path.is_file():
         logger.info(f"{save_path} already exists, skip!")
     else:
