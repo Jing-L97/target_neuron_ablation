@@ -4,10 +4,10 @@ import logging
 from pathlib import Path
 
 import numpy as np
-import pandas as pd
 import torch
 
 from neuron_analyzer import settings
+from neuron_analyzer.load_util import JsonProcessor
 from neuron_analyzer.model_util import ModelHandler, NeuronLoader
 from neuron_analyzer.selection.group import NeuronGroupEvaluator, NeuronGroupSearch
 
@@ -70,9 +70,16 @@ def load_neuron_index(args) -> list[int]:
 
 def set_path(args) -> Path:
     """Set save and cache path."""
-    save_dir = settings.PATH.neuron_dir / "group" / args.effect / args.vector / args.model
-    save_dir.mkdir(parents=True, exist_ok=True)
-    return save_dir
+    save_path = (
+        settings.PATH.neuron_dir
+        / "group"
+        / args.effect
+        / args.vector
+        / args.model
+        / f"{args.data_range_end}_{args.top_n}.json"
+    )
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    return save_path
 
 
 class NeuronGroupSelector:
@@ -96,10 +103,8 @@ class NeuronGroupSelector:
     def process_single_step(self, step) -> None:
         """Process a single step with the given configuration."""
         # initlize the model handler class
-
         model_handler = ModelHandler()
         # Load model and tokenizer for specific step
-
         model, tokenizer = model_handler.load_model_and_tokenizer(
             step=step,
             model_name=self.args.model,
@@ -117,7 +122,6 @@ class NeuronGroupSelector:
 
         # load the single neuron and heuristic list
         neuron_lst, stat_lst = self.step_neuron[int(step)], self.step_stat[int(step)]
-        logger.info("Finished loading neuron and stat lists")
         # initilize the eval
         group_evaluator = NeuronGroupEvaluator(
             model=model,
@@ -126,7 +130,6 @@ class NeuronGroupSelector:
             device=self.device,
             layer_idx=self.layer_num,
         )
-        logger.info("Finished initializing the evaluator")
         self.cache_dir = self._get_save_path(step)
         # initialize the neuron group search
         search = NeuronGroupSearch(
@@ -136,15 +139,11 @@ class NeuronGroupSelector:
             target_size=self.args.top_n,
             cache_dir=self.cache_dir,
         )
-        logger.info("Finished initializing the search")
         # Get the best result using all methods
-        best_method, results, results_all = search.get_best_result()
-
-        logger.info(f"Best method: {best_method}")
-        # logger.info(f"Best neurons: {results.neurons}")
-        # logger.info(f"Delta loss: {results.delta_loss}")
-        logger.info(f"Overall results: {results_all}")
-        return best_method, results
+        results = search.get_best_result()
+        logger.info(f"Method with highest heuristic: {results['best']}")
+        logger.info(f"Method with target length: {results['target_size']}")
+        return results
 
     def _get_save_path(self, step) -> Path:
         """Get the savepath based on current configurations."""
@@ -164,25 +163,27 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # configure save_dir
-    save_dir = set_path(args)
+    save_path = set_path(args)
     # load neuron
     layer_num, step_neuron, step_stat = load_neuron_index(args)
 
     # initilize the selector class
     group_selector = NeuronGroupSelector(
-        args=args, device=device, layer_num=layer_num, step_neuron=step_neuron, step_stat=step_stat, save_dir=save_dir
+        args=args, device=device, layer_num=layer_num, step_neuron=step_neuron, step_stat=step_stat, save_dir=save_path
     )
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     if abl_path.is_file():
         logger.info(f"{abl_path} already exists, skip!")
     else:
-        neuron_df = pd.DataFrame()
+        final_results = {}
         # check whether the target file has been created
         for step in abl_path.iterdir():
             if step.is_dir():
-                group_selector.process_single_step(step.name)
-                # best_method, results = group_selector.process_single_step(int(step.name[4:]))
+                results = group_selector.process_single_step(step.name)
+                final_results[step] = results
+                # save the intermediate checkpoints
+                JsonProcessor.save_json(final_results, save_path)
 
 
 if __name__ == "__main__":

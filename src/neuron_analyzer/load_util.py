@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import gc
 import json
 import logging
 import random
@@ -156,3 +157,17 @@ def load_unigram(model_name, device) -> torch.Tensor:
         raise Exception(f"No unigram distribution for {model_name}")
 
     return unigram_distrib, unigram_count
+
+
+#######################################################
+# Memory management
+
+
+def cleanup() -> None:
+    """Release memory after results are no longer needed."""
+    # Force cleanup of any tensor references
+    gc.collect()
+    # Clear CUDA cache if using GPU
+    if torch.cuda.is_available():
+        torch.cuda.empty_cache()
+    logger.info("Release cuda memory.")

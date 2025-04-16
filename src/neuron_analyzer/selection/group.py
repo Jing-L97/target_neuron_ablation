@@ -12,6 +12,8 @@ import pandas as pd
 import torch
 from sklearn.cluster import AgglomerativeClustering
 
+from neuron_analyzer.load_util import cleanup
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -79,12 +81,8 @@ class NeuronGroupEvaluator:
             return
 
         cache_path = self._get_cache_path()
-        try:
-            with open(cache_path, "wb") as f:
-                pickle.dump(self.eval_cache, f)
-        except Exception:
-            # If saving fails, we continue without caching
-            pass
+        with open(cache_path, "wb") as f:
+            pickle.dump(self.eval_cache, f)
 
     def get_act_name(self, hook_type: str, layer_idx: int) -> str:
         # Based on your actual cache keys
@@ -317,9 +315,7 @@ class NeuronGroupSearch:
         return None
 
     def _ensure_target_size_group(self, result: SearchResult) -> tuple[SearchResult, SearchResult]:
-        """Ensures we have a group with the target size.
-        Returns tuple of (best_result, target_size_result)
-        """
+        """Ensures we have a group with the target size."""
         best_result = result
 
         # If result already has target size, both results are the same
@@ -363,9 +359,7 @@ class NeuronGroupSearch:
         return best_result, target_size_result
 
     def progressive_beam_search(self, beam_width: int = 2) -> tuple[SearchResult, SearchResult]:
-        """Progressive beam search for finding neuron groups.
-        Returns (best_result, target_size_result)
-        """
+        """Progressive beam search for finding neuron groups."""
         state = self._load_search_state("progressive_beam")
 
         # Check if state exists AND is marked as completed AND contains both result keys
@@ -377,7 +371,7 @@ class NeuronGroupSearch:
         # If we have a partial state but it's not completed
         if state and not state.get("completed"):
             current_beam = state.get("current_beam", [])
-            start_size = state.get("next_size", 2)
+            start_size = state.get("next_size", beam_width)
             best_overall = state.get("best_overall")
             best_per_size = state.get("best_per_size", {})
         else:
@@ -484,15 +478,13 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
+        cleanup()
         return best_result, target_size_result
 
     def hierarchical_cluster_search(
         self, n_clusters: int = 5, expansion_factor: int = 3
     ) -> tuple[SearchResult, SearchResult]:
-        """Hierarchical clustering search for finding neuron groups.
-        Returns (best_result, target_size_result)
-        """
+        """Hierarchical clustering search for finding neuron groups."""
         state = self._load_search_state("hierarchical_cluster")
         if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
             best_result = SearchResult(**state["best_result"])
@@ -618,13 +610,11 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
+        cleanup()
         return best_result, target_size_result
 
     def iterative_pruning(self) -> tuple[SearchResult, SearchResult]:
-        """Iterative pruning search for finding neuron groups.
-        Returns (best_result, target_size_result)
-        """
+        """Iterative pruning search for finding neuron groups."""
         state = self._load_search_state("iterative_pruning")
         if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
             best_result = SearchResult(**state["best_result"])
@@ -702,15 +692,13 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
+        cleanup()
         return best_result, target_size_result
 
     def importance_weighted_sampling(
         self, n_iterations: int = 100, learning_rate: float = 0.1, checkpoint_freq: int = 20
     ) -> tuple[SearchResult, SearchResult]:
-        """Find neuron groups using importance weighted sampling.
-        Returns (best_result, target_size_result)
-        """
+        """Find neuron groups using importance weighted sampling."""
         method = "importance_weighted"
         state = self._load_search_state(method)
 
@@ -802,15 +790,13 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
+        cleanup()
         return best_result, target_size_result
 
     def hybrid_search(
         self, n_clusters: int = 5, expansion_factor: int = 3, beam_width: int = 2
     ) -> tuple[SearchResult, SearchResult]:
-        """Hybrid clustering and beam search for finding neuron groups.
-        Returns (best_result, target_size_result)
-        """
+        """Hybrid clustering and beam search for finding neuron groups."""
         state = self._load_search_state("hybrid")
         if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
             best_result = SearchResult(**state["best_result"])
@@ -857,13 +843,11 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
+        cleanup()
         return best_result, target_size_result
 
     def run_all_methods(self) -> dict[str, tuple[SearchResult, SearchResult]]:
-        """Run all search methods and return the results.
-        Returns dict mapping method name to (best_result, target_size_result)
-        """
+        """Run all search methods and return the results."""
         results = {}
 
         # Run all methods with error handling
@@ -905,11 +889,9 @@ class NeuronGroupSearch:
         return results
 
     def get_best_result(self) -> tuple[str, tuple[SearchResult, SearchResult]]:
-        """Run all methods and return the best method and its results.
-        Returns (method_name, (best_result, target_size_result))
-        """
+        """Run all methods and return the best method and its results."""
         results = self.run_all_methods()
-
         # Find the best method (highest delta loss from the 'best' result, not target size result)
         best_method_name = max(results.keys(), key=lambda x: results[x][0].delta_loss)
-        return best_method_name, results[best_method_name], results
+        total_method_name = max(results.keys(), key=lambda x: results[x][1].delta_loss)
+        return {"best": results[best_method_name][0], "target_size": results[total_method_name][1], "toal": results}
