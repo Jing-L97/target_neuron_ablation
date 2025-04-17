@@ -10,7 +10,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
+import tqdm
 from sklearn.cluster import AgglomerativeClustering
+from transformer_lens import utils
 
 from neuron_analyzer.load_util import cleanup
 
@@ -29,225 +31,589 @@ class NeuronEvalResult:
     delta_loss: float
 
 
-class NeuronGroupEvaluator:
-    """Lightweight evaluator for measuring neuron group impact via ablation."""
+class GroupModelAblationAnalyzer:
+    """Class for analyzing neural network components through group ablations."""
 
     def __init__(
         self,
         model,
+        unigram_distrib,
         tokenized_data,
-        tokenizer,
-        device: str,
-        layer_idx: int,
-        cache_dir: str | Path | None = None,
+        entropy_df,
+        neuron_groups: list[list[str]],  # List of neuron groups, each group is a list of neuron names
+        group_names: list[str] | None = None,  # Optional names for each group
+        device: str = "cuda",
+        k: int = 10,
+        chunk_size: int = 20,
+        ablation_mode: str = "mean",
+        longtail_threshold: float = 0.001,
     ):
-        """Initialize the neuron group evaluator."""
+        """Initialize the GroupModelAblationAnalyzer.
+
+        Args:
+            model: The transformer model to analyze
+            unigram_distrib: Unigram distribution for the model
+            tokenized_data: Tokenized data to run through the model
+            entropy_df: DataFrame with entropy information
+            neuron_groups: List of neuron groups, where each group is a list of neuron names (e.g., [["0.123", "0.456"], ["1.789", "1.012"]])
+            group_names: Optional names for each group (defaults to "group_0", "group_1", etc.)
+            device: Device to run the model on
+            k: Number of random sequences to sample
+            chunk_size: Chunk size for processing
+            ablation_mode: Ablation mode ("mean" or "longtail")
+            longtail_threshold: Threshold for long-tail tokens
+
+        """
         self.model = model
+        self.unigram_distrib = unigram_distrib
         self.tokenized_data = tokenized_data
-        self.tokenizer = tokenizer
+        self.entropy_df = entropy_df
         self.device = device
-        self.layer_idx = layer_idx
+        self.k = k
+        self.chunk_size = chunk_size
+        self.ablation_mode = ablation_mode
+        self.longtail_threshold = longtail_threshold
+        self.results = {}
+        self.log_unigram_distrib = self.unigram_distrib.log()
 
-        # Set up caching
-        self.cache_dir = Path(cache_dir) if cache_dir else None
-        if self.cache_dir:
-            self.cache_dir.mkdir(exist_ok=True, parents=True)
-            self.eval_cache = self._load_cache()
+        # Store neuron groups and set up group names
+        self.neuron_groups = neuron_groups
+        if group_names is None:
+            self.group_names = [f"group_{i}" for i in range(len(neuron_groups))]
         else:
-            self.eval_cache = {}
+            self.group_names = group_names
 
-    def _get_cache_path(self) -> Path:
-        """Get the path to the evaluation cache file."""
-        return self.cache_dir / f"neuron_eval_cache_layer_{self.layer_idx}.pkl"
+        # This will be our components to ablate
+        self.components_to_ablate = self.group_names
 
-    def _load_cache(self) -> dict:
-        """Load cached evaluation results if available."""
-        if not self.cache_dir:
-            return {}
+        # Validate that all neurons in each group are from the same layer
+        for i, group in enumerate(neuron_groups):
+            layers = [int(neuron.split(".")[0]) for neuron in group]
+            if len(set(layers)) > 1:
+                raise ValueError(f"Group {i} contains neurons from different layers: {layers}")
 
-        cache_path = self._get_cache_path()
-        if cache_path.exists():
-            try:
-                with open(cache_path, "rb") as f:
-                    return pickle.load(f)
-            except Exception:
-                # If loading fails, return empty cache
-                return {}
-        return {}
+        # Store the layer for each group
+        self.group_layers = [int(group[0].split(".")[0]) for group in neuron_groups]
 
-    def _save_cache(self) -> None:
-        """Save evaluation cache to disk."""
-        if not self.cache_dir:
-            return
+        # Map each group to its neuron indices
+        self.group_neuron_indices = [[int(neuron.split(".")[1]) for neuron in group] for group in neuron_groups]
 
-        cache_path = self._get_cache_path()
-        with open(cache_path, "wb") as f:
-            pickle.dump(self.eval_cache, f)
+        # Check if there's a component_name column which might indicate the neuron name
+        if "component_name" in self.entropy_df.columns:
+            logger.info("Found 'component_name' column - using this for neuron identification")
+            self.has_component_name = True
+        else:
+            self.has_component_name = False
 
-    def get_act_name(self, hook_type: str, layer_idx: int) -> str:
-        # Based on your actual cache keys
-        if hook_type == "post":
-            # This should fix the KeyError: 'blocks.5.post'
-            return f"blocks.{layer_idx}.mlp.hook_post"
-        if hook_type == "resid_post":
-            return f"blocks.{layer_idx}.hook_resid_post"
-        if hook_type == "mlp_post":
-            return f"blocks.{layer_idx}.mlp.hook_post"
-        if hook_type == "mlp_out":
-            return f"blocks.{layer_idx}.hook_mlp_out"
-        # For other hook types
-        return f"blocks.{layer_idx}.{hook_type}"
+        # Check if there's a single activation column
+        if "activation" in self.entropy_df.columns:
+            logger.info("Found single 'activation' column - will use with component_name")
+            self.has_single_activation = True
+        else:
+            self.has_single_activation = False
+            # Check for other possible activation columns
+            activation_cols = [col for col in self.entropy_df.columns if "_activation" in str(col)]
+            if not activation_cols and not self.has_single_activation:
+                raise ValueError("Cannot find any activation columns in the DataFrame")
 
-    def evaluate_neuron_group(self, neuron_group: list[int], sample_batches: int = 3) -> float:
-        """Evaluate the impact of a neuron group by measuring delta loss."""
-        # Skip empty groups
-        if not neuron_group:
-            return 0.0
+        # Check the required columns for processing
+        required_columns = ["batch"]
+        for col in required_columns:
+            if col not in self.entropy_df.columns:
+                raise ValueError(f"Required column {col} not found in entropy_df")
 
-        # Check cache first
-        cache_key = tuple(sorted(neuron_group))
-        if cache_key in self.eval_cache:
-            return self.eval_cache[cache_key]
-
-        # Sample random batches for evaluation
-        available_batches = list(range(len(self.tokenized_data["tokens"])))
-        batch_indices = np.random.choice(available_batches, min(sample_batches, len(available_batches)), replace=False)
-
-        total_delta_loss = 0.0
-
-        for batch_idx in batch_indices:
-            # Get the delta loss for this batch
-            batch_delta = self._compute_delta_loss_for_batch(batch_idx, neuron_group)
-            total_delta_loss += batch_delta
-
-        # Average across batches
-        avg_delta_loss = total_delta_loss / len(batch_indices)
-
-        # Cache the result
-        self.eval_cache[cache_key] = avg_delta_loss
-
-        # Periodically save cache
-        if len(self.eval_cache) % 50 == 0:
-            self._save_cache()
-
-        return avg_delta_loss
-
-    def _compute_delta_loss_for_batch(self, batch_idx: int, neuron_group: list[int]) -> float:
-        """Compute delta loss for a specific batch and neuron group."""
-        # Get the input sequence
-        tok_seq = self.tokenized_data["tokens"][batch_idx]
-        if isinstance(tok_seq, str):
-            tok_seq = self.tokenizer(tok_seq, return_tensors="pt")["input_ids"]
-            logger.info("Tokenizing the input string")
-
-        # dimenison handling for the right shape: [batch_size, sequence_length]
-        # Make sure we have the right shape: [batch_size, sequence_length]
-        inp = tok_seq.unsqueeze(0).to(self.device) if tok_seq.dim() == 1 else tok_seq.to(self.device)
-
-        # Get original loss
-        self.model.reset_hooks()
-        original_logits, cache = self.model.run_with_cache(inp)
-        original_loss = self.model.loss_fn(original_logits, inp, per_token=True).mean().item()
-
-        # Get neuron activations
-        activations = cache[self.get_act_name("post", self.layer_idx)][0]
-
-        # Calculate mean activation values across the dataset (or use a pre-computed value)
-        # This is approximate - in a full implementation you'd want to pre-compute this
-        # across the entire dataset
-        neuron_means = activations.mean(dim=0)
-
-        # Create activation deltas for the specified neurons
-        activation_deltas = torch.zeros_like(activations)
-        for neuron_idx in neuron_group:
-            activation_deltas[:, neuron_idx] = neuron_means[neuron_idx] - activations[:, neuron_idx]
-
-        # Compute residual stream deltas
-        res_deltas = activation_deltas.unsqueeze(-1) * self.model.W_out[self.layer_idx]
-        res_stream = cache[self.get_act_name("resid_post", self.layer_idx)][0]
-
-        # Apply the deltas to the residual stream
-        updated_res_stream = res_stream + res_deltas.sum(dim=1)
-
-        # Apply layer normalization
-        normalized_res_stream = self.model.ln_final(updated_res_stream.unsqueeze(0))[0]
-
-        # Project to logit space
-        ablated_logits = normalized_res_stream @ self.model.W_U + self.model.b_U
-
-        # Compute ablated loss
-        ablated_loss = self.model.loss_fn(ablated_logits.unsqueeze(0), inp, per_token=True).mean().item()
-
-        # TODO: add neurons based on the different conditions
-        # Calculate delta loss (original - ablated)
-        # Positive delta means the original loss was higher (neurons are important)
-        delta_loss = original_loss - ablated_loss
-
-        return delta_loss
-
-    def ablate_and_record(self, neuron_group: list[int], batch_indices: list[int]) -> pd.DataFrame:
-        """Ablate neurons in the specified group and record results."""
-        results = []
-
-        for batch_idx in batch_indices:
-            # Get the input sequence
-            tok_seq = self.tokenized_data["tokens"][batch_idx]
-            inp = tok_seq.unsqueeze(0).to(self.device)
-
-            # Get original loss and cache
-            self.model.reset_hooks()
-            original_logits, cache = self.model.run_with_cache(inp)
-            original_loss_per_token = self.model.loss_fn(original_logits, inp, per_token=True)[0].cpu().numpy()
-
-            # Get neuron activations
-            activations = cache[self.get_act_name("post", self.layer_idx)][0]
-
-            # Calculate mean activation values
-            neuron_means = activations.mean(dim=0)
-
-            # Create activation deltas for the specified neurons
-            activation_deltas = torch.zeros_like(activations)
-            for neuron_idx in neuron_group:
-                activation_deltas[:, neuron_idx] = neuron_means[neuron_idx] - activations[:, neuron_idx]
-
-            # Compute residual stream deltas
-            res_deltas = activation_deltas.unsqueeze(-1) * self.model.W_out[self.layer_idx]
-            res_stream = cache[self.get_act_name("resid_post", self.layer_idx)][0]
-
-            # Apply the deltas to the residual stream
-            updated_res_stream = res_stream + res_deltas.sum(dim=1)
-
-            # Apply layer normalization
-            normalized_res_stream = self.model.ln_final(updated_res_stream.unsqueeze(0))[0]
-
-            # Project to logit space
-            ablated_logits = normalized_res_stream @ self.model.W_U + self.model.b_U
-
-            # Compute ablated loss
-            ablated_loss_per_token = (
-                self.model.loss_fn(ablated_logits.unsqueeze(0), inp, per_token=True)[0].cpu().numpy()
+    def build_vector(self) -> None:
+        """Build frequency-related vectors for ablation analysis."""
+        if self.ablation_mode == "longtail":
+            # Create long-tail token mask (1 for long-tail tokens, 0 for common tokens)
+            self.longtail_mask = (self.unigram_distrib < self.longtail_threshold).float()
+            logger.info(
+                f"Number of long-tail tokens: {self.longtail_mask.sum().item()} out of {len(self.longtail_mask)}"
             )
 
-            # Get token string representations if available
-            if hasattr(self.tokenized_data, "tokens") and self.tokenized_data["tokens"] is not None:
-                tokens_str = self.tokenized_data["tokens"][batch_idx]
-            else:
-                tokens_str = [f"<token_{t.item()}>" for t in tok_seq]
+            # Create token frequency vector focusing on long-tail tokens only
+            # Original token frequency vector from the unigram distribution
+            full_unigram_direction_vocab = self.unigram_distrib.log() - self.unigram_distrib.log().mean()
+            full_unigram_direction_vocab /= full_unigram_direction_vocab.norm()
 
-            # Create records for each token
-            for i in range(len(tok_seq)):
-                results.append(
-                    {
-                        "batch_idx": batch_idx,
-                        "token_idx": i,
-                        "token": tokens_str[i] if i < len(tokens_str) else "<unknown>",
-                        "original_loss": float(original_loss_per_token[i]),
-                        "ablated_loss": float(ablated_loss_per_token[i]),
-                        "delta_loss": float(original_loss_per_token[i] - ablated_loss_per_token[i]),
-                    }
+            # This makes the vector only consider contributions from long-tail tokens
+            self.unigram_direction_vocab = full_unigram_direction_vocab * self.longtail_mask
+            # Re-normalize to keep it a unit vector
+            if self.unigram_direction_vocab.norm() > 0:
+                self.unigram_direction_vocab /= self.unigram_direction_vocab.norm()
+        else:
+            # Standard frequency direction for regular mean ablation
+            self.unigram_direction_vocab = self.unigram_distrib.log() - self.unigram_distrib.log().mean()
+            self.unigram_direction_vocab /= self.unigram_direction_vocab.norm()
+            self.longtail_mask = None
+
+    def project_logits(self, logits: torch.Tensor) -> torch.Tensor:
+        """Get the value of logits projected onto the unigram direction."""
+        unigram_projection_values = logits @ self.unigram_direction_vocab
+        return unigram_projection_values.squeeze()
+
+    def build_group_activation_means(self, filtered_entropy_df: pd.DataFrame) -> list:
+        """Build mean activation values for each neuron in each group."""
+        # For each group, compute the mean activation of each neuron in the group
+        group_activation_means = []
+
+        # Check if we're using a single activation column with component_name
+        if self.has_single_activation and self.has_component_name:
+            for group_idx, group in enumerate(self.neuron_groups):
+                try:
+                    # Create a list to store means for each neuron in the group
+                    neuron_means = []
+
+                    for neuron in group:
+                        # Filter rows where component_name matches this neuron
+                        neuron_rows = filtered_entropy_df[filtered_entropy_df["component_name"] == neuron]
+
+                        if len(neuron_rows) == 0:
+                            # If exact match not found, try more flexible matching
+                            for col_val in filtered_entropy_df["component_name"].unique():
+                                if str(neuron) in str(col_val):
+                                    neuron_rows = filtered_entropy_df[filtered_entropy_df["component_name"] == col_val]
+                                    logger.info(f"Found approximate match for {neuron}: {col_val}")
+                                    break
+
+                        if len(neuron_rows) == 0:
+                            # If still no match, try numerical match for layer.neuron format
+                            layer, index = neuron.split(".")
+                            for col_val in filtered_entropy_df["component_name"].unique():
+                                try:
+                                    comp_layer, comp_index = str(col_val).split(".")
+                                    if int(layer) == int(comp_layer) and int(index) == int(comp_index):
+                                        neuron_rows = filtered_entropy_df[
+                                            filtered_entropy_df["component_name"] == col_val
+                                        ]
+                                        logger.info(f"Found numeric match for {neuron}: {col_val}")
+                                        break
+                                except:
+                                    continue
+
+                        if len(neuron_rows) == 0:
+                            raise ValueError(f"Cannot find data for neuron {neuron} in component_name column")
+
+                        # Get the mean activation for this neuron
+                        mean_activation = neuron_rows["activation"].mean()
+                        neuron_means.append(mean_activation)
+
+                    # Convert to tensor and add to group means
+                    group_means = torch.tensor(neuron_means)
+                    group_activation_means.append(group_means)
+
+                except Exception as e:
+                    logger.error(f"Error building activation means for group {group_idx}: {e}")
+                    raise
+        else:
+            # Handle the case with individual activation columns per neuron
+            for group_idx, group in enumerate(self.neuron_groups):
+                try:
+                    # We'll collect means for each neuron in this group
+                    neuron_means = []
+
+                    for neuron in group:
+                        # Look for a column that contains this neuron's name
+                        matching_cols = [
+                            col
+                            for col in filtered_entropy_df.columns
+                            if str(neuron) in str(col) and ("activation" in str(col) or "act" in str(col))
+                        ]
+
+                        if not matching_cols:
+                            # If no direct match, try to find any column that might contain activation for this neuron
+                            neuron_layer, neuron_idx = neuron.split(".")
+                            matching_cols = [
+                                col
+                                for col in filtered_entropy_df.columns
+                                if f"{neuron_layer}." in str(col) and str(neuron_idx) in str(col)
+                            ]
+
+                        if not matching_cols:
+                            # As a last resort, print all columns so we can debug
+                            logger.error(f"Available columns: {filtered_entropy_df.columns.tolist()}")
+                            raise ValueError(f"Cannot find activation column for neuron {neuron}")
+
+                        # Use the first matching column
+                        activation_col = matching_cols[0]
+                        logger.info(f"Using column {activation_col} for neuron {neuron}")
+
+                        # Get mean activation for this neuron
+                        neuron_means.append(filtered_entropy_df[activation_col].mean())
+
+                    # Convert to tensor and add to group means
+                    group_means = torch.tensor(neuron_means)
+                    group_activation_means.append(group_means)
+
+                except Exception as e:
+                    logger.error(f"Error building activation means for group {group_idx}: {e}")
+                    raise
+
+        return group_activation_means
+
+    def adjust_vectors_3dim(self, v: torch.Tensor, u: torch.Tensor, target_values: torch.Tensor) -> torch.Tensor:
+        """Adjusts a batch of vectors v such that their projections along the unit vector u equal the target values."""
+        current_projections = (v @ u.unsqueeze(-1)).squeeze(-1)  # Current projections of v onto u
+        delta = target_values - current_projections  # Differences needed to reach the target projections
+        adjusted_v = v + delta.unsqueeze(-1) * u  # Adjust v by the deltas along the direction of u
+        return adjusted_v
+
+    def project_neurons(
+        self,
+        logits: torch.Tensor,
+        unigram_projection_values: torch.Tensor,
+        ablated_logits_chunk: torch.Tensor,
+        res_deltas_chunk: torch.Tensor,
+    ) -> torch.Tensor:
+        """Project neurons based on ablation mode and adjust vectors."""
+        # If we're in long-tail mode, apply the mask
+        if self.ablation_mode == "longtail":
+            # Get the original logits to preserve for common tokens
+            original_logits = logits.repeat(res_deltas_chunk.shape[0], 1, 1)
+            # Create a binary mask for the vocabulary dimension
+            # 1 for long-tail tokens (to be modified), 0 for common tokens (to keep original)
+            vocab_mask = self.longtail_mask.unsqueeze(0).unsqueeze(0)  # Shape: 1 x 1 x vocab_size
+            # Apply the mask: use original_logits where mask is 0, use ablated_logits where mask is 1
+            ablated_logits_chunk = (1 - vocab_mask) * original_logits + vocab_mask * ablated_logits_chunk
+
+        # Adjust vectors to maintain unigram projections
+        ablated_logits_with_frozen_unigram_chunk = self.adjust_vectors_3dim(
+            ablated_logits_chunk, self.unigram_direction_vocab, unigram_projection_values
+        )
+        return ablated_logits_with_frozen_unigram_chunk
+
+    def get_entropy(self, logits: torch.Tensor) -> torch.Tensor:
+        """Calculate entropy from logits."""
+        probs = torch.softmax(logits, dim=-1)
+        log_probs = torch.log_softmax(logits, dim=-1)
+        entropy = -(probs * log_probs).sum(-1)
+        return entropy
+
+    def kl_div(
+        self,
+        input_logprobs: torch.Tensor,
+        target_logprobs: torch.Tensor,
+        reduction: str = "none",
+        log_target: bool = True,
+    ) -> torch.Tensor:
+        """Calculate KL divergence between distributions."""
+        if log_target:
+            kl = torch.exp(input_logprobs) * (input_logprobs - target_logprobs)
+        else:
+            kl = torch.exp(input_logprobs) * (input_logprobs - torch.log(target_logprobs))
+
+        if reduction == "none":
+            return kl
+        if reduction == "sum":
+            return kl.sum()
+        if reduction == "mean":
+            return kl.mean()
+        raise ValueError(f"Unsupported reduction: {reduction}")
+
+    def compute_kl(
+        self,
+        ablated_logits_with_frozen_unigram_chunk: torch.Tensor,
+        abl_logprobs: torch.Tensor,
+        kl_divergence_after: list,
+        kl_divergence_after_frozen_unigram: list,
+    ) -> tuple[list, list]:
+        """Compute KL divergence metrics for ablated distributions."""
+        # compute KL divergence between the distribution ablated with frozen unigram and the og distribution
+        abl_logprobs_with_frozen_unigram = ablated_logits_with_frozen_unigram_chunk.log_softmax(dim=-1)
+
+        # compute KL divergence between the ablated distribution and the distribution from the unigram direction
+        kl_divergence_after_chunk = (
+            self.kl_div(
+                abl_logprobs, self.log_unigram_distrib.expand_as(abl_logprobs), reduction="none", log_target=True
+            )
+            .sum(axis=-1)
+            .cpu()
+            .numpy()
+        )
+
+        del abl_logprobs
+        kl_divergence_after.append(kl_divergence_after_chunk)
+
+        if self.ablation_mode == "longtail":
+            # For long-tail mode, compute KL divergence with focus on the long-tail tokens
+            masked_logprobs = abl_logprobs_with_frozen_unigram.clone()
+            masked_logprobs = masked_logprobs + (1 - self.longtail_mask).unsqueeze(0).unsqueeze(0) * -1e10
+            masked_logprobs = torch.nn.functional.log_softmax(masked_logprobs, dim=-1)
+            kl_divergence_after_frozen_unigram_chunk = (
+                self.kl_div(
+                    masked_logprobs,
+                    self.log_unigram_distrib.expand_as(masked_logprobs),
+                    reduction="none",
+                    log_target=True,
+                )
+                .sum(axis=-1)
+                .cpu()
+                .numpy()
+            )
+        else:
+            # Standard KL divergence for regular mean ablation
+            kl_divergence_after_frozen_unigram_chunk = (
+                self.kl_div(
+                    abl_logprobs_with_frozen_unigram,
+                    self.log_unigram_distrib.expand_as(abl_logprobs_with_frozen_unigram),
+                    reduction="none",
+                    log_target=True,
+                )
+                .sum(axis=-1)
+                .cpu()
+                .numpy()
+            )
+
+        del abl_logprobs_with_frozen_unigram
+        kl_divergence_after_frozen_unigram.append(kl_divergence_after_frozen_unigram_chunk)
+
+        del ablated_logits_with_frozen_unigram_chunk
+        return kl_divergence_after, kl_divergence_after_frozen_unigram
+
+    def mean_ablate_components(self) -> dict[int, pd.DataFrame]:
+        """Perform mean ablation on specified neuron groups."""
+        # Sample a set of random batch indices
+        try:
+            random_sequence_indices = np.random.choice(self.entropy_df.batch.unique(), self.k, replace=False)
+        except ValueError as e:
+            logger.error(f"Error sampling batch indices: {e}")
+            # If there are fewer batches than k, use all available batches
+            random_sequence_indices = self.entropy_df.batch.unique()
+            logger.info(f"Using all available batches: {len(random_sequence_indices)}")
+
+        logger.info(f"ablate_components: ablate with k = {self.k}, long-tail threshold = {self.longtail_threshold}")
+
+        pbar = tqdm.tqdm(total=self.k, file=sys.stdout)
+
+        # new_entropy_df with only the random sequences
+        filtered_entropy_df = self.entropy_df[self.entropy_df.batch.isin(random_sequence_indices)].copy()
+
+        # Build group activation means
+        try:
+            group_activation_means = self.build_group_activation_means(filtered_entropy_df)
+        except Exception as e:
+            logger.error(f"Error building group activation means: {e}")
+            raise
+
+        # Build frequency vectors
+        self.build_vector()
+
+        for batch_n in filtered_entropy_df.batch.unique():
+            tok_seq = self.tokenized_data["tokens"][batch_n]
+
+            # get unaltered logits
+            self.model.reset_hooks()
+            inp = tok_seq.unsqueeze(0).to(self.device)
+            logits, cache = self.model.run_with_cache(inp)
+            logprobs = logits[0, :, :].log_softmax(dim=-1)
+
+            # get the entropy_df entries for the current sequence
+            rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
+            assert len(rows) == len(tok_seq), f"len(rows) = {len(rows)}, len(tok_seq) = {len(tok_seq)}"
+            """
+            rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
+            if len(rows) != len(tok_seq):
+                logger.warning(
+                    f"Batch {batch_n}: Row count mismatch. DataFrame has {len(rows)} rows, token sequence has {len(tok_seq)} tokens."
+                )
+                # If we have the 'pos' column, use it to select the correct subset
+                if "pos" in rows.columns:
+                    rows = rows[rows.pos < len(tok_seq)]
+                    logger.info(f"Filtered rows by position, now using {len(rows)} rows")
+                # Sample or trim to match lengths
+                elif len(rows) > len(tok_seq):
+                    rows = rows.iloc[: len(tok_seq)]
+                else:
+                    # Not enough rows - we'll need to pad or skip
+                    logger.warning(f"Not enough rows for batch {batch_n}, skipping batch")
+                    continue
+            """
+            # get the value of the logits projected onto the b_U direction
+            unigram_projection_values = self.project_logits(logits)
+
+            # Process each group
+            loss_post_ablation = []
+            entropy_post_ablation = []
+            loss_post_ablation_with_frozen_unigram = []
+            entropy_post_ablation_with_frozen_unigram = []
+            kl_divergence_after = []
+            kl_divergence_after_frozen_unigram = []
+
+            kl_divergence_before = (
+                self.kl_div(logprobs, self.log_unigram_distrib, reduction="none", log_target=True)
+                .sum(axis=-1)
+                .cpu()
+                .numpy()
+            )
+
+            logger.info("Finish computing KL")
+
+            # Process each neuron group
+            for group_idx, group_name in enumerate(self.group_names):
+                logger.info(f"Processing {group_idx}")
+                layer_idx = self.group_layers[group_idx]
+                neuron_indices = self.group_neuron_indices[group_idx]
+
+                logger.info("Finish computing neuron indices")
+
+                # Get activations for all neurons in this group
+                res_stream = cache[utils.get_act_name("resid_post", layer_idx)][0]
+                previous_activations = cache[utils.get_act_name("post", layer_idx)][0, :, neuron_indices]
+
+                logger.info("Finish computing activation")
+
+                # Get mean activations for this group
+                group_mean = group_activation_means[group_idx].to(previous_activations.device)
+
+                # Compute activation deltas for all neurons in the group
+                activation_deltas = group_mean - previous_activations  # Shape: [seq_len, num_neurons_in_group]
+
+                logger.info("Finish computing activation delta")
+                # Apply W_out for all neurons in the group
+                # activation_deltas: [seq_len, num_neurons_in_group]
+                # W_out: [layer, neurons, d_model]
+                # We want to get the effect of all neurons in the group on the residual stream
+
+                # Get the W_out for all neurons in this group
+                w_out_group = self.model.W_out[layer_idx, neuron_indices, :]  # [num_neurons_in_group, d_model]
+
+                # Compute residual stream deltas for all neurons together
+                # [seq_len, num_neurons_in_group, 1] * [num_neurons_in_group, d_model]
+                # -> [seq_len, num_neurons_in_group, d_model]
+                res_deltas = activation_deltas.unsqueeze(-1) * w_out_group
+
+                # Sum across neurons to get the combined effect
+                # [seq_len, num_neurons_in_group, d_model] -> [seq_len, d_model]
+                res_deltas_sum = res_deltas.sum(dim=1)
+
+                # Add a batch dimension for processing
+                res_deltas_sum = res_deltas_sum.unsqueeze(0)  # [1, seq_len, d_model]
+
+                # Process in chunks - here we only have one batch since we're doing the combined effect
+                updated_res_stream = res_stream + res_deltas_sum[0]  # [seq_len, d_model]
+                updated_res_stream = updated_res_stream.unsqueeze(0)  # Add batch dim: [1, seq_len, d_model]
+
+                # Apply layer normalization
+                updated_res_stream = self.model.ln_final(updated_res_stream)
+
+                # Project to logit space
+                ablated_logits = updated_res_stream @ self.model.W_U + self.model.b_U
+
+                # Project neurons for frequency adjustment if needed
+                ablated_logits_with_frozen_unigram = self.project_neurons(
+                    logits,
+                    unigram_projection_values,
+                    ablated_logits,
+                    res_deltas_sum,
                 )
 
-        return pd.DataFrame(results)
+                # Compute loss
+                loss_post_ablation_batch = self.model.loss_fn(ablated_logits, inp, per_token=True).cpu()
+                loss_post_ablation_batch = np.concatenate(
+                    (loss_post_ablation_batch, np.zeros((loss_post_ablation_batch.shape[0], 1))), axis=1
+                )
+                loss_post_ablation.append(loss_post_ablation_batch)
+
+                # Compute entropy
+                entropy_post_ablation_batch = self.get_entropy(ablated_logits)
+                entropy_post_ablation.append(entropy_post_ablation_batch.cpu())
+
+                # Process frozen unigram results
+                loss_post_ablation_with_frozen_unigram_batch = self.model.loss_fn(
+                    ablated_logits_with_frozen_unigram, inp, per_token=True
+                ).cpu()
+                loss_post_ablation_with_frozen_unigram_batch = np.concatenate(
+                    (
+                        loss_post_ablation_with_frozen_unigram_batch,
+                        np.zeros((loss_post_ablation_with_frozen_unigram_batch.shape[0], 1)),
+                    ),
+                    axis=1,
+                )
+                loss_post_ablation_with_frozen_unigram.append(loss_post_ablation_with_frozen_unigram_batch)
+
+                # Compute entropy for frozen unigram
+                entropy_post_ablation_with_frozen_unigram_batch = self.get_entropy(ablated_logits_with_frozen_unigram)
+                entropy_post_ablation_with_frozen_unigram.append(entropy_post_ablation_with_frozen_unigram_batch.cpu())
+
+                # Calculate KL divergence
+                abl_logprobs = ablated_logits.log_softmax(dim=-1)
+                kl_divergence_after_batch, kl_divergence_after_frozen_unigram_batch = self.compute_kl(
+                    ablated_logits_with_frozen_unigram,
+                    abl_logprobs,
+                    [],  # Empty list as we're not appending to existing lists
+                    [],  # Empty list as we're not appending to existing lists
+                )
+                kl_divergence_after.append(
+                    kl_divergence_after_batch[0]
+                )  # First element since compute_kl returns a list
+                kl_divergence_after_frozen_unigram.append(kl_divergence_after_frozen_unigram_batch[0])
+
+                # Clean up
+                del ablated_logits, ablated_logits_with_frozen_unigram, abl_logprobs
+
+            # Process results and prepare dataframe
+            batch_results = self.process_group_batch_results(
+                batch_n,
+                filtered_entropy_df,
+                loss_post_ablation,
+                loss_post_ablation_with_frozen_unigram,
+                entropy_post_ablation,
+                entropy_post_ablation_with_frozen_unigram,
+                kl_divergence_before,
+                kl_divergence_after,
+                kl_divergence_after_frozen_unigram,
+            )
+
+            self.results[batch_n] = batch_results
+            pbar.update(1)
+
+            # Clean up to avoid memory issues
+            del logits, cache, logprobs
+            torch.cuda.empty_cache()
+
+        return self.results
+
+    def process_group_batch_results(
+        self,
+        batch_n: int,
+        filtered_entropy_df: pd.DataFrame,
+        loss_post_ablation: list,
+        loss_post_ablation_with_frozen_unigram: list,
+        entropy_post_ablation: list,
+        entropy_post_ablation_with_frozen_unigram: list,
+        kl_divergence_before: np.ndarray,
+        kl_divergence_after: list,
+        kl_divergence_after_frozen_unigram: list,
+    ) -> pd.DataFrame:
+        """Process results for a batch and create a dataframe for group ablation."""
+        final_df = None
+
+        for i, group_name in enumerate(self.group_names):
+            df_to_append = filtered_entropy_df[filtered_entropy_df.batch == batch_n].copy()
+
+            # Add group information
+            df_to_append["group_name"] = group_name
+            df_to_append["neuron_group"] = str(self.neuron_groups[i])  # Store the neurons in this group
+            df_to_append["layer"] = self.group_layers[i]
+
+            # Add ablation metrics
+            df_to_append["loss_post_ablation"] = loss_post_ablation[i]
+            df_to_append["loss_post_ablation_with_frozen_unigram"] = loss_post_ablation_with_frozen_unigram[i]
+            df_to_append["entropy_post_ablation"] = entropy_post_ablation[i]
+            df_to_append["entropy_post_ablation_with_frozen_unigram"] = entropy_post_ablation_with_frozen_unigram[i]
+            df_to_append["kl_divergence_before"] = kl_divergence_before
+            df_to_append["kl_divergence_after"] = kl_divergence_after[i]
+            df_to_append["kl_divergence_after_frozen_unigram"] = kl_divergence_after_frozen_unigram[i]
+
+            # Add ablation information
+            df_to_append["ablation_mode"] = self.ablation_mode
+            if self.ablation_mode == "longtail":
+                df_to_append["longtail_threshold"] = self.longtail_threshold
+                df_to_append["num_longtail_tokens"] = self.longtail_mask.sum().item()
+
+            final_df = df_to_append if final_df is None else pd.concat([final_df, df_to_append])
+
+        return final_df
 
 
 #######################################################################################################
@@ -346,7 +712,7 @@ class NeuronGroupSearch:
             delta_loss = self._evaluate_group(target_size_group)
             target_size_result = SearchResult(neurons=target_size_group, delta_loss=delta_loss, is_target_size=True)
 
-        else:  # len(result.neurons) > self.target_size
+        else:
             # Sort neurons by individual importance
             neuron_scores = [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in result.neurons]
             neuron_scores.sort(key=lambda x: x[1], reverse=True)
