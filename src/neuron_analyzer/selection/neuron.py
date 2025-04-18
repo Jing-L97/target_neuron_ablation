@@ -21,7 +21,6 @@ class NeuronSelector:
         feather_path: Path,
         top_n: int,
         step: int,
-        effect: str,
         tokenizer_name: str,
         threshold_path: Path,
         device: str,
@@ -33,7 +32,6 @@ class NeuronSelector:
         self.feather_path = feather_path
         self.top_n = top_n
         self.step = step
-        self.effect = effect
         self.debug = debug
         self.sel_longtail = sel_longtail
         self.sel_by_med = sel_by_med
@@ -42,52 +40,49 @@ class NeuronSelector:
             self.unigram_analyzer = UnigramAnalyzer(model_name=tokenizer_name, device=device)
             self.threshold_path = threshold_path
 
-    def _prepare_dataframe(self) -> pd.DataFrame | None:
+    def _prepare_dataframe(self, final_df) -> pd.DataFrame | None:
         """Common preprocessing for the DataFrame."""
-        self.final_df = self.load_and_filter_df()
-        # Calculate delta loss metrics
-        self.final_df["abs_delta_loss_post_ablation"] = np.abs(
-            self.final_df["loss_post_ablation"] - self.final_df["loss"]
-        )
-        self.final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
-            self.final_df["loss_post_ablation_with_frozen_unigram"] - self.final_df["loss"]
-        )
-        self.final_df["delta_loss_post_ablation"] = self.final_df["loss_post_ablation"] - self.final_df["loss"]
-        self.final_df["delta_loss_post_ablation_with_frozen_unigram"] = (
-            self.final_df["loss_post_ablation_with_frozen_unigram"] - self.final_df["loss"]
-        )
-
         # Group by neuron idx
-        self.final_df = self.final_df.groupby("component_name").mean(numeric_only=True).reset_index()
-
+        final_df = final_df.groupby("component_name").mean(numeric_only=True).reset_index()
         # Calculate the mediation effect if required
         if self.sel_by_med:
-            self.final_df["mediation_effect"] = (
+            final_df["mediation_effect"] = (
                 1
-                - self.final_df["abs_delta_loss_post_ablation_with_frozen_unigram"]
-                / self.final_df["abs_delta_loss_post_ablation"]
+                - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"]
+                / final_df["abs_delta_loss_post_ablation"]
             )
-
-        return self.final_df
+        return final_df
 
     def load_and_filter_df(self):
         """Load and filter df by frequency if required."""
-        self.final_df = pd.read_feather(self.feather_path)
+        final_df = pd.read_feather(self.feather_path)
         logger.info(f"Analyzing file from {self.feather_path}")
         if self.debug:
-            self.final_df = self.final_df.head(500)
-            logger.info("Entering debugging mode. Loading first 500 rows.")
+            first_n_rows = 5000
+            final_df = final_df.head(first_n_rows)
+            logger.info(f"Entering debugging mode. Loading first {first_n_rows} rows.")
         # filter the df by stats
         if self.sel_longtail:
             # get word freq
-            self.final_df["freq"] = self.final_df["str_tokens"].apply(self._extract_freq)
-            logger.info(f"{self.final_df.shape[0]} words before filtering")
+            final_df["freq"] = final_df["str_tokens"].apply(self._extract_freq)
+            logger.info(f"{final_df.shape[0]} words before filtering")
             # filter by the threshold
             prob_dict = JsonProcessor.load_json(self.threshold_path)
             prob_threshold = prob_dict["threshold_info"]["probability"]
-            self.final_df = self.final_df[self.final_df["freq"] < prob_threshold]
-            logger.info(f"{self.final_df.shape[0]} words after filtering.")
-        return self.final_df
+            final_df = final_df[final_df["freq"] < prob_threshold]
+            logger.info(f"{final_df.shape[0]} words after filtering.")
+
+        # Calculate delta loss metrics
+        final_df["delta_loss_post_ablation"] = final_df["loss_post_ablation"] - final_df["loss"]
+        final_df["delta_loss_post_ablation_with_frozen_unigram"] = (
+            final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
+        )
+        final_df["abs_delta_loss_post_ablation"] = np.abs(final_df["delta_loss_post_ablation"])
+        final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
+            final_df["delta_loss_post_ablation_with_frozen_unigram"]
+        )
+
+        return final_df
 
     def _extract_freq(self, word):
         """Extract frequency from the unifram analyzer."""
@@ -107,11 +102,10 @@ class NeuronSelector:
         stat_df.insert(0, "step", self.step)
         return stat_df
 
-    def select_by_KL(self) -> pd.DataFrame | None:
+    def select_by_KL(self, effect: str, final_df=None) -> pd.DataFrame | None:
         """Select neurons by mediation effect and KL."""
-        final_df = self._prepare_dataframe()
         if final_df is None:
-            return None
+            final_df = self._prepare_dataframe()
 
         if "kl_divergence_before" in final_df.columns:
             final_df["kl_from_unigram_diff"] = final_df["kl_divergence_after"] - final_df["kl_divergence_before"]
@@ -120,10 +114,10 @@ class NeuronSelector:
             )
 
         # Apply effect filtering
-        if self.effect == "suppress":
+        if effect == "suppress":
             # Filter the neurons that push towards the unigram freq
             final_df = final_df[final_df["kl_from_unigram_diff"] < 0]
-        elif self.effect == "boost":
+        elif effect == "boost":
             # Filter the neurons that push away from the unigram freq
             final_df = final_df[final_df["kl_from_unigram_diff"] > 0]
 
@@ -152,19 +146,18 @@ class NeuronSelector:
 
         return self._create_stats_dataframe(ranked_neurons, header_dict)
 
-    def select_by_prob(self) -> pd.DataFrame | None:
+    def select_by_prob(self, effect: str, final_df=None) -> pd.DataFrame | None:
         """Select neurons by mediation effect and prob variations."""
-        final_df = self._prepare_dataframe()
         if final_df is None:
-            return None
+            final_df = self._prepare_dataframe()
 
         # Apply effect filtering
-        if self.effect == "suppress":
+        if effect == "suppress":
             # Filter the neurons that push towards the unigram freq
-            final_df = final_df[final_df["delta_loss_post_ablation_with_frozen_unigram"] > 0]
-        elif self.effect == "boost":
+            final_df = final_df[final_df["delta_loss_post_ablation"] < 0]
+        elif effect == "boost":
             # Filter the neurons that push away from the unigram freq
-            final_df = final_df[final_df["delta_loss_post_ablation_with_frozen_unigram"] < 0]
+            final_df = final_df[final_df["delta_loss_post_ablation"] > 0]
 
         # Rank neurons
         if self.sel_by_med:
