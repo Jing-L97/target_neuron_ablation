@@ -12,7 +12,6 @@ import pandas as pd
 import torch
 import tqdm
 from sklearn.cluster import AgglomerativeClustering
-from transformer_lens import utils
 
 from neuron_analyzer.load_util import cleanup
 
@@ -48,22 +47,7 @@ class GroupModelAblationAnalyzer:
         ablation_mode: str = "mean",
         longtail_threshold: float = 0.001,
     ):
-        """Initialize the GroupModelAblationAnalyzer.
-
-        Args:
-            model: The transformer model to analyze
-            unigram_distrib: Unigram distribution for the model
-            tokenized_data: Tokenized data to run through the model
-            entropy_df: DataFrame with entropy information
-            neuron_groups: List of neuron groups, where each group is a list of neuron names (e.g., [["0.123", "0.456"], ["1.789", "1.012"]])
-            group_names: Optional names for each group (defaults to "group_0", "group_1", etc.)
-            device: Device to run the model on
-            k: Number of random sequences to sample
-            chunk_size: Chunk size for processing
-            ablation_mode: Ablation mode ("mean" or "longtail")
-            longtail_threshold: Threshold for long-tail tokens
-
-        """
+        """Initialize the GroupModelAblationAnalyzer."""
         self.model = model
         self.unigram_distrib = unigram_distrib
         self.tokenized_data = tokenized_data
@@ -156,99 +140,18 @@ class GroupModelAblationAnalyzer:
         """Build mean activation values for each neuron in each group."""
         # For each group, compute the mean activation of each neuron in the group
         group_activation_means = []
-
-        # Check if we're using a single activation column with component_name
-        if self.has_single_activation and self.has_component_name:
-            for group_idx, group in enumerate(self.neuron_groups):
-                try:
-                    # Create a list to store means for each neuron in the group
-                    neuron_means = []
-
-                    for neuron in group:
-                        # Filter rows where component_name matches this neuron
-                        neuron_rows = filtered_entropy_df[filtered_entropy_df["component_name"] == neuron]
-
-                        if len(neuron_rows) == 0:
-                            # If exact match not found, try more flexible matching
-                            for col_val in filtered_entropy_df["component_name"].unique():
-                                if str(neuron) in str(col_val):
-                                    neuron_rows = filtered_entropy_df[filtered_entropy_df["component_name"] == col_val]
-                                    logger.info(f"Found approximate match for {neuron}: {col_val}")
-                                    break
-
-                        if len(neuron_rows) == 0:
-                            # If still no match, try numerical match for layer.neuron format
-                            layer, index = neuron.split(".")
-                            for col_val in filtered_entropy_df["component_name"].unique():
-                                try:
-                                    comp_layer, comp_index = str(col_val).split(".")
-                                    if int(layer) == int(comp_layer) and int(index) == int(comp_index):
-                                        neuron_rows = filtered_entropy_df[
-                                            filtered_entropy_df["component_name"] == col_val
-                                        ]
-                                        logger.info(f"Found numeric match for {neuron}: {col_val}")
-                                        break
-                                except:
-                                    continue
-
-                        if len(neuron_rows) == 0:
-                            raise ValueError(f"Cannot find data for neuron {neuron} in component_name column")
-
-                        # Get the mean activation for this neuron
-                        mean_activation = neuron_rows["activation"].mean()
-                        neuron_means.append(mean_activation)
-
-                    # Convert to tensor and add to group means
-                    group_means = torch.tensor(neuron_means)
-                    group_activation_means.append(group_means)
-
-                except Exception as e:
-                    logger.error(f"Error building activation means for group {group_idx}: {e}")
-                    raise
-        else:
-            # Handle the case with individual activation columns per neuron
-            for group_idx, group in enumerate(self.neuron_groups):
-                try:
-                    # We'll collect means for each neuron in this group
-                    neuron_means = []
-
-                    for neuron in group:
-                        # Look for a column that contains this neuron's name
-                        matching_cols = [
-                            col
-                            for col in filtered_entropy_df.columns
-                            if str(neuron) in str(col) and ("activation" in str(col) or "act" in str(col))
-                        ]
-
-                        if not matching_cols:
-                            # If no direct match, try to find any column that might contain activation for this neuron
-                            neuron_layer, neuron_idx = neuron.split(".")
-                            matching_cols = [
-                                col
-                                for col in filtered_entropy_df.columns
-                                if f"{neuron_layer}." in str(col) and str(neuron_idx) in str(col)
-                            ]
-
-                        if not matching_cols:
-                            # As a last resort, print all columns so we can debug
-                            logger.error(f"Available columns: {filtered_entropy_df.columns.tolist()}")
-                            raise ValueError(f"Cannot find activation column for neuron {neuron}")
-
-                        # Use the first matching column
-                        activation_col = matching_cols[0]
-                        logger.info(f"Using column {activation_col} for neuron {neuron}")
-
-                        # Get mean activation for this neuron
-                        neuron_means.append(filtered_entropy_df[activation_col].mean())
-
-                    # Convert to tensor and add to group means
-                    group_means = torch.tensor(neuron_means)
-                    group_activation_means.append(group_means)
-
-                except Exception as e:
-                    logger.error(f"Error building activation means for group {group_idx}: {e}")
-                    raise
-
+        for group in self.neuron_groups:
+            # Create a list to store means for each neuron in the group
+            neuron_means = []
+            for neuron in group:
+                # Filter rows where component_name matches this neuron
+                neuron_rows = filtered_entropy_df[filtered_entropy_df["component_name"] == neuron]
+                # Get the mean activation for this neuron
+                mean_activation = neuron_rows["activation"].mean()
+                neuron_means.append(mean_activation)
+            # Convert to tensor and add to group means
+            group_means = torch.tensor(neuron_means)
+            group_activation_means.append(group_means)
         return group_activation_means
 
     def adjust_vectors_3dim(self, v: torch.Tensor, u: torch.Tensor, target_values: torch.Tensor) -> torch.Tensor:
@@ -410,24 +313,6 @@ class GroupModelAblationAnalyzer:
             # get the entropy_df entries for the current sequence
             rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
             assert len(rows) == len(tok_seq), f"len(rows) = {len(rows)}, len(tok_seq) = {len(tok_seq)}"
-            """
-            rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
-            if len(rows) != len(tok_seq):
-                logger.warning(
-                    f"Batch {batch_n}: Row count mismatch. DataFrame has {len(rows)} rows, token sequence has {len(tok_seq)} tokens."
-                )
-                # If we have the 'pos' column, use it to select the correct subset
-                if "pos" in rows.columns:
-                    rows = rows[rows.pos < len(tok_seq)]
-                    logger.info(f"Filtered rows by position, now using {len(rows)} rows")
-                # Sample or trim to match lengths
-                elif len(rows) > len(tok_seq):
-                    rows = rows.iloc[: len(tok_seq)]
-                else:
-                    # Not enough rows - we'll need to pad or skip
-                    logger.warning(f"Not enough rows for batch {batch_n}, skipping batch")
-                    continue
-            """
             # get the value of the logits projected onto the b_U direction
             unigram_projection_values = self.project_logits(logits)
 
@@ -448,9 +333,10 @@ class GroupModelAblationAnalyzer:
 
             logger.info("Finish computing KL")
 
+            """
             # Process each neuron group
             for group_idx, group_name in enumerate(self.group_names):
-                logger.info(f"Processing {group_idx}")
+                logger.info(f"Processing group {group_idx}")
                 layer_idx = self.group_layers[group_idx]
                 neuron_indices = self.group_neuron_indices[group_idx]
 
@@ -488,13 +374,14 @@ class GroupModelAblationAnalyzer:
 
                 # Add a batch dimension for processing
                 res_deltas_sum = res_deltas_sum.unsqueeze(0)  # [1, seq_len, d_model]
-
                 # Process in chunks - here we only have one batch since we're doing the combined effect
                 updated_res_stream = res_stream + res_deltas_sum[0]  # [seq_len, d_model]
                 updated_res_stream = updated_res_stream.unsqueeze(0)  # Add batch dim: [1, seq_len, d_model]
 
                 # Apply layer normalization
                 updated_res_stream = self.model.ln_final(updated_res_stream)
+
+                logger.info("Finish computing res stream")
 
                 # Project to logit space
                 ablated_logits = updated_res_stream @ self.model.W_U + self.model.b_U
@@ -514,6 +401,8 @@ class GroupModelAblationAnalyzer:
                 )
                 loss_post_ablation.append(loss_post_ablation_batch)
 
+                logger.info("Finish computing ablated loss")
+
                 # Compute entropy
                 entropy_post_ablation_batch = self.get_entropy(ablated_logits)
                 entropy_post_ablation.append(entropy_post_ablation_batch.cpu())
@@ -531,6 +420,8 @@ class GroupModelAblationAnalyzer:
                 )
                 loss_post_ablation_with_frozen_unigram.append(loss_post_ablation_with_frozen_unigram_batch)
 
+                logger.info("Finish computing ablated loss by projection")
+
                 # Compute entropy for frozen unigram
                 entropy_post_ablation_with_frozen_unigram_batch = self.get_entropy(ablated_logits_with_frozen_unigram)
                 entropy_post_ablation_with_frozen_unigram.append(entropy_post_ablation_with_frozen_unigram_batch.cpu())
@@ -547,6 +438,8 @@ class GroupModelAblationAnalyzer:
                     kl_divergence_after_batch[0]
                 )  # First element since compute_kl returns a list
                 kl_divergence_after_frozen_unigram.append(kl_divergence_after_frozen_unigram_batch[0])
+
+                logger.info("Finish computing ablated loss")
 
                 # Clean up
                 del ablated_logits, ablated_logits_with_frozen_unigram, abl_logprobs
@@ -570,7 +463,7 @@ class GroupModelAblationAnalyzer:
             # Clean up to avoid memory issues
             del logits, cache, logprobs
             torch.cuda.empty_cache()
-
+            """
         return self.results
 
     def process_group_batch_results(

@@ -127,6 +127,7 @@ def main() -> None:
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     save_path = configure_save_path(args)
     if save_path.is_file() and args.resume:
+        # load and update result json
         logger.info(f"{save_path} already exists, skip!")
     else:
         final_results = {}

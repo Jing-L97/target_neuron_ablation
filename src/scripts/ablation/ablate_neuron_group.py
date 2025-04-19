@@ -117,6 +117,7 @@ class NeuronAblationProcessor:
 
         # Setup neuron indices
         entropy_neuron_layer = model.cfg.n_layers - 1
+
         if self.args.neuron_range is not None:
             start, end = map(int, self.args.neuron_range.split("-"))
             all_neuron_indices = list(range(start, end))
