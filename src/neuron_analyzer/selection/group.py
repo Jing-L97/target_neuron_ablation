@@ -41,8 +41,8 @@ class GroupModelAblationAnalyzer:
         unigram_distrib,
         tokenized_data,
         entropy_df,
-        neuron_groups: list[list[str]],  # List of neuron groups, each group is a list of neuron names
-        group_names: list[str] | None = None,  # Optional names for each group
+        layer_idx,
+        # neuron_groups: list[list[str]],  # List of neuron groups, each group is a list of neuron names
         device: str = "cuda",
         k: int = 10,
         chunk_size: int = 20,
@@ -61,41 +61,13 @@ class GroupModelAblationAnalyzer:
         self.longtail_threshold = longtail_threshold
         self.results = pd.DataFrame()
         self.log_unigram_distrib = self.unigram_distrib.log()
+        self.layer_idx = layer_idx
 
-        # Store neuron groups and set up group names
-        self.neuron_groups = neuron_groups
-        if group_names is None:
-            self.group_names = [f"group_{i}" for i in range(len(neuron_groups))]
-        else:
-            self.group_names = group_names
-
-        # This will be our components to ablate
-        self.components_to_ablate = self.group_names
-
-        # Validate that all neurons in each group are from the same layer
-        for i, group in enumerate(neuron_groups):
-            layers = [int(neuron.split(".")[0]) for neuron in group]
-            if len(set(layers)) > 1:
-                raise ValueError(f"Group {i} contains neurons from different layers: {layers}")
-
+        """
         # Store the layer for each group
         self.group_layers = [int(group[0].split(".")[0]) for group in neuron_groups]
-
         # Map each group to its neuron indices
         self.group_neuron_indices = [[int(neuron.split(".")[1]) for neuron in group] for group in neuron_groups]
-
-        # Check if there's a component_name column which might indicate the neuron name
-
-        # Check if there's a single activation column
-        if "activation" in self.entropy_df.columns:
-            logger.info("Found single 'activation' column - will use with component_name")
-            self.has_single_activation = True
-        else:
-            self.has_single_activation = False
-            # Check for other possible activation columns
-            activation_cols = [col for col in self.entropy_df.columns if "_activation" in str(col)]
-            if not activation_cols and not self.has_single_activation:
-                raise ValueError("Cannot find any activation columns in the DataFrame")
 
         # Check the required columns for processing
         required_columns = ["batch", "pos"]
@@ -108,6 +80,7 @@ class GroupModelAblationAnalyzer:
         avg_neurons_per_pos = neuron_counts.mean()
         logger.info(f"Average neurons per position: {avg_neurons_per_pos:.2f}")
         logger.info(f"Total batches: {self.entropy_df['batch'].nunique()}")
+        """
 
     def build_vector(self) -> None:
         """Build frequency-related vectors for ablation analysis."""
@@ -139,40 +112,24 @@ class GroupModelAblationAnalyzer:
         unigram_projection_values = logits @ self.unigram_direction_vocab
         return unigram_projection_values.squeeze()
 
-    def build_group_activation_means(self, filtered_entropy_df: pd.DataFrame) -> list:
+    def build_group_activation_means(self, filtered_entropy_df: pd.DataFrame, neuron_group) -> list:
         """Build mean activation values for each neuron in each group."""
-        # For each group, compute the mean activation of each neuron in the group
-        group_activation_means = []
-        for group_idx, group in enumerate(self.neuron_groups):
-            # Create a list to store means for each neuron in the group
-            neuron_means = []
+        neuron_means = []
 
-            for neuron in group:
-                # Filter rows where component_name matches this neuron
-                # neuron_rows = filtered_entropy_df[filtered_entropy_df["component_name"] == neuron]
-                neuron_rows = filtered_entropy_df
-                if len(neuron_rows) == 0:
-                    logger.warning(f"No data found for neuron {neuron} in group {self.group_names[group_idx]}")
-                    # Use a default value (0.0) if no data is found
-                    neuron_means.append(0.0)
-                    continue
+        for neuron in neuron_group:
+            # Filter rows where component_name matches this neuron
+            neuron_rows = filtered_entropy_df
+            # Get the mean activation for this neuron
+            mean_activation = neuron_rows[f"{neuron}_activation"].mean()
+            neuron_means.append(mean_activation)
 
-                # Get the mean activation for this neuron
-                mean_activation = neuron_rows[f"{neuron}_activation"].mean()
-                neuron_means.append(mean_activation)
+            # Log some statistics for debugging
+            logger.debug(f"Neuron {neuron}: {len(neuron_rows)} rows, mean activation: {mean_activation:.4f}")
 
-                # Log some statistics for debugging
-                logger.debug(f"Neuron {neuron}: {len(neuron_rows)} rows, mean activation: {mean_activation:.4f}")
+        # Convert to tensor and add to group means
+        group_means = torch.tensor(neuron_means)
 
-            # Convert to tensor and add to group means
-            group_means = torch.tensor(neuron_means)
-            group_activation_means.append(group_means)
-
-            logger.info(
-                f"Group {self.group_names[group_idx]}: computed mean activations for {len(neuron_means)} neurons"
-            )
-
-        return group_activation_means
+        return group_means
 
     def adjust_vectors_3dim(self, v: torch.Tensor, u: torch.Tensor, target_values: torch.Tensor) -> torch.Tensor:
         """Adjusts a batch of vectors v such that their projections along the unit vector u equal the target values."""
@@ -278,85 +235,75 @@ class GroupModelAblationAnalyzer:
                 loss_post_ablation_with_frozen_unigram = []
                 entropy_post_ablation_with_frozen_unigram = []
 
-                # Process each neuron group
-                for group_idx, group_name in enumerate(self.group_names):
-                    logger.info(f"Processing group {group_idx}")
-                    layer_idx = self.group_layers[group_idx]
-                    neuron_indices = self.group_neuron_indices[group_idx]
+                # Get activations for all neurons in this group
+                res_stream = cache[utils.get_act_name("resid_post", self.layer_idx)][0]
+                previous_activations = cache[utils.get_act_name("post", self.layer_idx)][0, :, neuron_group]
 
-                    # Get activations for all neurons in this group
-                    res_stream = cache[utils.get_act_name("resid_post", layer_idx)][0]
-                    previous_activations = cache[utils.get_act_name("post", layer_idx)][0, :, neuron_indices]
+                # Get mean activations for this group
+                group_mean = group_activation_means.to(previous_activations.device)
 
-                    # Get mean activations for this group
-                    group_mean = group_activation_means[group_idx].to(previous_activations.device)
+                # Compute activation deltas for all neurons in the group
+                activation_deltas = group_mean - previous_activations  # Shape: [seq_len, num_neurons_in_group]
 
-                    # Compute activation deltas for all neurons in the group
-                    activation_deltas = group_mean - previous_activations  # Shape: [seq_len, num_neurons_in_group]
+                # Get the W_out for all neurons in this group
+                w_out_group = self.model.W_out[self.layer_idx, neuron_group, :]  # [num_neurons_in_group, d_model]
 
-                    # Get the W_out for all neurons in this group
-                    w_out_group = self.model.W_out[layer_idx, neuron_indices, :]  # [num_neurons_in_group, d_model]
+                # Compute residual stream deltas for all neurons together
+                res_deltas = activation_deltas.unsqueeze(-1) * w_out_group
 
-                    # Compute residual stream deltas for all neurons together
-                    res_deltas = activation_deltas.unsqueeze(-1) * w_out_group
+                # Sum across neurons to get the combined effect
+                res_deltas_sum = res_deltas.sum(dim=1)
 
-                    # Sum across neurons to get the combined effect
-                    res_deltas_sum = res_deltas.sum(dim=1)
+                # Add a batch dimension for processing
+                res_deltas_sum = res_deltas_sum.unsqueeze(0)  # [1, seq_len, d_model]
+                # Process in chunks - here we only have one batch since we're doing the combined effect
+                updated_res_stream = res_stream + res_deltas_sum[0]  # [seq_len, d_model]
+                updated_res_stream = updated_res_stream.unsqueeze(0)  # Add batch dim: [1, seq_len, d_model]
 
-                    # Add a batch dimension for processing
-                    res_deltas_sum = res_deltas_sum.unsqueeze(0)  # [1, seq_len, d_model]
-                    # Process in chunks - here we only have one batch since we're doing the combined effect
-                    updated_res_stream = res_stream + res_deltas_sum[0]  # [seq_len, d_model]
-                    updated_res_stream = updated_res_stream.unsqueeze(0)  # Add batch dim: [1, seq_len, d_model]
+                # Apply layer normalization
+                updated_res_stream = self.model.ln_final(updated_res_stream)
 
-                    # Apply layer normalization
-                    updated_res_stream = self.model.ln_final(updated_res_stream)
+                # Project to logit space
+                ablated_logits = updated_res_stream @ self.model.W_U + self.model.b_U
 
-                    # Project to logit space
-                    ablated_logits = updated_res_stream @ self.model.W_U + self.model.b_U
+                # Project neurons for frequency adjustment if needed
+                ablated_logits_with_frozen_unigram = self.project_neurons(
+                    logits,
+                    unigram_projection_values,
+                    ablated_logits,
+                    res_deltas_sum,
+                )
 
-                    # Project neurons for frequency adjustment if needed
-                    ablated_logits_with_frozen_unigram = self.project_neurons(
-                        logits,
-                        unigram_projection_values,
-                        ablated_logits,
-                        res_deltas_sum,
-                    )
+                # Compute loss
+                loss_post_ablation_batch = self.model.loss_fn(ablated_logits, inp, per_token=True).cpu()
+                loss_post_ablation_batch = np.concatenate(
+                    (loss_post_ablation_batch, np.zeros((loss_post_ablation_batch.shape[0], 1))), axis=1
+                )
+                loss_post_ablation.append(loss_post_ablation_batch)
 
-                    # Compute loss
-                    loss_post_ablation_batch = self.model.loss_fn(ablated_logits, inp, per_token=True).cpu()
-                    loss_post_ablation_batch = np.concatenate(
-                        (loss_post_ablation_batch, np.zeros((loss_post_ablation_batch.shape[0], 1))), axis=1
-                    )
-                    loss_post_ablation.append(loss_post_ablation_batch)
+                # Compute entropy
+                entropy_post_ablation_batch = self.get_entropy(ablated_logits)
+                entropy_post_ablation.append(entropy_post_ablation_batch.cpu())
 
-                    # Compute entropy
-                    entropy_post_ablation_batch = self.get_entropy(ablated_logits)
-                    entropy_post_ablation.append(entropy_post_ablation_batch.cpu())
+                # Process frozen unigram results
+                loss_post_ablation_with_frozen_unigram_batch = self.model.loss_fn(
+                    ablated_logits_with_frozen_unigram, inp, per_token=True
+                ).cpu()
+                loss_post_ablation_with_frozen_unigram_batch = np.concatenate(
+                    (
+                        loss_post_ablation_with_frozen_unigram_batch,
+                        np.zeros((loss_post_ablation_with_frozen_unigram_batch.shape[0], 1)),
+                    ),
+                    axis=1,
+                )
+                loss_post_ablation_with_frozen_unigram.append(loss_post_ablation_with_frozen_unigram_batch)
 
-                    # Process frozen unigram results
-                    loss_post_ablation_with_frozen_unigram_batch = self.model.loss_fn(
-                        ablated_logits_with_frozen_unigram, inp, per_token=True
-                    ).cpu()
-                    loss_post_ablation_with_frozen_unigram_batch = np.concatenate(
-                        (
-                            loss_post_ablation_with_frozen_unigram_batch,
-                            np.zeros((loss_post_ablation_with_frozen_unigram_batch.shape[0], 1)),
-                        ),
-                        axis=1,
-                    )
-                    loss_post_ablation_with_frozen_unigram.append(loss_post_ablation_with_frozen_unigram_batch)
+                # Compute entropy for frozen unigram
+                entropy_post_ablation_with_frozen_unigram_batch = self.get_entropy(ablated_logits_with_frozen_unigram)
+                entropy_post_ablation_with_frozen_unigram.append(entropy_post_ablation_with_frozen_unigram_batch.cpu())
 
-                    # Compute entropy for frozen unigram
-                    entropy_post_ablation_with_frozen_unigram_batch = self.get_entropy(
-                        ablated_logits_with_frozen_unigram
-                    )
-                    entropy_post_ablation_with_frozen_unigram.append(
-                        entropy_post_ablation_with_frozen_unigram_batch.cpu()
-                    )
-
-                    # Clean up
-                    del ablated_logits, ablated_logits_with_frozen_unigram
+                # Clean up
+                del ablated_logits, ablated_logits_with_frozen_unigram
 
                 # Process results and prepare dataframe
                 batch_results = self.process_group_batch_results(

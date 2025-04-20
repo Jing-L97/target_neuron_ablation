@@ -1,16 +1,20 @@
 #!/bin/bash
 #SBATCH --job-name=sel_group
 #SBATCH --export=ALL
-#SBATCH --partition=cpu
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=80G
-#SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_neuron_%a.log
-#SBATCH --array=0-3
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=160G
+#SBATCH --time=12:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_group_%a.log
+#SBATCH --array=0-11
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
-
+MODELS=(
+    "EleutherAI/pythia-70m-deduped"
+    "EleutherAI/pythia-410m-deduped"
+)
 # Define the input arrays
 EFFECTS=(
     "suppress"
@@ -22,13 +26,12 @@ VECTORS=(
 )
 
 TOP_NS=(
-    -1
+    10
+    50
+    100
 )
 
-MODELS=(
-    "EleutherAI/pythia-70m-deduped"
-    "EleutherAI/pythia-410m-deduped"
-)
+
 
 # Calculate total combinations for validation
 TOTAL_COMBINATIONS=$((${#EFFECTS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#MODELS[@]}))
@@ -58,7 +61,7 @@ echo " Model: $MODEL"
 echo " Top N: $TOP_N"
 
 # Run the analysis with the selected combination
-python $SCRIPT_ROOT/sel_neuron.py \
+python $SCRIPT_ROOT/sel_group.py \
     -m "$MODEL" \
     --effect "$EFFECT" \
     --top_n "$TOP_N" \

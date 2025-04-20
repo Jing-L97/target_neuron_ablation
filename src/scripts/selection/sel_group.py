@@ -142,6 +142,7 @@ class NeuronGroupSelector:
             tokenized_data=tokenized_data,
             unigram_distrib=unigram_distrib,
             entropy_df=entropy_df,
+            layer_idx=self.layer_num,
             k=self.args.k,
             ablation_mode=self.args.vector,
             longtail_threshold=longtail_threshold,
@@ -181,6 +182,7 @@ def main() -> None:
 
     # configure save_dir
     save_dir = set_path(args)
+    save_path = save_dir / f"{args.data_range_end}_{args.top_n}.json"
     # load neuron
     layer_num, step_neuron, step_stat = load_neuron_index(args)
     unigram_distrib, _ = load_unigram(model_name=args.model, device=device)
@@ -198,7 +200,8 @@ def main() -> None:
             results = group_selector.process_single_step(step.name, unigram_distrib, longtail_threshold)
             final_results[step] = results
             # save the intermediate checkpoints
-            JsonProcessor.save_json(final_results, save_dir / f"{args.data_range_end}_{args.top_n}.json")
+            JsonProcessor.save_json(final_results, save_path)
+    logger.info(f"Save the results to {save_path}")
 
 
 if __name__ == "__main__":
