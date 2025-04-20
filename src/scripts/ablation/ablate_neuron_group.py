@@ -10,22 +10,18 @@ from pathlib import Path
 from warnings import simplefilter
 
 import hydra
-import neel.utils as nutils
 import numpy as np
 import pandas as pd
 import torch
-from datasets import load_dataset
 from omegaconf import DictConfig
-from transformer_lens import utils
 
 from neuron_analyzer import settings
 from neuron_analyzer.ablation.abl_util import (
     filter_entropy_activation_df,
-    load_model_from_tl_name,
 )
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
 from neuron_analyzer.load_util import JsonProcessor, load_unigram
-from neuron_analyzer.model_util import StepConfig
+from neuron_analyzer.model_util import ModelHandler, StepConfig
 from neuron_analyzer.selection.group import GroupModelAblationAnalyzer
 
 T = t.TypeVar("T")
@@ -62,11 +58,10 @@ def parse_args() -> argparse.Namespace:
 class NeuronAblationProcessor:
     """Class to handle neural network ablation processing."""
 
-    def __init__(self, args: DictConfig, device, logger: logging.Logger | None = None):
+    def __init__(self, args: DictConfig, device, debug):
         """Initialize the ablation processor with configuration."""
-        # Set up logger
-        self.logger = logger or logging.getLogger(__name__)
-
+        # Set up debug mode
+        self.debug = debug
         # Initialize parameters from args
         self.args = args
         self.seed: int = args.seed
@@ -92,7 +87,7 @@ class NeuronAblationProcessor:
             )
             longtail_threshold, threshold_stats = analyzer.get_tail_threshold()
             JsonProcessor.save_json(threshold_stats, save_path / "zipf_threshold_stats.json")
-            self.logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.json")
+            logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.json")
             return longtail_threshold
         # Not in longtail mode, use default threshold
         return None
@@ -100,20 +95,26 @@ class NeuronAblationProcessor:
     def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
         """Process a single step with the given configuration."""
         save_path.parent.mkdir(parents=True, exist_ok=True)
-
+        # initlize the model handler class
+        model_handler = ModelHandler()
         # Load model and tokenizer for specific step
-        model, tokenizer = self.load_model_and_tokenizer(step)
+        model, tokenizer = model_handler.load_model_and_tokenizer(
+            step=step,
+            model_name=self.args.model,
+            hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",
+            device=self.device,
+        )
 
-        self.logger.info("Finished loading model and tokenizer")
+        logger.info("Finished loading model and tokenizer")
 
         # Load and process dataset
-        data = load_dataset(self.args.dataset, split="train")
-        first_1k = data.select([i for i in range(self.args.data_range_start, self.args.data_range_end)])
-        tokenized_data = utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name="text")
-        tokenized_data = tokenized_data.shuffle(self.args.seed)
-        token_df = nutils.make_token_df(tokenized_data["tokens"], model=model)
-
-        self.logger.info("Finished tokenizing data")
+        tokenized_data = model_handler.tokenize_data(
+            dataset=self.args.dataset,
+            data_range_start=self.args.data_range_start,
+            data_range_end=self.args.data_range_end,
+            seed=self.args.seed,
+        )
+        logger.info("Finished tokenizing data")
 
         # Setup neuron indices
         entropy_neuron_layer = model.cfg.n_layers - 1
@@ -125,14 +126,16 @@ class NeuronAblationProcessor:
             all_neuron_indices = list(range(model.cfg.d_mlp))
 
         all_neurons = [f"{entropy_neuron_layer}.{i}" for i in all_neuron_indices]
-        self.logger.info("Loaded all the neurons")
+        logger.info("Loaded all the neurons")
 
         if self.args.dry_run:
             all_neurons = all_neurons[:10]
 
-        # Compute entropy and activation for each neuron
-        entropy_df = pd.read_feather(save_path / f"k{self.args.k}.feather")
-        self.logger.info("Finished computing all the entropy")
+        entropy_df = pd.read_csv(save_path / "entropy_df.csv")
+        if self.debug:
+            row_num = 1_000_000
+            entropy_df = entropy_df.head(row_num)
+            logger.info(f"Enter debugging mode. Apply {row_num} rows.")
 
         # Ablate the dimensions
         model.set_use_attn_result(False)
@@ -150,44 +153,30 @@ class NeuronAblationProcessor:
         )
 
         results = analyzer.mean_ablate_components()
-
-        self.logger.info("Finished ablations!")
+        mean = analyzer.compute_heuristic(results)
+        logger.info("Finished ablations!")
+        logger.info(f"Mean delta loss is {mean}")
 
         # Process and save results
         self._save_results(results, tokenizer, step, save_path)
 
-    def load_model_and_tokenizer(self, step: int) -> tuple[t.Any, t.Any]:
-        """Load model and tokenizer for processing."""
-        # Load HF token
-        with open(settings.PATH.unigram_dir / self.args.hf_token_path) as f:
-            hf_token = f.read()
-
-        # Load model and tokenizer
-        model, tokenizer = load_model_from_tl_name(
-            self.args.model, self.device, step=step, cache_dir=settings.PATH.model_dir, hf_token=hf_token
-        )
-        model = model.to(self.device)
-        model.eval()
-        return model, tokenizer
-
     def _save_results(
         self,
-        results: dict,
+        results: pd.DataFrame,
         tokenizer,
         step: int,
         save_path: Path,
     ) -> None:
         """Process and save ablation results."""
-        final_df = pd.concat(results.values())
         final_df = filter_entropy_activation_df(
-            final_df.reset_index(), model_name=self.args.model, tokenizer=tokenizer, start_pos=3, end_pos=-1
+            results.reset_index(), model_name=self.args.model, tokenizer=tokenizer, start_pos=3, end_pos=-1
         )
 
         # Save results
         final_df = final_df.reset_index(drop=True)
         output_path = save_path / f"k{self.args.k}_group.feather"
         final_df.to_feather(output_path)
-        self.logger.info(f"Saved results for step {step} to {output_path}")
+        logger.info(f"Saved results for step {step} to {output_path}")
 
     def get_save_dir(self):
         """Get the savepath based on current configurations."""
@@ -227,10 +216,10 @@ def main():
             end_idx=cli_args.end,
         )
         # intialize the process class
-        abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
-        base_save_dir = abalation_processor.get_save_dir()
+        ablation_processor = NeuronAblationProcessor(args=hydra_args, device=device, debug=cli_args.debug)
+        base_save_dir = ablation_processor.get_save_dir()
         unigram_distrib, _ = load_unigram(model_name=hydra_args.model, device=device)
-        longtail_threshold = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
+        longtail_threshold = ablation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
 
         # Process each step in range
         for step in steps_config.steps:

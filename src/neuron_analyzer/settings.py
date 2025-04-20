@@ -69,6 +69,10 @@ class _MyPathSettings:
         return self.DATA_DIR / "results" / "surprisal"
 
     @property
+    def ablation_dir(self) -> _Path:
+        return self.DATA_DIR / "results" / "ablations"
+
+    @property
     def neuron_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "selection"
 

@@ -131,6 +131,7 @@ class NeuronAblationProcessor:
 
         # Compute entropy and activation for each neuron
         entropy_dim_layer = model.cfg.n_layers - 1
+
         entropy_df = get_entropy_activation_df(
             all_neurons,
             tokenized_data,

@@ -4,12 +4,13 @@ import logging
 from pathlib import Path
 
 import numpy as np
+import pandas as pd
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.load_util import JsonProcessor
+from neuron_analyzer.load_util import JsonProcessor, load_unigram
 from neuron_analyzer.model_util import ModelHandler, NeuronLoader
-from neuron_analyzer.selection.group import NeuronGroupEvaluator, NeuronGroupSearch
+from neuron_analyzer.selection.group import GroupModelAblationAnalyzer, NeuronGroupSearch
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -21,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Seach neuron groups across different training steps.")
 
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
-    parser.add_argument("--vector", choices=["mean", "longtail"], default="longtail_50")
+    parser.add_argument("--vector", choices=["mean", "longtail", "longtail_50"], default="longtail_50")
     parser.add_argument(
         "--effect", type=str, choices=["boost", "suppress"], default="suppress", help="boost or suppress long-tail prob"
     )
@@ -68,6 +69,12 @@ def load_neuron_index(args) -> list[int]:
     return layer_num, step_neuron, step_stat
 
 
+def get_tail_threshold_stat(args) -> tuple[float | None, dict | None]:
+    """Load longtail threshold from the jason file."""
+    data = JsonProcessor.load_json(settings.PATH.ablation_dir / args.vector / args.model / "zipf_threshold_stats.json")
+    return data["threshold_info"]["probability"]
+
+
 def set_path(args) -> Path:
     """Set save and cache path."""
     save_path = settings.PATH.neuron_dir / "group" / args.effect / args.vector / args.model
@@ -93,7 +100,7 @@ class NeuronGroupSelector:
         np.random.seed(self.args.seed)
         torch.set_grad_enabled(False)
 
-    def process_single_step(self, step) -> None:
+    def process_single_step(self, step: int, unigram_distrib, longtail_threshold) -> None:
         """Process a single step with the given configuration."""
         # initlize the model handler class
         model_handler = ModelHandler()
@@ -106,7 +113,7 @@ class NeuronGroupSelector:
         )
 
         # Load and process dataset
-        token_df = model_handler.tokenize_data(
+        tokenized_data = model_handler.tokenize_data(
             dataset=self.args.dataset,
             data_range_start=self.args.data_range_start,
             data_range_end=self.args.data_range_end,
@@ -116,13 +123,30 @@ class NeuronGroupSelector:
         # load the single neuron and heuristic list
         neuron_lst, stat_lst = self.step_neuron[int(step)], self.step_stat[int(step)]
         # initilize the eval
-        group_evaluator = NeuronGroupEvaluator(
-            model=model,
-            tokenizer=tokenizer,
-            tokenized_data=token_df,
-            device=self.device,
-            layer_idx=self.layer_num,
+        entropy_df = pd.read_csv(
+            settings.PATH.ablation_dir
+            / self.args.vector
+            / self.args.model
+            / str(step)
+            / str(self.args.data_range_end)
+            / "entropy_df.csv"
         )
+        if self.args.debug:
+            row_num = 1_000_000
+            entropy_df = entropy_df.head(row_num)
+            logger.info(f"Enter debugging mode. Apply {row_num} rows.")
+
+        group_evaluator = GroupModelAblationAnalyzer(
+            model=model,
+            device=self.device,
+            tokenized_data=tokenized_data,
+            unigram_distrib=unigram_distrib,
+            entropy_df=entropy_df,
+            k=self.args.k,
+            ablation_mode=self.args.vector,
+            longtail_threshold=longtail_threshold,
+        )
+
         self.cache_dir = self._get_save_path(step)
         # initialize the neuron group search
         search = NeuronGroupSearch(
@@ -159,24 +183,22 @@ def main() -> None:
     save_dir = set_path(args)
     # load neuron
     layer_num, step_neuron, step_stat = load_neuron_index(args)
-
+    unigram_distrib, _ = load_unigram(model_name=args.model, device=device)
+    longtail_threshold = get_tail_threshold_stat(args)
     # initilize the selector class
     group_selector = NeuronGroupSelector(
         args=args, device=device, layer_num=layer_num, step_neuron=step_neuron, step_stat=step_stat, save_dir=save_dir
     )
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
-    if abl_path.is_file():
-        logger.info(f"{abl_path} already exists, skip!")
-    else:
-        final_results = {}
-        # check whether the target file has been created
-        for step in abl_path.iterdir():
-            if step.is_dir():
-                results = group_selector.process_single_step(step.name)
-                final_results[step] = results
-                # save the intermediate checkpoints
-                JsonProcessor.save_json(final_results, save_dir / f"{args.data_range_end}_{args.top_n}.json")
+    final_results = {}
+    # check whether the target file has been created
+    for step in abl_path.iterdir():
+        if step.is_dir():
+            results = group_selector.process_single_step(step.name, unigram_distrib, longtail_threshold)
+            final_results[step] = results
+            # save the intermediate checkpoints
+            JsonProcessor.save_json(final_results, save_dir / f"{args.data_range_end}_{args.top_n}.json")
 
 
 if __name__ == "__main__":
