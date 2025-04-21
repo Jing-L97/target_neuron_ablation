@@ -192,11 +192,7 @@ def main():
         # intialize the process class
         abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
         base_save_dir = abalation_processor.get_save_dir()
-        # Process each step in range
-
         for step in steps_config.steps:
-            # step_lst = [143000]
-            # for step in step_lst:
             # Create save_path as a directory
             save_path = base_save_dir / str(step) / str(hydra_args.data_range_end)
             save_path.mkdir(parents=True, exist_ok=True)

@@ -14,6 +14,7 @@ import torch
 from sklearn.cluster import AgglomerativeClustering
 from transformer_lens import utils
 
+from neuron_analyzer.ablation.ablation import ModelAblationAnalyzer
 from neuron_analyzer.load_util import cleanup
 
 # Setup logging
@@ -31,7 +32,7 @@ class NeuronEvalResult:
     delta_loss: float
 
 
-class GroupModelAblationAnalyzer:
+class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
     """Class for analyzing neural network components through group ablations."""
 
     def __init__(
@@ -40,8 +41,7 @@ class GroupModelAblationAnalyzer:
         unigram_distrib,
         tokenized_data,
         entropy_df,
-        layer_idx,
-        # neuron_groups: list[list[str]],  # List of neuron groups, each group is a list of neuron names
+        layer_idx: int,  # Layer index for neuron groups
         device: str = "cuda",
         k: int = 10,
         chunk_size: int = 20,
@@ -49,105 +49,42 @@ class GroupModelAblationAnalyzer:
         longtail_threshold: float = 0.001,
     ):
         """Initialize the GroupModelAblationAnalyzer."""
-        self.model = model
-        self.unigram_distrib = unigram_distrib
-        self.tokenized_data = tokenized_data
-        self.entropy_df = entropy_df
-        self.device = device
-        self.k = k
-        self.chunk_size = chunk_size
-        self.ablation_mode = ablation_mode
-        self.longtail_threshold = longtail_threshold
-        self.results = pd.DataFrame()
-        self.log_unigram_distrib = self.unigram_distrib.log()
+        # Initialize with placeholder for components_to_ablate (will be set by neuron_group later)
+        super().__init__(
+            model,
+            unigram_distrib,
+            tokenized_data,
+            entropy_df,
+            components_to_ablate=[],  # Will be set based on neuron_group in evaluate_neuron_group
+            device=device,
+            k=k,
+            chunk_size=chunk_size,
+            ablation_mode=ablation_mode,
+            longtail_threshold=longtail_threshold,
+        )
+
         self.layer_idx = layer_idx
+        self.results = pd.DataFrame()  # Override the dict with a DataFrame for this class
         logger.info(f"ablate_components: ablate with k = {self.k}, long-tail threshold = {self.longtail_threshold}")
 
-    def build_vector(self) -> None:
-        """Build frequency-related vectors for ablation analysis."""
-        if "longtail" in self.ablation_mode:
-            # Create long-tail token mask (1 for long-tail tokens, 0 for common tokens)
-            self.longtail_mask = (self.unigram_distrib < self.longtail_threshold).float()
-
-            # Create token frequency vector focusing on long-tail tokens only
-            # Original token frequency vector from the unigram distribution
-            full_unigram_direction_vocab = self.unigram_distrib.log() - self.unigram_distrib.log().mean()
-            full_unigram_direction_vocab /= full_unigram_direction_vocab.norm()
-
-            # This makes the vector only consider contributions from long-tail tokens
-            self.unigram_direction_vocab = full_unigram_direction_vocab * self.longtail_mask
-            # Re-normalize to keep it a unit vector
-            if self.unigram_direction_vocab.norm() > 0:
-                self.unigram_direction_vocab /= self.unigram_direction_vocab.norm()
-        else:
-            # Standard frequency direction for regular mean ablation
-            self.unigram_direction_vocab = self.unigram_distrib.log() - self.unigram_distrib.log().mean()
-            self.unigram_direction_vocab /= self.unigram_direction_vocab.norm()
-            self.longtail_mask = None
-
-    def project_logits(self, logits: torch.Tensor) -> torch.Tensor:
-        """Get the value of logits projected onto the unigram direction."""
-        unigram_projection_values = logits @ self.unigram_direction_vocab
-        return unigram_projection_values.squeeze()
-
-    def build_group_activation_means(self, filtered_entropy_df: pd.DataFrame, neuron_group: list[int]) -> list:
+    def build_group_activation_means(self, filtered_entropy_df: pd.DataFrame, neuron_group: list[int]) -> torch.Tensor:
         """Build mean activation values for each neuron in each group."""
         neuron_means = []
 
         for neuron in neuron_group:
-            # Filter rows where component_name matches this neuron
-            neuron_rows = filtered_entropy_df
             # Get the mean activation for this neuron
-            mean_activation = neuron_rows[f"{self.layer_idx}.{neuron}_activation"].mean()
+            mean_activation = filtered_entropy_df[f"{self.layer_idx}.{neuron}_activation"].mean()
             neuron_means.append(mean_activation)
 
             # Log some statistics for debugging
-            logger.debug(f"Neuron {neuron}: {len(neuron_rows)} rows, mean activation: {mean_activation:.4f}")
+            logger.debug(f"Neuron {neuron}: mean activation: {mean_activation:.4f}")
 
         # Convert to tensor and add to group means
         group_means = torch.tensor(neuron_means)
 
         return group_means
 
-    def adjust_vectors_3dim(self, v: torch.Tensor, u: torch.Tensor, target_values: torch.Tensor) -> torch.Tensor:
-        """Adjusts a batch of vectors v such that their projections along the unit vector u equal the target values."""
-        current_projections = (v @ u.unsqueeze(-1)).squeeze(-1)  # Current projections of v onto u
-        delta = target_values - current_projections  # Differences needed to reach the target projections
-        adjusted_v = v + delta.unsqueeze(-1) * u  # Adjust v by the deltas along the direction of u
-        return adjusted_v
-
-    def project_neurons(
-        self,
-        logits: torch.Tensor,
-        unigram_projection_values: torch.Tensor,
-        ablated_logits_chunk: torch.Tensor,
-        res_deltas_chunk: torch.Tensor,
-    ) -> torch.Tensor:
-        """Project neurons based on ablation mode and adjust vectors."""
-        # If we're in long-tail mode, apply the mask
-        if "longtail" in self.ablation_mode:
-            # Get the original logits to preserve for common tokens
-            original_logits = logits.repeat(res_deltas_chunk.shape[0], 1, 1)
-            # Create a binary mask for the vocabulary dimension
-            # 1 for long-tail tokens (to be modified), 0 for common tokens (to keep original)
-            vocab_mask = self.longtail_mask.unsqueeze(0).unsqueeze(0)  # Shape: 1 x 1 x vocab_size
-            # Apply the mask: use original_logits where mask is 0, use ablated_logits where mask is 1
-            ablated_logits_chunk = (1 - vocab_mask) * original_logits + vocab_mask * ablated_logits_chunk
-
-        # Adjust vectors to maintain unigram projections
-        ablated_logits_with_frozen_unigram_chunk = self.adjust_vectors_3dim(
-            ablated_logits_chunk, self.unigram_direction_vocab, unigram_projection_values
-        )
-        return ablated_logits_with_frozen_unigram_chunk
-
-    def get_entropy(self, logits: torch.Tensor) -> torch.Tensor:
-        """Calculate entropy from logits."""
-        probs = torch.softmax(logits, dim=-1)
-        log_probs = torch.log_softmax(logits, dim=-1)
-        entropy = -(probs * log_probs).sum(-1)
-        return entropy
-
-    def mean_ablate_components(self, neuron_group: list[int]) -> dict[int, pd.DataFrame]:
+    def mean_ablate_components(self, neuron_group: list[int]) -> pd.DataFrame:
         """Perform mean ablation on specified neuron groups."""
         # Sample a set of random batch indices
         try:
@@ -157,6 +94,7 @@ class GroupModelAblationAnalyzer:
             # If there are fewer batches than k, use all available batches
             random_sequence_indices = self.entropy_df.batch.unique()
             logger.info(f"Using all available batches: {len(random_sequence_indices)}")
+
         # new_entropy_df with only the random sequences
         filtered_entropy_df = self.entropy_df[self.entropy_df.batch.isin(random_sequence_indices)].copy()
 
@@ -356,7 +294,7 @@ class GroupModelAblationAnalyzer:
         results_df["ablation_mode"] = self.ablation_mode
         results_df["longtail_threshold"] = self.longtail_threshold
         results_df["loss"] = sel_df["loss"].to_list()
-        if self.ablation_mode == "longtail":
+        if "longtail" in self.ablation_mode and self.longtail_mask is not None:
             results_df["num_longtail_tokens"] = self.longtail_mask.sum().item()
 
         return results_df
@@ -367,7 +305,7 @@ class GroupModelAblationAnalyzer:
         return results["delta_loss"].mean()
 
     def evaluate_neuron_group(self, neuron_group: list[int]) -> float:
-        """Get heuristics from the results."""
+        """Evaluate a neuron group and return a heuristic."""
         results = self.mean_ablate_components(neuron_group)
         delta_loss = self.compute_heuristic(results)
         logger.info(f"Heuristic for current search: {delta_loss}")

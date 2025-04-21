@@ -45,21 +45,18 @@ class ModelAblationAnalyzer:
         self.k = k
         self.chunk_size = chunk_size
         self.ablation_mode = ablation_mode
-        # Storage for analysis results
         self.longtail_threshold = longtail_threshold
         self.results = {}
         self.log_unigram_distrib = self.unigram_distrib.log()
         self.components_to_ablate = components_to_ablate
+        self.longtail_mask = None
+        self.unigram_direction_vocab = None
 
     def build_vector(self) -> None:
         """Build frequency-related vectors for ablation analysis."""
-        if self.ablation_mode == "longtail":
+        if "longtail" in self.ablation_mode:
             # Create long-tail token mask (1 for long-tail tokens, 0 for common tokens)
             self.longtail_mask = (self.unigram_distrib < self.longtail_threshold).float()
-            logger.info(
-                f"Number of long-tail tokens: {self.longtail_mask.sum().item()} out of {len(self.longtail_mask)}"
-            )
-
             # Create token frequency vector focusing on long-tail tokens only
             # Original token frequency vector from the unigram distribution
             full_unigram_direction_vocab = self.unigram_distrib.log() - self.unigram_distrib.log().mean()
@@ -84,14 +81,9 @@ class ModelAblationAnalyzer:
     def adjust_vectors_3dim(self, v: torch.Tensor, u: torch.Tensor, target_values: torch.Tensor) -> torch.Tensor:
         """Adjusts a batch of vectors v such that their projections along the unit vector u equal the target values.
 
-        Args:
-            v: A 3D tensor of shape (n, m, d), representing the batch of vectors to be adjusted
-            u: A 1D unit tensor of shape (d,), representing the direction along which the adjustment is made
-            target_values: A 2D tensor of shape (n, m), representing the desired projection values of the vectors in v along u
-
-        Returns:
-            adjusted_v: The adjusted batch of vectors such that their projections along u are equal to the target values
-
+        v: A 3D tensor of shape (n, m, d), representing the batch of vectors to be adjusted
+        u: A 1D unit tensor of shape (d,), representing the direction along which the adjustment is made
+        target_values: A 2D tensor of shape (n, m), representing the desired projection values of the vectors in v along u
         """
         current_projections = (v @ u.unsqueeze(-1)).squeeze(-1)  # Current projections of v onto u
         delta = target_values - current_projections  # Differences needed to reach the target projections
@@ -107,7 +99,7 @@ class ModelAblationAnalyzer:
     ) -> torch.Tensor:
         """Project neurons based on ablation mode and adjust vectors."""
         # If we're in long-tail mode, apply the mask
-        if self.ablation_mode == "longtail":
+        if "longtail" in self.ablation_mode:
             # Get the original logits to preserve for common tokens
             original_logits = logits.repeat(res_deltas_chunk.shape[0], 1, 1)
             # Create a binary mask for the vocabulary dimension
@@ -174,7 +166,7 @@ class ModelAblationAnalyzer:
         del abl_logprobs
         kl_divergence_after.append(kl_divergence_after_chunk)
 
-        if self.ablation_mode == "longtail":
+        if "longtail" in self.ablation_mode:
             # For long-tail mode, compute KL divergence with focus on the long-tail tokens
             masked_logprobs = abl_logprobs_with_frozen_unigram.clone()
             masked_logprobs = masked_logprobs + (1 - self.longtail_mask).unsqueeze(0).unsqueeze(0) * -1e10

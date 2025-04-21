@@ -235,11 +235,14 @@ def main() -> None:
     final_results = resume_results(args.resume, save_path, step_dirs)
     # Process steps in the sorted order
     for step, _ in step_dirs:
-        results = group_selector.process_single_step(step.name, unigram_distrib, longtail_threshold)
-        final_results[step.name] = results
-        # save the intermediate checkpoints
-        JsonProcessor.save_json(final_results, save_path)
-        logger.info(f"Save the results to {save_path}")
+        try:
+            results = group_selector.process_single_step(step.name, unigram_distrib, longtail_threshold)
+            final_results[step.name] = results
+            # save the intermediate checkpoints
+            JsonProcessor.save_json(final_results, save_path)
+            logger.info(f"Save the results to {save_path}")
+        except:
+            logger.info(f"Something wrong with {step}")
 
 
 if __name__ == "__main__":
