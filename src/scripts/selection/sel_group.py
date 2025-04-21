@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data_range_start", type=int, default=0, help="the selected datarange")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
+    parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--seed", type=int, default=42, help="random seed to select neurons")
     parser.add_argument("--dataset", type=str, default="stas/c4-en-10k", help="random seed to select neurons")
@@ -69,7 +70,7 @@ def load_neuron_index(args) -> list[int]:
     return layer_num, step_neuron, step_stat
 
 
-def get_tail_threshold_stat(args) -> tuple[float | None, dict | None]:
+def load_tail_threshold_stat(args) -> tuple[float | None, dict | None]:
     """Load longtail threshold from the jason file."""
     data = JsonProcessor.load_json(settings.PATH.ablation_dir / args.vector / args.model / "zipf_threshold_stats.json")
     return data["threshold_info"]["probability"]
@@ -179,18 +180,25 @@ class NeuronGroupSelector:
 
         self.cache_dir = self._get_save_path(step)
         # initialize the neuron group search
+        maxmize_heuristic = self._get_heuristics()
+        logger.info(f"Select {self.args.effect} neurons. Maximize heuristics: {maxmize_heuristic}.")
         search = NeuronGroupSearch(
             neurons=neuron_lst,
             individual_delta_loss=stat_lst,
             evaluator=group_evaluator,
             target_size=self.args.top_n,
             cache_dir=self.cache_dir,
+            maximize=maxmize_heuristic,
         )
         # Get the best result using all methods
         results = search.get_best_result()
         logger.info(f"Method with highest heuristic: {results['best']}")
         logger.info(f"Method with target length: {results['target_size']}")
         return results
+
+    def _get_heuristics(self):
+        """Set the heuristic directions."""
+        return self.args.effect == "boost"
 
     def _get_save_path(self, step) -> Path:
         """Get the savepath based on current configurations."""
@@ -215,7 +223,7 @@ def main() -> None:
     # load neuron
     layer_num, step_neuron, step_stat = load_neuron_index(args)
     unigram_distrib, _ = load_unigram(model_name=args.model, device=device)
-    longtail_threshold = get_tail_threshold_stat(args)
+    longtail_threshold = load_tail_threshold_stat(args)
     # initilize the selector class
     group_selector = NeuronGroupSelector(
         args=args, device=device, layer_num=layer_num, step_neuron=step_neuron, step_stat=step_stat, save_dir=save_dir

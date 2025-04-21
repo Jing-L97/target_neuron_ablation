@@ -395,13 +395,11 @@ class NeuronGroupSearch:
         target_size: int,
         individual_delta_loss: list[float] | None = None,
         cache_dir: str | Path | None = None,
-        maximize: bool = True,
     ):
         self.neurons = neurons
         self.evaluator = evaluator  # the class should be properly initialized
         self.target_size = min(target_size, len(neurons))
         self.cache_dir = Path(cache_dir) if cache_dir else None
-        self.maximize = maximize  # Store whether to maximize or minimize
 
         if self.cache_dir:
             self.cache_dir.mkdir(exist_ok=True, parents=True)
@@ -420,7 +418,7 @@ class NeuronGroupSearch:
         return sorted(
             [(i, self.individual_delta_loss[i]) for i in range(len(self.neurons))],
             key=lambda x: x[1],
-            reverse=self.maximize,  # Use maximize flag to determine sort order
+            reverse=True,
         )
 
     def _save_search_state(self, method: str, state: dict) -> None:
@@ -476,7 +474,7 @@ class NeuronGroupSearch:
         else:
             # Sort neurons by individual importance
             neuron_scores = [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in result.neurons]
-            neuron_scores.sort(key=lambda x: x[1], reverse=self.maximize)  # Use maximize flag
+            neuron_scores.sort(key=lambda x: x[1], reverse=True)
 
             # Keep the top neurons
             target_size_group = [n for n, _ in neuron_scores[: self.target_size]]
@@ -550,26 +548,19 @@ class NeuronGroupSearch:
             if not candidates:
                 break
 
-            candidates.sort(key=lambda x: x[1], reverse=self.maximize)  # Use maximize flag
+            candidates.sort(key=lambda x: x[1], reverse=True)
             current_beam = candidates[:beam_width]
 
             # Update best for current size
             if current_beam:
-                # Use maximize flag to determine comparison function
-                best_candidate = (
-                    max(current_beam, key=lambda x: x[1]) if self.maximize else min(current_beam, key=lambda x: x[1])
-                )
+                best_candidate = max(current_beam, key=lambda x: x[1])
                 best_per_size[size] = {
                     "neurons": list(best_candidate[0]),
                     "delta_loss": best_candidate[1],
                 }
 
                 # Update best overall if needed
-                if best_overall is None or (
-                    best_candidate[1] > best_overall["delta_loss"]
-                    if self.maximize
-                    else best_candidate[1] < best_overall["delta_loss"]
-                ):
+                if best_overall is None or best_candidate[1] > best_overall["delta_loss"]:
                     best_overall = {
                         "neurons": list(best_candidate[0]),
                         "delta_loss": best_candidate[1],
@@ -580,10 +571,7 @@ class NeuronGroupSearch:
         if best_overall:
             best_result = SearchResult(neurons=best_overall["neurons"], delta_loss=best_overall["delta_loss"])
         elif current_beam:
-            # Use maximize flag to determine comparison function
-            best_group = (
-                max(current_beam, key=lambda x: x[1]) if self.maximize else min(current_beam, key=lambda x: x[1])
-            )
+            best_group = max(current_beam, key=lambda x: x[1])
             best_result = SearchResult(neurons=list(best_group[0]), delta_loss=best_group[1])
         else:
             # Fallback to empty result
@@ -616,9 +604,7 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
         cleanup()
-
         return best_result, target_size_result
 
     def hierarchical_cluster_search(
@@ -647,7 +633,7 @@ class NeuronGroupSearch:
             sorted_cluster = sorted(
                 [(self.neurons[idx], self.individual_delta_loss[idx]) for idx in cluster_neurons],
                 key=lambda x: x[1],
-                reverse=self.maximize,  # Use maximize flag
+                reverse=True,
             )
             representatives.extend([n for n, _ in sorted_cluster[:expansion_factor]])
 
@@ -672,15 +658,13 @@ class NeuronGroupSearch:
                     },
                 )
 
-            cleanup()
-
             return best_result, target_size_result
 
         # Sort representatives by importance
         sorted_reps = sorted(
             [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in representatives],
             key=lambda x: x[1],
-            reverse=self.maximize,  # Use maximize flag
+            reverse=True,
         )
 
         # Initialize with top representatives
@@ -694,8 +678,7 @@ class NeuronGroupSearch:
         # Continue adding neurons
         while len(current_group) < self.target_size:
             best_candidate = None
-            # Initialize with opposite extreme value based on maximize
-            best_candidate_score = float("-inf") if self.maximize else float("inf")
+            best_candidate_score = -float("inf")
 
             for n, _ in sorted_reps:
                 if n in current_group:
@@ -704,15 +687,13 @@ class NeuronGroupSearch:
                 test_group = current_group + [n]
                 delta_loss = self._evaluate_group(test_group)
 
-                # Update best candidate based on maximize flag
-                if (self.maximize and delta_loss > best_candidate_score) or (
-                    not self.maximize and delta_loss < best_candidate_score
-                ):
+                # Update best candidate
+                if delta_loss > best_candidate_score:
                     best_candidate = n
                     best_candidate_score = delta_loss
 
                 # Update best overall if better
-                if (self.maximize and delta_loss > best_score) or (not self.maximize and delta_loss < best_score):
+                if delta_loss > best_score:
                     best_group = test_group.copy()
                     best_score = delta_loss
 
@@ -755,9 +736,7 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
         cleanup()
-
         return best_result, target_size_result
 
     def iterative_pruning(self) -> tuple[SearchResult, SearchResult]:
@@ -788,23 +767,19 @@ class NeuronGroupSearch:
         # Prune until we reach target size
         while len(current_group) > self.target_size:
             worst_neuron = None
-            # Initialize with opposite extreme value based on maximize
-            best_pruned_score = float("-inf") if self.maximize else float("inf")
+            best_pruned_score = -float("inf")
 
-            # Try removing each neuron and find the one that affects performance the most favorably
+            # Try removing each neuron and find the one that hurts performance least
             for n in current_group:
                 test_group = [x for x in current_group if x != n]
                 delta_loss = self._evaluate_group(test_group)
 
-                # Update based on maximize flag
-                if (self.maximize and delta_loss > best_pruned_score) or (
-                    not self.maximize and delta_loss < best_pruned_score
-                ):
+                if delta_loss > best_pruned_score:
                     best_pruned_score = delta_loss
                     worst_neuron = n
 
                 # Update best overall if better
-                if (self.maximize and delta_loss > best_score) or (not self.maximize and delta_loss < best_score):
+                if delta_loss > best_score:
                     best_group = test_group.copy()
                     best_score = delta_loss
 
@@ -848,9 +823,7 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
         cleanup()
-
         return best_result, target_size_result
 
     def importance_weighted_sampling(
@@ -872,26 +845,18 @@ class NeuronGroupSearch:
             best_group = state["best_group"]
             best_score = state["best_score"]
             best_target_size_group = state.get("best_target_size_group")
-            best_target_size_score = state.get(
-                "best_target_size_score", float("-inf") if self.maximize else float("inf")
-            )
+            best_target_size_score = state.get("best_target_size_score", -float("inf"))
             start_iteration = state["iteration"]
         else:
             # Start from scratch
             scores = np.array(self.individual_delta_loss)
-            # Adjust initialization based on maximization goal
-            if self.maximize:
-                min_score = scores.min()
-                weights = scores - min_score + 1e-6
-            else:
-                max_score = scores.max()
-                weights = max_score - scores + 1e-6
-
+            min_score = scores.min()
+            weights = scores - min_score + 1e-6
             weights = weights / weights.sum()
             best_group = None
-            best_score = float("-inf") if self.maximize else float("inf")
+            best_score = -float("inf")
             best_target_size_group = None
-            best_target_size_score = float("-inf") if self.maximize else float("inf")
+            best_target_size_score = -float("inf")
             start_iteration = 0
 
         # Run the sampling
@@ -905,22 +870,18 @@ class NeuronGroupSearch:
             score = self._evaluate_group(sampled_group)
 
             # Update best overall
-            if (self.maximize and score > best_score) or (not self.maximize and score < best_score):
+            if score > best_score:
                 best_group = sampled_group.copy()
                 best_score = score
 
             # Update best target size (if exactly target size)
-            if len(sampled_group) == self.target_size and (
-                (self.maximize and score > best_target_size_score)
-                or (not self.maximize and score < best_target_size_score)
-            ):
+            if len(sampled_group) == self.target_size and score > best_target_size_score:
                 best_target_size_group = sampled_group.copy()
                 best_target_size_score = score
 
-            # Update weights - if maximizing, reward higher scores, if minimizing, reward lower scores
-            adjustment = learning_rate * score if self.maximize else learning_rate * (1.0 / (score + 1e-10))
+            # Update weights
             for idx in sampled_indices:
-                weights[idx] += adjustment
+                weights[idx] += learning_rate * score
             weights = weights / weights.sum()
 
             # Checkpoint
@@ -939,12 +900,8 @@ class NeuronGroupSearch:
                 )
 
         # Create best overall result
-        default_score = 0.0 if self.maximize else float("inf")
         best_result = SearchResult(
-            neurons=best_group if best_group else [],
-            delta_loss=best_score
-            if best_score != (float("-inf") if self.maximize else float("inf"))
-            else default_score,
+            neurons=best_group if best_group else [], delta_loss=best_score if best_score > -float("inf") else 0.0
         )
 
         # Create target size result
@@ -965,13 +922,11 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
         cleanup()
-
         return best_result, target_size_result
 
     def hybrid_search(
-        self, n_clusters: int = 5, expansion_factor: int = 3, beam_width: int = 10
+        self, n_clusters: int = 5, expansion_factor: int = 3, beam_width: int = 2
     ) -> tuple[SearchResult, SearchResult]:
         """Hybrid clustering and beam search for finding neuron groups."""
         state = self._load_search_state("hybrid")
@@ -997,7 +952,7 @@ class NeuronGroupSearch:
             sorted_cluster = sorted(
                 [(self.neurons[idx], self.individual_delta_loss[idx]) for idx in cluster_neurons],
                 key=lambda x: x[1],
-                reverse=self.maximize,  # Use maximize flag
+                reverse=True,
             )
             representatives.extend([n for n, _ in sorted_cluster[:expansion_factor]])
 
@@ -1007,7 +962,6 @@ class NeuronGroupSearch:
             evaluator=self.evaluator,
             target_size=self.target_size,
             individual_delta_loss=[self.individual_delta_loss[self.neurons.index(n)] for n in representatives],
-            maximize=self.maximize,  # Pass the maximize flag to the new instance
         )
         best_result, target_size_result = reduced_search.progressive_beam_search(beam_width=beam_width)
 
@@ -1021,9 +975,7 @@ class NeuronGroupSearch:
                     "completed": True,
                 },
             )
-
         cleanup()
-
         return best_result, target_size_result
 
     def run_all_methods(self) -> dict[str, tuple[SearchResult, SearchResult]]:
@@ -1068,16 +1020,10 @@ class NeuronGroupSearch:
 
         return results
 
-    def get_best_result(self) -> dict[str, t.Any]:
+    def get_best_result(self) -> tuple[str, tuple[SearchResult, SearchResult]]:
         """Run all methods and return the best method and its results."""
         results = self.run_all_methods()
-
-        # Comparison function based on maximization goal
-        if self.maximize:
-            best_method_name = max(results.keys(), key=lambda x: results[x][0].delta_loss)
-            target_method_name = max(results.keys(), key=lambda x: results[x][1].delta_loss)
-        else:
-            best_method_name = min(results.keys(), key=lambda x: results[x][0].delta_loss)
-            target_method_name = min(results.keys(), key=lambda x: results[x][1].delta_loss)
-
-        return {"best": results[best_method_name][0], "target_size": results[target_method_name][1], "total": results}
+        # Find the best method (highest delta loss from the 'best' result, not target size result)
+        best_method_name = max(results.keys(), key=lambda x: results[x][0].delta_loss)
+        total_method_name = max(results.keys(), key=lambda x: results[x][1].delta_loss)
+        return {"best": results[best_method_name][0], "target_size": results[total_method_name][1], "toal": results}
