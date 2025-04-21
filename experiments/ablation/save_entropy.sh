@@ -1,11 +1,10 @@
 #!/bin/bash
 #SBATCH --job-name=save_entropy
 #SBATCH --export=ALL
-#SBATCH --partition=gpu
-#SBATCH --mem=70G
-#SBATCH --gres=gpu:1
+#SBATCH --partition=cpu
+#SBATCH --mem=100G
 #SBATCH --cpus-per-task=10
-#SBATCH --time=12:00:00
+#SBATCH --time=1:15:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/save_entropy.log
 
 

@@ -48,7 +48,6 @@ class WeightGeometricAnalyzer:
 
         return common_neurons, sampled_common_neurons_1, sampled_common_neurons_2
 
-    # TODO: add activation values
     def extract_neuron_weights(self, neuron_indices: list[int]) -> np.ndarray:
         """Extract weight vectors for specified neurons in a layer."""
         layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
