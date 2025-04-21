@@ -96,6 +96,21 @@ def sort_path(abl_path: Path) -> list[Path]:
     return step_dirs
 
 
+def resume_results(resume, save_path: Path, step_dirs: list[Path]):
+    """Resume results from the existing directory."""
+    # resume file and update the steps
+    if resume and save_path.is_file():
+        # load json file
+        final_results = JsonProcessor.save_json(save_path)
+        # get the generated ckpts
+        completed_results = list(final_results.keys())
+        # remove the existing files
+        step_dirs = [p for p in step_dirs if p.name not in completed_results]
+        logger.info(f"Resume from {save_path}. Existing {len(step_dirs) - len(completed_results)}")
+        return final_results, step_dirs
+    return {}, step_dirs
+
+
 class NeuronGroupSelector:
     """Class to run experiments of neuron group search."""
 
@@ -207,13 +222,13 @@ def main() -> None:
     )
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
-    final_results = {}
     # order the steps in descending way
     step_dirs = sort_path(abl_path)
+    final_results = resume_results(args.resume, save_path, step_dirs)
     # Process steps in the sorted order
     for step, _ in step_dirs:
         results = group_selector.process_single_step(step.name, unigram_distrib, longtail_threshold)
-        final_results[step] = results
+        final_results[step.name] = results
         # save the intermediate checkpoints
         JsonProcessor.save_json(final_results, save_path)
         logger.info(f"Save the results to {save_path}")

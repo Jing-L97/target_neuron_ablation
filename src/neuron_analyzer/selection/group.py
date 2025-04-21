@@ -607,6 +607,138 @@ class NeuronGroupSearch:
         cleanup()
         return best_result, target_size_result
 
+    def hierarchical_cluster_search(
+        self, n_clusters: int = 5, expansion_factor: int = 3
+    ) -> tuple[SearchResult, SearchResult]:
+        """Hierarchical clustering search for finding neuron groups."""
+        state = self._load_search_state("hierarchical_cluster")
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
+
+        features = np.array(self.individual_delta_loss).reshape(-1, 1)
+        if features.std() > 0:
+            features = (features - features.mean()) / features.std()
+
+        clustering = AgglomerativeClustering(n_clusters=min(n_clusters, len(self.neurons)))
+        cluster_labels = clustering.fit_predict(features)
+
+        clusters = defaultdict(list)
+        for i, neuron_idx in enumerate(range(len(self.neurons))):
+            clusters[cluster_labels[i]].append(neuron_idx)
+
+        representatives = []
+        for cluster_id, cluster_neurons in clusters.items():
+            sorted_cluster = sorted(
+                [(self.neurons[idx], self.individual_delta_loss[idx]) for idx in cluster_neurons],
+                key=lambda x: x[1],
+                reverse=True,
+            )
+            representatives.extend([n for n, _ in sorted_cluster[:expansion_factor]])
+
+        # Track best result of any size
+        best_result = None
+
+        # Handle case where representatives are fewer than target size
+        if len(representatives) <= self.target_size:
+            delta_loss = self._evaluate_group(representatives)
+            best_result = SearchResult(neurons=representatives, delta_loss=delta_loss)
+
+            # Create target size result
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+            if self.cache_dir:
+                self._save_search_state(
+                    "hierarchical_cluster",
+                    {
+                        "best_result": best_result.__dict__,
+                        "target_size_result": target_size_result.__dict__,
+                        "completed": True,
+                    },
+                )
+
+            return best_result, target_size_result
+
+        # Sort representatives by importance
+        sorted_reps = sorted(
+            [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in representatives],
+            key=lambda x: x[1],
+            reverse=True,
+        )
+
+        # Initialize with top representatives
+        current_group = [n for n, _ in sorted_reps[: min(5, self.target_size)]]
+        best_per_size = {len(current_group): (current_group.copy(), self._evaluate_group(current_group))}
+
+        # Keep track of best group of any size
+        best_group = current_group.copy()
+        best_score = self._evaluate_group(best_group)
+
+        # Continue adding neurons
+        while len(current_group) < self.target_size:
+            best_candidate = None
+            best_candidate_score = -float("inf")
+
+            for n, _ in sorted_reps:
+                if n in current_group:
+                    continue
+
+                test_group = current_group + [n]
+                delta_loss = self._evaluate_group(test_group)
+
+                # Update best candidate
+                if delta_loss > best_candidate_score:
+                    best_candidate = n
+                    best_candidate_score = delta_loss
+
+                # Update best overall if better
+                if delta_loss > best_score:
+                    best_group = test_group.copy()
+                    best_score = delta_loss
+
+                if self.cache_dir and len(current_group) % 2 == 0:
+                    self._save_search_state(
+                        "hierarchical_cluster",
+                        {
+                            "current_group": current_group,
+                            "best_per_size": best_per_size,
+                            "best_group": best_group,
+                            "best_score": best_score,
+                            "completed": False,
+                        },
+                    )
+
+            if best_candidate:
+                current_group.append(best_candidate)
+                # Store best for this size
+                best_per_size[len(current_group)] = (current_group.copy(), best_candidate_score)
+            else:
+                break
+
+        # Create best overall result
+        best_result = SearchResult(neurons=best_group, delta_loss=best_score)
+
+        # Create target size result
+        if len(current_group) == self.target_size:
+            target_loss = self._evaluate_group(current_group)
+            target_size_result = SearchResult(neurons=current_group, delta_loss=target_loss, is_target_size=True)
+        else:
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+        # Save state
+        if self.cache_dir:
+            self._save_search_state(
+                "hierarchical_cluster",
+                {
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
+                    "completed": True,
+                },
+            )
+        cleanup()
+        return best_result, target_size_result
+
     def iterative_pruning(self) -> tuple[SearchResult, SearchResult]:
         """Iterative pruning search for finding neuron groups."""
         state = self._load_search_state("iterative_pruning")

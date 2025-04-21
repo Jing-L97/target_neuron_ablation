@@ -231,8 +231,7 @@ def main():
                 logger.info(f"Files for step {step} already exist. Skip!")
                 continue
             logger.info(f"Processing step {step}")
-
-            abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
+            ablation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
 
 
 if __name__ == "__main__":

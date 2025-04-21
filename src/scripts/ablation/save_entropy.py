@@ -199,6 +199,7 @@ def main():
             save_path.mkdir(parents=True, exist_ok=True)
             # Check for existing files with pattern matching expected output
             if cli_args.resume and (save_path / "entropy_df.csv").is_file():
+                logger.info(save_path / "entropy_df.csv")
                 logger.info(f"Files for step {step} already exist. Skip!")
                 continue
             logger.info(f"Processing step {step}")
