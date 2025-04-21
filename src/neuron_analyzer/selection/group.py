@@ -11,7 +11,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import torch
-import tqdm
 from sklearn.cluster import AgglomerativeClustering
 from transformer_lens import utils
 
@@ -62,34 +61,13 @@ class GroupModelAblationAnalyzer:
         self.results = pd.DataFrame()
         self.log_unigram_distrib = self.unigram_distrib.log()
         self.layer_idx = layer_idx
-
-        """
-        # Store the layer for each group
-        self.group_layers = [int(group[0].split(".")[0]) for group in neuron_groups]
-        # Map each group to its neuron indices
-        self.group_neuron_indices = [[int(neuron.split(".")[1]) for neuron in group] for group in neuron_groups]
-
-        # Check the required columns for processing
-        required_columns = ["batch", "pos"]
-        for col in required_columns:
-            if col not in self.entropy_df.columns:
-                raise ValueError(f"Required column {col} not found in entropy_df")
-
-        # Log data structure information
-        neuron_counts = self.entropy_df.groupby(["batch", "pos"]).size()
-        avg_neurons_per_pos = neuron_counts.mean()
-        logger.info(f"Average neurons per position: {avg_neurons_per_pos:.2f}")
-        logger.info(f"Total batches: {self.entropy_df['batch'].nunique()}")
-        """
+        logger.info(f"ablate_components: ablate with k = {self.k}, long-tail threshold = {self.longtail_threshold}")
 
     def build_vector(self) -> None:
         """Build frequency-related vectors for ablation analysis."""
         if "longtail" in self.ablation_mode:
             # Create long-tail token mask (1 for long-tail tokens, 0 for common tokens)
             self.longtail_mask = (self.unigram_distrib < self.longtail_threshold).float()
-            logger.info(
-                f"Number of long-tail tokens: {self.longtail_mask.sum().item()} out of {len(self.longtail_mask)}"
-            )
 
             # Create token frequency vector focusing on long-tail tokens only
             # Original token frequency vector from the unigram distribution
@@ -112,7 +90,7 @@ class GroupModelAblationAnalyzer:
         unigram_projection_values = logits @ self.unigram_direction_vocab
         return unigram_projection_values.squeeze()
 
-    def build_group_activation_means(self, filtered_entropy_df: pd.DataFrame, neuron_group) -> list:
+    def build_group_activation_means(self, filtered_entropy_df: pd.DataFrame, neuron_group: list[int]) -> list:
         """Build mean activation values for each neuron in each group."""
         neuron_means = []
 
@@ -120,7 +98,7 @@ class GroupModelAblationAnalyzer:
             # Filter rows where component_name matches this neuron
             neuron_rows = filtered_entropy_df
             # Get the mean activation for this neuron
-            mean_activation = neuron_rows[f"{neuron}_activation"].mean()
+            mean_activation = neuron_rows[f"{self.layer_idx}.{neuron}_activation"].mean()
             neuron_means.append(mean_activation)
 
             # Log some statistics for debugging
@@ -179,11 +157,6 @@ class GroupModelAblationAnalyzer:
             # If there are fewer batches than k, use all available batches
             random_sequence_indices = self.entropy_df.batch.unique()
             logger.info(f"Using all available batches: {len(random_sequence_indices)}")
-
-        logger.info(f"ablate_components: ablate with k = {self.k}, long-tail threshold = {self.longtail_threshold}")
-
-        pbar = tqdm.tqdm(total=len(random_sequence_indices), file=sys.stdout)
-
         # new_entropy_df with only the random sequences
         filtered_entropy_df = self.entropy_df[self.entropy_df.batch.isin(random_sequence_indices)].copy()
 
@@ -212,12 +185,7 @@ class GroupModelAblationAnalyzer:
                 rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
 
                 # Log information instead of asserting equality
-                batch_neuron_count = len(rows)
                 batch_positions = rows["pos"].nunique()
-                logger.info(
-                    f"Batch {batch_n}: {batch_neuron_count} neuron data points across {batch_positions} positions"
-                )
-
                 # Verify token sequence length matches unique positions
                 if batch_positions != len(tok_seq):
                     logger.warning(
@@ -317,18 +285,16 @@ class GroupModelAblationAnalyzer:
 
                 self.results = pd.concat([batch_results, self.results])
                 batch_count += 1
-                pbar.update(1)
 
                 # Clean up to avoid memory issues
                 del logits, cache, logprobs
-                torch.cuda.empty_cache()
+                cleanup()
 
             except Exception as e:
                 logger.error(f"Error processing batch {batch_n}: {e}")
                 logger.error(traceback.format_exc())
                 continue
 
-        pbar.close()
         return self.results
 
     def process_group_batch_results(
@@ -349,11 +315,18 @@ class GroupModelAblationAnalyzer:
         # Create a dictionary to store results for each position
         results_dict = defaultdict(list)
 
+        # Access the data for this specific batch
+        # Each of these lists has entries for each batch we've processed
+        current_batch_losses = loss_post_ablation[0]  # First (and only) batch in the list
+        current_batch_frozen_losses = loss_post_ablation_with_frozen_unigram[0]
+        current_batch_entropy = entropy_post_ablation[0]
+        current_batch_frozen_entropy = entropy_post_ablation_with_frozen_unigram[0]
+
         # Process each position
         for pos_idx, pos in enumerate(positions):
             # Skip if position is out of range for sequence
-            if pos_idx >= len(entropy_post_ablation[0][0]):
-                logger.warning(f"Position {pos} (idx {pos_idx}) is out of range for entropy data")
+            if pos_idx >= current_batch_losses.shape[1]:  # Check against the actual size
+                logger.warning(f"Position {pos} (idx {pos_idx}) is out of range for loss data")
                 continue
 
             # Basic data
@@ -367,19 +340,15 @@ class GroupModelAblationAnalyzer:
                 results_dict["token_id"].append(token_id)
 
             # Process results for each group
-            for group_idx, group_name in enumerate(self.group_names):
-                # Add group columns if they don't exist
-                group_prefix = f"{group_name}_"
-                results_dict[f"{group_prefix}loss_post_ablation"].append(loss_post_ablation[group_idx][0, pos_idx])
-                results_dict[f"{group_prefix}loss_post_ablation_with_frozen_unigram"].append(
-                    loss_post_ablation_with_frozen_unigram[group_idx][0, pos_idx]
-                )
-                results_dict[f"{group_prefix}entropy_post_ablation"].append(
-                    entropy_post_ablation[group_idx][0, pos_idx].item()
-                )
-                results_dict[f"{group_prefix}entropy_post_ablation_with_frozen_unigram"].append(
-                    entropy_post_ablation_with_frozen_unigram[group_idx][0, pos_idx].item()
-                )
+            # Access the correct position in the current batch data
+            results_dict["loss_post_ablation"].append(current_batch_losses[0, pos_idx])
+            results_dict["loss_post_ablation_with_frozen_unigram"].append(current_batch_frozen_losses[0, pos_idx])
+
+            # Fix: Access the correct element in the entropy tensor
+            results_dict["entropy_post_ablation"].append(current_batch_entropy[0, pos_idx].item())
+            results_dict["entropy_post_ablation_with_frozen_unigram"].append(
+                current_batch_frozen_entropy[0, pos_idx].item()
+            )
 
         results_df = pd.DataFrame(results_dict)
 
@@ -394,13 +363,15 @@ class GroupModelAblationAnalyzer:
 
     def compute_heuristic(self, results) -> float:
         """Get heuristics from the results."""
-        results["delta_loss"] = results["loss"] - results["group_0_loss_post_ablation"]
+        results["delta_loss"] = results["loss"] - results["loss_post_ablation"]
         return results["delta_loss"].mean()
 
     def evaluate_neuron_group(self, neuron_group: list[int]) -> float:
         """Get heuristics from the results."""
         results = self.mean_ablate_components(neuron_group)
         delta_loss = self.compute_heuristic(results)
+        logger.info(f"Heuristic for current search: {delta_loss}")
+        cleanup()
         return delta_loss
 
 
@@ -512,7 +483,7 @@ class NeuronGroupSearch:
 
         return best_result, target_size_result
 
-    def progressive_beam_search(self, beam_width: int = 2) -> tuple[SearchResult, SearchResult]:
+    def progressive_beam_search(self, beam_width: int = 10) -> tuple[SearchResult, SearchResult]:
         """Progressive beam search for finding neuron groups."""
         state = self._load_search_state("progressive_beam")
 
@@ -548,6 +519,7 @@ class NeuronGroupSearch:
             )
 
         # Progressive beam search
+        logger.info("Performing progressive beam search")
         for size in range(start_size, self.target_size + 1):
             candidates = []
             sorted_indices = self._get_sorted_neurons()
@@ -635,138 +607,6 @@ class NeuronGroupSearch:
         cleanup()
         return best_result, target_size_result
 
-    def hierarchical_cluster_search(
-        self, n_clusters: int = 5, expansion_factor: int = 3
-    ) -> tuple[SearchResult, SearchResult]:
-        """Hierarchical clustering search for finding neuron groups."""
-        state = self._load_search_state("hierarchical_cluster")
-        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
-            best_result = SearchResult(**state["best_result"])
-            target_size_result = SearchResult(**state["target_size_result"])
-            return best_result, target_size_result
-
-        features = np.array(self.individual_delta_loss).reshape(-1, 1)
-        if features.std() > 0:
-            features = (features - features.mean()) / features.std()
-
-        clustering = AgglomerativeClustering(n_clusters=min(n_clusters, len(self.neurons)))
-        cluster_labels = clustering.fit_predict(features)
-
-        clusters = defaultdict(list)
-        for i, neuron_idx in enumerate(range(len(self.neurons))):
-            clusters[cluster_labels[i]].append(neuron_idx)
-
-        representatives = []
-        for cluster_id, cluster_neurons in clusters.items():
-            sorted_cluster = sorted(
-                [(self.neurons[idx], self.individual_delta_loss[idx]) for idx in cluster_neurons],
-                key=lambda x: x[1],
-                reverse=True,
-            )
-            representatives.extend([n for n, _ in sorted_cluster[:expansion_factor]])
-
-        # Track best result of any size
-        best_result = None
-
-        # Handle case where representatives are fewer than target size
-        if len(representatives) <= self.target_size:
-            delta_loss = self._evaluate_group(representatives)
-            best_result = SearchResult(neurons=representatives, delta_loss=delta_loss)
-
-            # Create target size result
-            _, target_size_result = self._ensure_target_size_group(best_result)
-
-            if self.cache_dir:
-                self._save_search_state(
-                    "hierarchical_cluster",
-                    {
-                        "best_result": best_result.__dict__,
-                        "target_size_result": target_size_result.__dict__,
-                        "completed": True,
-                    },
-                )
-
-            return best_result, target_size_result
-
-        # Sort representatives by importance
-        sorted_reps = sorted(
-            [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in representatives],
-            key=lambda x: x[1],
-            reverse=True,
-        )
-
-        # Initialize with top representatives
-        current_group = [n for n, _ in sorted_reps[: min(5, self.target_size)]]
-        best_per_size = {len(current_group): (current_group.copy(), self._evaluate_group(current_group))}
-
-        # Keep track of best group of any size
-        best_group = current_group.copy()
-        best_score = self._evaluate_group(best_group)
-
-        # Continue adding neurons
-        while len(current_group) < self.target_size:
-            best_candidate = None
-            best_candidate_score = -float("inf")
-
-            for n, _ in sorted_reps:
-                if n in current_group:
-                    continue
-
-                test_group = current_group + [n]
-                delta_loss = self._evaluate_group(test_group)
-
-                # Update best candidate
-                if delta_loss > best_candidate_score:
-                    best_candidate = n
-                    best_candidate_score = delta_loss
-
-                # Update best overall if better
-                if delta_loss > best_score:
-                    best_group = test_group.copy()
-                    best_score = delta_loss
-
-                if self.cache_dir and len(current_group) % 2 == 0:
-                    self._save_search_state(
-                        "hierarchical_cluster",
-                        {
-                            "current_group": current_group,
-                            "best_per_size": best_per_size,
-                            "best_group": best_group,
-                            "best_score": best_score,
-                            "completed": False,
-                        },
-                    )
-
-            if best_candidate:
-                current_group.append(best_candidate)
-                # Store best for this size
-                best_per_size[len(current_group)] = (current_group.copy(), best_candidate_score)
-            else:
-                break
-
-        # Create best overall result
-        best_result = SearchResult(neurons=best_group, delta_loss=best_score)
-
-        # Create target size result
-        if len(current_group) == self.target_size:
-            target_loss = self._evaluate_group(current_group)
-            target_size_result = SearchResult(neurons=current_group, delta_loss=target_loss, is_target_size=True)
-        else:
-            _, target_size_result = self._ensure_target_size_group(best_result)
-
-        # Save state
-        if self.cache_dir:
-            self._save_search_state(
-                "hierarchical_cluster",
-                {
-                    "best_result": best_result.__dict__,
-                    "target_size_result": target_size_result.__dict__,
-                    "completed": True,
-                },
-            )
-        cleanup()
-        return best_result, target_size_result
-
     def iterative_pruning(self) -> tuple[SearchResult, SearchResult]:
         """Iterative pruning search for finding neuron groups."""
         state = self._load_search_state("iterative_pruning")
@@ -775,13 +615,18 @@ class NeuronGroupSearch:
             target_size_result = SearchResult(**state["target_size_result"])
             return best_result, target_size_result
 
-        # Initialize variables
-        current_group = state.get("current_group") if state and state.get("current_group") else self.neurons.copy()
-        best_per_size = state.get("best_per_size", {})
+        # Initialize variables - properly handle None state
+        current_group = state["current_group"] if state and "current_group" in state else self.neurons.copy()
+
+        best_per_size = {} if not state else state.get("best_per_size", {})
 
         # Track best group of any size
-        best_group = current_group.copy()
-        best_score = self._evaluate_group(best_group)
+        if state and "best_group" in state and "best_score" in state:
+            best_group = state["best_group"]
+            best_score = state["best_score"]
+        else:
+            best_group = current_group.copy()
+            best_score = self._evaluate_group(best_group)
 
         # Start with full set and record initial score
         initial_score = self._evaluate_group(current_group)
@@ -861,6 +706,7 @@ class NeuronGroupSearch:
             target_size_result = SearchResult(**state["target_size_result"])
             return best_result, target_size_result
 
+        logger.info("Performing importance weighted sampling")
         # Initialize variables
         if state and not state.get("completed"):
             weights = state["weights"]

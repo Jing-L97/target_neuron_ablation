@@ -77,9 +77,23 @@ def get_tail_threshold_stat(args) -> tuple[float | None, dict | None]:
 
 def set_path(args) -> Path:
     """Set save and cache path."""
-    save_path = settings.PATH.neuron_dir / "group" / args.effect / args.vector / args.model
+    save_path = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic / args.effect
     save_path.mkdir(parents=True, exist_ok=True)
     return save_path
+
+
+def sort_path(abl_path: Path) -> list[Path]:
+    """Get the sorted directory by steps."""
+    # Get all step directories and sort them by the number after "step" in descending order
+    step_dirs = []
+    for step in abl_path.iterdir():
+        if step.is_dir():
+            # Extract the number after "step" prefix
+            step_num = int(step.name)  # Remove "step" prefix and convert to integer
+            step_dirs.append((step, step_num))
+    # Sort directories by step number in descending order
+    step_dirs.sort(key=lambda x: x[1], reverse=True)
+    return step_dirs
 
 
 class NeuronGroupSelector:
@@ -194,14 +208,15 @@ def main() -> None:
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     final_results = {}
-    # check whether the target file has been created
-    for step in abl_path.iterdir():
-        if step.is_dir():
-            results = group_selector.process_single_step(step.name, unigram_distrib, longtail_threshold)
-            final_results[step] = results
-            # save the intermediate checkpoints
-            JsonProcessor.save_json(final_results, save_path)
-    logger.info(f"Save the results to {save_path}")
+    # order the steps in descending way
+    step_dirs = sort_path(abl_path)
+    # Process steps in the sorted order
+    for step, _ in step_dirs:
+        results = group_selector.process_single_step(step.name, unigram_distrib, longtail_threshold)
+        final_results[step] = results
+        # save the intermediate checkpoints
+        JsonProcessor.save_json(final_results, save_path)
+        logger.info(f"Save the results to {save_path}")
 
 
 if __name__ == "__main__":

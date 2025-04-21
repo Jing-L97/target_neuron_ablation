@@ -5,7 +5,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=16
 #SBATCH --mem=160G
-#SBATCH --time=1:20:00
+#SBATCH --time=2:30:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_group_%a.log
 #SBATCH --array=0-11
 

@@ -190,4 +190,3 @@ def cleanup() -> None:
     # Clear CUDA cache if using GPU
     if torch.cuda.is_available():
         torch.cuda.empty_cache()
-    logger.info("Release cuda memory.")
