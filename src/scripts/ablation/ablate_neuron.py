@@ -10,13 +10,10 @@ from pathlib import Path
 from warnings import simplefilter
 
 import hydra
-import neel.utils as nutils
 import numpy as np
 import pandas as pd
 import torch
-from datasets import load_dataset
 from omegaconf import DictConfig
-from transformer_lens import utils
 
 from neuron_analyzer import settings
 from neuron_analyzer.ablation.abl_util import (
@@ -27,7 +24,7 @@ from neuron_analyzer.ablation.abl_util import (
 from neuron_analyzer.ablation.ablation import ModelAblationAnalyzer
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
 from neuron_analyzer.load_util import JsonProcessor, load_unigram
-from neuron_analyzer.model_util import StepConfig
+from neuron_analyzer.model_util import ModelHandler, StepConfig
 
 T = t.TypeVar("T")
 
@@ -106,12 +103,17 @@ class NeuronAblationProcessor:
         model, tokenizer = self.load_model_and_tokenizer(step)
 
         self.logger.info("Finished loading model and tokenizer")
+        # initlize the model handler class
+        model_handler = ModelHandler()
         # Load and process dataset
-        data = load_dataset(self.args.dataset, split="train")
-        first_1k = data.select([i for i in range(self.args.data_range_start, self.args.data_range_end)])
-        tokenized_data = utils.tokenize_and_concatenate(first_1k, tokenizer, max_length=256, column_name="text")
-        tokenized_data = tokenized_data.shuffle(self.args.seed)
-        token_df = nutils.make_token_df(tokenized_data["tokens"], model=model)
+        tokenized_data, token_df = model_handler.tokenize_data(
+            dataset=self.args.dataset,
+            data_range_start=self.args.data_range_start,
+            data_range_end=self.args.data_range_end,
+            seed=self.args.seed,
+            get_df=True,
+        )
+        logger.info("Finished tokenizing data")
 
         self.logger.info("Finished tokenizing data")
 
