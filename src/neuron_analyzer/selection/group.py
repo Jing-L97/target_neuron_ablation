@@ -111,29 +111,24 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
         batch_count = 0
         for batch_n in filtered_entropy_df.batch.unique():
             try:
-                tok_seq = self.tokenized_data["tokens"][batch_n]
+                # Get original token sequence
+                original_tok_seq = self.tokenized_data["tokens"][batch_n]
 
-                # get unaltered logits
+                # Get positions for this batch from the filtered DataFrame
+                batch_df = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
+                positions = sorted(batch_df["pos"].unique())
+
+                # Create a mapping from original positions to sequential indices (0, 1, 2, ...)
+                pos_to_idx = {pos: idx for idx, pos in enumerate(positions)}
+
+                # Get the model's outputs on the full sequence to preserve context
                 self.model.reset_hooks()
-                inp = tok_seq.unsqueeze(0).to(self.device)
+                inp = original_tok_seq.unsqueeze(0).to(self.device)
                 logits, cache = self.model.run_with_cache(inp)
                 logprobs = logits[0, :, :].log_softmax(dim=-1)
 
-                # get the entropy_df entries for the current sequence
-                rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
-
-                # Log information instead of asserting equality
-                batch_positions = rows["pos"].nunique()
-                # Verify token sequence length matches unique positions
-                if batch_positions != len(tok_seq):
-                    logger.warning(
-                        f"Position count mismatch for batch {batch_n}: "
-                        f"DataFrame has {batch_positions} unique positions, "
-                        f"token sequence has {len(tok_seq)} tokens"
-                    )
-
-                # get the value of the logits projected onto the b_U direction
-                unigram_projection_values = self.project_logits(logits)
+                # Extract the unigram projection values only for positions we care about
+                unigram_projection_values = self.project_logits(logits)[positions]
 
                 # Process each group
                 loss_post_ablation = []
@@ -141,15 +136,20 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
                 loss_post_ablation_with_frozen_unigram = []
                 entropy_post_ablation_with_frozen_unigram = []
 
-                # Get activations for all neurons in this group
-                res_stream = cache[utils.get_act_name("resid_post", self.layer_idx)][0]
-                previous_activations = cache[utils.get_act_name("post", self.layer_idx)][0, :, neuron_group]
+                # Extract residual stream and activations only for positions we care about
+                # We need to get the full data first, then extract positions
+                res_stream_full = cache[utils.get_act_name("resid_post", self.layer_idx)][0]
+                res_stream = res_stream_full[positions]
+
+                # Extract activations for each neuron in the group, for each position we care about
+                previous_activations_full = cache[utils.get_act_name("post", self.layer_idx)][0]
+                previous_activations = previous_activations_full[positions][:, neuron_group]
 
                 # Get mean activations for this group
                 group_mean = group_activation_means.to(previous_activations.device)
 
                 # Compute activation deltas for all neurons in the group
-                activation_deltas = group_mean - previous_activations  # Shape: [seq_len, num_neurons_in_group]
+                activation_deltas = group_mean - previous_activations  # Shape: [filtered_seq_len, num_neurons_in_group]
 
                 # Get the W_out for all neurons in this group
                 w_out_group = self.model.W_out[self.layer_idx, neuron_group, :]  # [num_neurons_in_group, d_model]
@@ -161,10 +161,11 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
                 res_deltas_sum = res_deltas.sum(dim=1)
 
                 # Add a batch dimension for processing
-                res_deltas_sum = res_deltas_sum.unsqueeze(0)  # [1, seq_len, d_model]
+                res_deltas_sum = res_deltas_sum.unsqueeze(0)  # [1, filtered_seq_len, d_model]
+
                 # Process in chunks - here we only have one batch since we're doing the combined effect
-                updated_res_stream = res_stream + res_deltas_sum[0]  # [seq_len, d_model]
-                updated_res_stream = updated_res_stream.unsqueeze(0)  # Add batch dim: [1, seq_len, d_model]
+                updated_res_stream = res_stream + res_deltas_sum[0]  # [filtered_seq_len, d_model]
+                updated_res_stream = updated_res_stream.unsqueeze(0)  # Add batch dim: [1, filtered_seq_len, d_model]
 
                 # Apply layer normalization
                 updated_res_stream = self.model.ln_final(updated_res_stream)
@@ -174,14 +175,17 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 
                 # Project neurons for frequency adjustment if needed
                 ablated_logits_with_frozen_unigram = self.project_neurons(
-                    logits,
+                    logits[:, positions, :],  # Only use logits for positions we care about
                     unigram_projection_values,
                     ablated_logits,
                     res_deltas_sum,
                 )
 
+                # Create filtered input token sequence for loss computation
+                filtered_inp = original_tok_seq[positions].unsqueeze(0).to(self.device)
+
                 # Compute loss
-                loss_post_ablation_batch = self.model.loss_fn(ablated_logits, inp, per_token=True).cpu()
+                loss_post_ablation_batch = self.model.loss_fn(ablated_logits, filtered_inp, per_token=True).cpu()
                 loss_post_ablation_batch = np.concatenate(
                     (loss_post_ablation_batch, np.zeros((loss_post_ablation_batch.shape[0], 1))), axis=1
                 )
@@ -193,7 +197,7 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 
                 # Process frozen unigram results
                 loss_post_ablation_with_frozen_unigram_batch = self.model.loss_fn(
-                    ablated_logits_with_frozen_unigram, inp, per_token=True
+                    ablated_logits_with_frozen_unigram, filtered_inp, per_token=True
                 ).cpu()
                 loss_post_ablation_with_frozen_unigram_batch = np.concatenate(
                     (
@@ -211,14 +215,16 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
                 # Clean up
                 del ablated_logits, ablated_logits_with_frozen_unigram
 
-                # Process results and prepare dataframe
+                # Process results - note that we need to pass the pos_to_idx mapping
+                # to ensure correct position handling in the results processing
                 batch_results = self.process_group_batch_results(
                     batch_n,
-                    filtered_entropy_df,
+                    batch_df,  # Pass only the filtered DataFrame for this batch
                     loss_post_ablation,
                     loss_post_ablation_with_frozen_unigram,
                     entropy_post_ablation,
                     entropy_post_ablation_with_frozen_unigram,
+                    pos_to_idx,  # Pass the position mapping
                 )
 
                 self.results = pd.concat([batch_results, self.results])
@@ -238,16 +244,16 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
     def process_group_batch_results(
         self,
         batch_n: int,
-        filtered_entropy_df: pd.DataFrame,
+        batch_df: pd.DataFrame,
         loss_post_ablation: list,
         loss_post_ablation_with_frozen_unigram: list,
         entropy_post_ablation: list,
         entropy_post_ablation_with_frozen_unigram: list,
+        pos_to_idx: dict[int, int] = None,
     ) -> pd.DataFrame:
         """Process results from ablation and prepare a DataFrame."""
         # Get unique positions for this batch
-        positions = filtered_entropy_df[filtered_entropy_df.batch == batch_n]["pos"].unique()
-        sel_df = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
+        positions = batch_df["pos"].unique()
         positions.sort()
 
         # Create a dictionary to store results for each position
@@ -261,28 +267,31 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
         current_batch_frozen_entropy = entropy_post_ablation_with_frozen_unigram[0]
 
         # Process each position
-        for pos_idx, pos in enumerate(positions):
-            # Skip if position is out of range for sequence
-            if pos_idx >= current_batch_losses.shape[1]:  # Check against the actual size
+        for pos in positions:
+            # Get the sequential index for this position if pos_to_idx is provided
+            pos_idx = pos_to_idx[pos] if pos_to_idx else pos
+
+            # Skip if position is out of range for sequence (should no longer happen with proper filtering)
+            if pos_idx >= current_batch_losses.shape[1]:
                 logger.warning(f"Position {pos} (idx {pos_idx}) is out of range for loss data")
                 continue
 
             # Basic data
             results_dict["batch"].append(batch_n)
-            results_dict["pos"].append(pos)
+            results_dict["pos"].append(pos)  # Store original position, not the index
 
             # Get token information if available
-            pos_rows = filtered_entropy_df[(filtered_entropy_df.batch == batch_n) & (filtered_entropy_df.pos == pos)]
+            pos_rows = batch_df[batch_df["pos"] == pos]
             if "token_id" in pos_rows.columns:
                 token_id = pos_rows["token_id"].iloc[0]
                 results_dict["token_id"].append(token_id)
 
             # Process results for each group
-            # Access the correct position in the current batch data
+            # Access the correct position in the current batch data using pos_idx (the sequential index)
             results_dict["loss_post_ablation"].append(current_batch_losses[0, pos_idx])
             results_dict["loss_post_ablation_with_frozen_unigram"].append(current_batch_frozen_losses[0, pos_idx])
 
-            # Fix: Access the correct element in the entropy tensor
+            # Access the correct element in the entropy tensor
             results_dict["entropy_post_ablation"].append(current_batch_entropy[0, pos_idx].item())
             results_dict["entropy_post_ablation_with_frozen_unigram"].append(
                 current_batch_frozen_entropy[0, pos_idx].item()
@@ -293,7 +302,10 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
         # Add metadata columns
         results_df["ablation_mode"] = self.ablation_mode
         results_df["longtail_threshold"] = self.longtail_threshold
-        results_df["loss"] = sel_df["loss"].to_list()
+
+        # Extract loss values from the original DataFrame for these positions
+        results_df["loss"] = batch_df["loss"].to_list()
+
         if "longtail" in self.ablation_mode and self.longtail_mask is not None:
             results_df["num_longtail_tokens"] = self.longtail_mask.sum().item()
 

@@ -8,6 +8,7 @@ from warnings import simplefilter
 import numpy as np
 import pandas as pd
 import torch
+import tqdm
 from transformer_lens import utils
 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
@@ -17,10 +18,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 # Type variable for generic typing
 T = t.TypeVar("T")
+
 """
-Note this is the untested version to tackle the length mismatch between tokenized sequences and entropy df
-compared with the backup verion, this version modifies: 
-process_batch_results; mean_ablate_components
+Note this is the backup version without handling the potential mismatch between the 
+entropy df and tokenized sequences; 
+
+This works wel if you filter the entropy df from scratch
+
+But more processes need to be checked if laoding the precomputed df
 """
 
 
@@ -217,218 +222,103 @@ class ModelAblationAnalyzer:
         kl_divergence_before: np.ndarray,
         kl_divergence_after: np.ndarray,
         kl_divergence_after_frozen_unigram: np.ndarray,
-        pos_to_idx: dict[int, int] = None,
     ) -> pd.DataFrame:
         """Process results for a batch and create a dataframe."""
         final_df = None
 
-        # Get batch-specific DataFrame
-        batch_df = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
-
-        # Get positions for this batch
-        positions = sorted(batch_df["pos"].unique())
-
-        # Log diagnostic information
-        logger.debug(f"Processing batch {batch_n} with {len(positions)} positions")
-
-        # Create position-to-index mapping if not provided
-        if pos_to_idx is None:
-            pos_to_idx = {pos: i for i, pos in enumerate(positions)}
-
         for i, component_name in enumerate(self.components_to_ablate):
-            # Start with a copy of batch data
-            df_to_append = batch_df.copy()
+            df_to_append = filtered_entropy_df[filtered_entropy_df.batch == batch_n].copy()
 
-            # Drop all the columns that are not the component_name
-            component_cols = [
-                f"{neuron}_activation" for neuron in self.components_to_ablate if neuron != component_name
-            ]
-            if component_cols:
-                df_to_append = df_to_append.drop(columns=component_cols, errors="ignore")
+            # drop all the columns that are not the component_name
+            df_to_append = df_to_append.drop(
+                columns=[f"{neuron}_activation" for neuron in self.components_to_ablate if neuron != component_name]
+            )
 
-            # Rename the component_name column to 'activation'
-            if f"{component_name}_activation" in df_to_append.columns:
-                df_to_append = df_to_append.rename(columns={f"{component_name}_activation": "activation"})
+            # rename the component_name column to 'activation'
+            df_to_append = df_to_append.rename(columns={f"{component_name}_activation": "activation"})
 
             df_to_append["component_name"] = component_name
-
-            # Create result columns with appropriate sizes
-            for pos in positions:
-                # Get the corresponding index for tensors
-                idx = pos_to_idx[pos]
-
-                # Skip if the index is out of range
-                if idx >= loss_post_ablation[i].shape[1]:
-                    logger.warning(f"Position {pos} (idx {idx}) is out of range for tensors. Skipping.")
-                    continue
-
-                # Get rows for this position
-                pos_mask = df_to_append["pos"] == pos
-                if not pos_mask.any():
-                    logger.warning(f"Position {pos} not found in DataFrame. Skipping.")
-                    continue
-
-                # Set values for this position
-                df_to_append.loc[pos_mask, "loss_post_ablation"] = loss_post_ablation[i][0, idx]
-                df_to_append.loc[pos_mask, "loss_post_ablation_with_frozen_unigram"] = (
-                    loss_post_ablation_with_frozen_unigram[i][0, idx]
-                )
-                df_to_append.loc[pos_mask, "entropy_post_ablation"] = entropy_post_ablation[i][0, idx]
-                df_to_append.loc[pos_mask, "entropy_post_ablation_with_frozen_unigram"] = (
-                    entropy_post_ablation_with_frozen_unigram[i][0, idx]
-                )
-
-                # KL divergence values
-                if idx < len(kl_divergence_before):
-                    df_to_append.loc[pos_mask, "kl_divergence_before"] = kl_divergence_before[idx]
-                if idx < kl_divergence_after[i].shape[0]:
-                    df_to_append.loc[pos_mask, "kl_divergence_after"] = kl_divergence_after[i][idx]
-                if idx < kl_divergence_after_frozen_unigram[i].shape[0]:
-                    df_to_append.loc[pos_mask, "kl_divergence_after_frozen_unigram"] = (
-                        kl_divergence_after_frozen_unigram[i][idx]
-                    )
+            df_to_append["loss_post_ablation"] = loss_post_ablation[i]
+            df_to_append["loss_post_ablation_with_frozen_unigram"] = loss_post_ablation_with_frozen_unigram[i]
+            df_to_append["entropy_post_ablation"] = entropy_post_ablation[i]
+            df_to_append["entropy_post_ablation_with_frozen_unigram"] = entropy_post_ablation_with_frozen_unigram[i]
+            df_to_append["kl_divergence_before"] = kl_divergence_before
+            df_to_append["kl_divergence_after"] = kl_divergence_after[i]
+            df_to_append["kl_divergence_after_frozen_unigram"] = kl_divergence_after_frozen_unigram[i]
 
             # Add ablation information
             df_to_append["ablation_mode"] = self.ablation_mode
-            if "longtail" in self.ablation_mode and self.longtail_mask is not None:
+            if self.ablation_mode == "longtail":
                 df_to_append["longtail_threshold"] = self.longtail_threshold
                 df_to_append["num_longtail_tokens"] = self.longtail_mask.sum().item()
 
-            # Append to our results
             final_df = df_to_append if final_df is None else pd.concat([final_df, df_to_append])
-
-        # Handle case where we couldn't process any results
-        if final_df is None:
-            logger.warning(f"No valid results for batch {batch_n}, returning empty DataFrame")
-            return pd.DataFrame()
 
         return final_df
 
     def mean_ablate_components(self) -> dict[int, pd.DataFrame]:
         """Perform mean ablation on specified components."""
         # Sample a set of random batch indices
-        try:
-            random_sequence_indices = np.random.choice(self.entropy_df.batch.unique(), self.k, replace=False)
-        except ValueError as e:
-            logger.error(f"Error sampling batch indices: {e}")
-            # If there are fewer batches than k, use all available batches
-            random_sequence_indices = self.entropy_df.batch.unique()
-            logger.info(f"Using all available batches: {len(random_sequence_indices)}")
+        random_sequence_indices = np.random.choice(self.entropy_df.batch.unique(), self.k, replace=False)
 
         logger.info(f"ablate_components: ablate with k = {self.k}, long-tail threshold = {self.longtail_threshold}")
 
-        # Get entropy_df with only the random sequences
+        pbar = tqdm.tqdm(total=self.k, file=sys.stdout)
+
+        # new_entropy_df with only the random sequences
         filtered_entropy_df = self.entropy_df[self.entropy_df.batch.isin(random_sequence_indices)].copy()
 
-        # Calculate mean activation values for the components to ablate
         activation_mean_values = torch.tensor(
             self.entropy_df[[f"{component_name}_activation" for component_name in self.components_to_ablate]].mean()
         )
 
-        # Add diagnostic logging for first few batches
-        for batch_idx, batch_n in enumerate(list(filtered_entropy_df.batch.unique())[:3]):
-            batch_df = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
-            tok_seq = self.tokenized_data["tokens"][batch_n]
-            positions = sorted(batch_df["pos"].unique())
-
-            logger.info(f"Diagnostic for batch {batch_n}:")
-            logger.info(f"  DataFrame rows: {len(batch_df)}")
-            logger.info(f"  Unique positions: {len(positions)}")
-            logger.info(f"  Token sequence length: {len(tok_seq)}")
-            if positions:
-                logger.info(f"  Position range: {min(positions)} to {max(positions)}")
-
-                # Check for position gaps
-                if len(positions) > 1:
-                    gaps = [positions[i + 1] - positions[i] for i in range(len(positions) - 1)]
-                    all_sequential = all(gap == 1 for gap in gaps)
-                    logger.info(f"  Positions are sequential: {all_sequential}")
-                    if not all_sequential:
-                        gap_counts = sum(1 for gap in gaps if gap > 1)
-                        logger.info(f"  Number of gaps: {gap_counts}")
-
         # Build frequency vectors
         self.build_vector()
 
-        # Get neuron indices
+        # get neuron indices
         self.neuron_indices = [int(neuron_name.split(".")[1]) for neuron_name in self.components_to_ablate]
 
-        # Get layer indices
+        # get layer indices
         layer_indices = [int(neuron_name.split(".")[0]) for neuron_name in self.components_to_ablate]
         self.layer_idx = layer_indices[0]
 
         for batch_n in filtered_entropy_df.batch.unique():
-            # Get token sequence
             tok_seq = self.tokenized_data["tokens"][batch_n]
 
-            # Get positions for this batch
-            batch_df = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
-            positions = sorted(batch_df["pos"].unique())
-
-            # Create position-to-index mapping
-            pos_to_idx = {pos: i for i, pos in enumerate(positions)}
-
-            # Check for position mismatch
-            if len(positions) != len(tok_seq):
-                logger.warning(
-                    f"Position count mismatch for batch {batch_n}: "
-                    f"DataFrame has {len(positions)} unique positions, "
-                    f"token sequence has {len(tok_seq)} tokens"
-                )
-
-                # Filter positions to valid range
-                valid_positions = [pos for pos in positions if pos < len(tok_seq)]
-                if len(valid_positions) < len(positions):
-                    logger.warning(f"Filtered out {len(positions) - len(valid_positions)} invalid positions")
-                    positions = valid_positions
-                    # Update mapping
-                    pos_to_idx = {pos: i for i, pos in enumerate(positions)}
-
-            # Get unaltered logits
+            # get unaltered logits
             self.model.reset_hooks()
             inp = tok_seq.unsqueeze(0).to(self.device)
             logits, cache = self.model.run_with_cache(inp)
             logprobs = logits[0, :, :].log_softmax(dim=-1)
 
-            # Get residual stream from cache
-            res_stream_full = cache[utils.get_act_name("resid_post", self.layer_idx)][0]
+            res_stream = cache[utils.get_act_name("resid_post", self.layer_idx)][0]
 
-            # Extract residual stream only for positions we care about
-            res_stream = res_stream_full[positions]
+            # get the entropy_df entries for the current sequence
+            rows = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
+            assert len(rows) == len(tok_seq), f"len(rows) = {len(rows)}, len(tok_seq) = {len(tok_seq)}"
 
-            # Get the value of the logits projected onto the b_U direction, for our positions
-            full_unigram_projection_values = self.project_logits(logits)
-            unigram_projection_values = torch.tensor(
-                [full_unigram_projection_values[pos] for pos in positions], device=full_unigram_projection_values.device
-            )
-
-            # Get neuron activations for our positions
-            previous_activation_full = cache[utils.get_act_name("post", self.layer_idx)][0]
-            previous_activation = previous_activation_full[positions][:, self.neuron_indices]
-
+            # get the value of the logits projected onto the b_U direction
+            unigram_projection_values = self.project_logits(logits)
+            previous_activation = cache[utils.get_act_name("post", self.layer_idx)][0, :, self.neuron_indices]
             del cache
-
-            # Calculate activation deltas
             activation_deltas = activation_mean_values.to(previous_activation.device) - previous_activation
-            # activation deltas is filtered_seq_len x n_neurons
+            # activation deltas is seq_n x n_neurons
 
-            # Multiple deltas by W_out
+            # multiple deltas by W_out
             res_deltas = activation_deltas.unsqueeze(-1) * self.model.W_out[self.layer_idx, self.neuron_indices, :]
             res_deltas = res_deltas.permute(1, 0, 2)
 
-            # Initialize result containers
             loss_post_ablation = []
             entropy_post_ablation = []
+
             loss_post_ablation_with_frozen_unigram = []
             entropy_post_ablation_with_frozen_unigram = []
+
             kl_divergence_after = []
             kl_divergence_after_frozen_unigram = []
 
-            # Calculate KL divergence before ablation
-            # We need to extract logprobs only for our positions
-            position_logprobs = logprobs[positions]
             kl_divergence_before = (
-                self.kl_div(position_logprobs, self.log_unigram_distrib, reduction="none", log_target=True)
+                self.kl_div(logprobs, self.log_unigram_distrib, reduction="none", log_target=True)
                 .sum(axis=-1)
                 .cpu()
                 .numpy()
@@ -438,45 +328,39 @@ class ModelAblationAnalyzer:
             for i in range(0, res_deltas.shape[0], self.chunk_size):
                 res_deltas_chunk = res_deltas[i : i + self.chunk_size]
                 updated_res_stream_chunk = res_stream.repeat(res_deltas_chunk.shape[0], 1, 1) + res_deltas_chunk
-
-                # Apply layer normalization
+                # apply ln_final
                 updated_res_stream_chunk = self.model.ln_final(updated_res_stream_chunk)
 
                 # Project to logit space
                 ablated_logits_chunk = updated_res_stream_chunk @ self.model.W_U + self.model.b_U
 
-                # Create filtered input for loss calculation
-                filtered_inp = tok_seq[positions].unsqueeze(0).to(self.device)
-                filtered_inp_repeated = filtered_inp.repeat(res_deltas_chunk.shape[0], 1)
-
-                # Project neurons for frequency adjustment
                 ablated_logits_with_frozen_unigram_chunk = self.project_neurons(
-                    logits[:, positions, :],  # Only use logits for positions we care about
+                    logits,
                     unigram_projection_values,
                     ablated_logits_chunk,
                     res_deltas_chunk,
                 )
 
-                # Compute loss for the chunk
+                # compute loss for the chunk
                 loss_post_ablation_chunk = self.model.loss_fn(
-                    ablated_logits_chunk, filtered_inp_repeated, per_token=True
+                    ablated_logits_chunk, inp.repeat(res_deltas_chunk.shape[0], 1), per_token=True
                 ).cpu()
                 loss_post_ablation_chunk = np.concatenate(
                     (loss_post_ablation_chunk, np.zeros((loss_post_ablation_chunk.shape[0], 1))), axis=1
                 )
                 loss_post_ablation.append(loss_post_ablation_chunk)
 
-                # Compute entropy for the chunk
+                # compute entropy for the chunk
                 entropy_post_ablation_chunk = self.get_entropy(ablated_logits_chunk)
                 entropy_post_ablation.append(entropy_post_ablation_chunk.cpu())
 
-                # Get log probabilities
                 abl_logprobs = ablated_logits_chunk.log_softmax(dim=-1)
+
                 del ablated_logits_chunk
 
-                # Compute loss for ablated_logits_with_frozen_unigram_chunk
+                # compute loss for ablated_logits_with_frozen_unigram_chunk
                 loss_post_ablation_with_frozen_unigram_chunk = self.model.loss_fn(
-                    ablated_logits_with_frozen_unigram_chunk, filtered_inp_repeated, per_token=True
+                    ablated_logits_with_frozen_unigram_chunk, inp.repeat(res_deltas_chunk.shape[0], 1), per_token=True
                 ).cpu()
                 loss_post_ablation_with_frozen_unigram_chunk = np.concatenate(
                     (
@@ -487,7 +371,7 @@ class ModelAblationAnalyzer:
                 )
                 loss_post_ablation_with_frozen_unigram.append(loss_post_ablation_with_frozen_unigram_chunk)
 
-                # Compute entropy for ablated_logits_with_frozen_unigram_chunk
+                # compute entropy for ablated_logits_with_frozen_unigram_chunk
                 entropy_post_ablation_with_frozen_unigram_chunk = self.get_entropy(
                     ablated_logits_with_frozen_unigram_chunk
                 )
@@ -504,10 +388,12 @@ class ModelAblationAnalyzer:
             # Concatenate results
             loss_post_ablation = np.concatenate(loss_post_ablation, axis=0)
             entropy_post_ablation = np.concatenate(entropy_post_ablation, axis=0)
+
             loss_post_ablation_with_frozen_unigram = np.concatenate(loss_post_ablation_with_frozen_unigram, axis=0)
             entropy_post_ablation_with_frozen_unigram = np.concatenate(
                 entropy_post_ablation_with_frozen_unigram, axis=0
             )
+
             kl_divergence_after = np.concatenate(kl_divergence_after, axis=0)
             kl_divergence_after_frozen_unigram = np.concatenate(kl_divergence_after_frozen_unigram, axis=0)
 
@@ -525,9 +411,9 @@ class ModelAblationAnalyzer:
                 kl_divergence_before,
                 kl_divergence_after,
                 kl_divergence_after_frozen_unigram,
-                pos_to_idx,  # Pass the position mapping
             )
 
             self.results[batch_n] = batch_results
+            pbar.update(1)
 
         return self.results
