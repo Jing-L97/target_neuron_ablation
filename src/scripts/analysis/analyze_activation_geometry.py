@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Select neurons based on single neuron heuristics.")
+    parser = argparse.ArgumentParser(description="Analyze geometric features in activation space.")
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument("--heuristic", type=str, choices=["KL", "prob"], default="prob", help="selection heuristic")
@@ -128,6 +128,7 @@ def main() -> None:
     save_path = configure_save_path(args)
     if save_path.is_file() and args.resume:
         # load and update result json
+        final_results = 
         logger.info(f"{save_path} already exists, skip!")
     else:
         final_results = {}
