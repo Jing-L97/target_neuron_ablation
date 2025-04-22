@@ -19,7 +19,6 @@ from neuron_analyzer import settings
 from neuron_analyzer.ablation.abl_util import (
     filter_entropy_activation_df,
     get_entropy_activation_df,
-    load_model_from_tl_name,
 )
 from neuron_analyzer.ablation.ablation import ModelAblationAnalyzer
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
@@ -98,13 +97,18 @@ class NeuronAblationProcessor:
     def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
         """Process a single step with the given configuration."""
         save_path.parent.mkdir(parents=True, exist_ok=True)
-
-        # Load model and tokenizer for specific step
-        model, tokenizer = self.load_model_and_tokenizer(step)
-
         self.logger.info("Finished loading model and tokenizer")
         # initlize the model handler class
         model_handler = ModelHandler()
+
+        # Load model and tokenizer for specific step
+        model, tokenizer = model_handler.load_model_and_tokenizer(
+            step=step,
+            model_name=self.args.model,
+            hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",
+            device=self.device,
+        )
+
         # Load and process dataset
         tokenized_data, token_df = model_handler.tokenize_data(
             dataset=self.args.dataset,
@@ -165,25 +169,9 @@ class NeuronAblationProcessor:
         )
 
         results = analyzer.mean_ablate_components()
-
         self.logger.info("Finished ablations!")
-
         # Process and save results
         self._save_results(results, tokenizer, step, save_path)
-
-    def load_model_and_tokenizer(self, step: int) -> tuple[t.Any, t.Any]:
-        """Load model and tokenizer for processing."""
-        # Load HF token
-        with open(settings.PATH.unigram_dir / self.args.hf_token_path) as f:
-            hf_token = f.read()
-
-        # Load model and tokenizer
-        model, tokenizer = load_model_from_tl_name(
-            self.args.model, self.device, step=step, cache_dir=settings.PATH.model_dir, hf_token=hf_token
-        )
-        model = model.to(self.device)
-        model.eval()
-        return model, tokenizer
 
     def _save_results(
         self,

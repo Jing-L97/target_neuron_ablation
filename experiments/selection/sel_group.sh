@@ -1,18 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=sel_40
+#SBATCH --job-name=sel_group
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=16
-#SBATCH --mem=160G
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=70G
 #SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_40_%a.log
-#SBATCH --array=0-5
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_group_%a.log
+#SBATCH --array=0-11%4
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
 MODELS=(
     "EleutherAI/pythia-410m-deduped"
+    "EleutherAI/pythia-70m-deduped"
 )
 # Define the input arrays
 EFFECTS=(
@@ -65,4 +66,5 @@ python $SCRIPT_ROOT/sel_group.py \
     --effect "$EFFECT" \
     --top_n "$TOP_N" \
     --vector "$VECTOR" \
-    --heuristic "$HEURISTIC"
+    --heuristic "$HEURISTIC" \
+    --resume

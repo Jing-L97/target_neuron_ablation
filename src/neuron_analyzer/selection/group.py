@@ -330,6 +330,11 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 #######################################################################################################
 
 
+def get_heuristics(effect) -> bool:
+    """Set the heuristic directions."""
+    return effect == "boost"
+
+
 @dataclass
 class SearchResult:
     neurons: list[int]

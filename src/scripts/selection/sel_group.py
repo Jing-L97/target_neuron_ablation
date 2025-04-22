@@ -10,7 +10,7 @@ import torch
 from neuron_analyzer import settings
 from neuron_analyzer.load_util import JsonProcessor, load_unigram
 from neuron_analyzer.model_util import ModelHandler, NeuronLoader
-from neuron_analyzer.selection.group import GroupModelAblationAnalyzer, NeuronGroupSearch
+from neuron_analyzer.selection.group import GroupModelAblationAnalyzer, NeuronGroupSearch, get_heuristics
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -102,12 +102,12 @@ def resume_results(resume, save_path: Path, step_dirs: list[Path]):
     # resume file and update the steps
     if resume and save_path.is_file():
         # load json file
-        final_results = JsonProcessor.save_json(save_path)
+        final_results = JsonProcessor.load_json(save_path)
         # get the generated ckpts
         completed_results = list(final_results.keys())
         # remove the existing files
-        step_dirs = [p for p in step_dirs if p.name not in completed_results]
-        logger.info(f"Resume from {save_path}. Existing {len(step_dirs) - len(completed_results)}")
+        step_dirs = [p for p in step_dirs if p not in completed_results]
+        logger.info(f"Resume {len(step_dirs) - len(completed_results)} states from {save_path}.")
         return final_results, step_dirs
     return {}, step_dirs
 
@@ -180,7 +180,7 @@ class NeuronGroupSelector:
 
         self.cache_dir = self._get_save_path(step)
         # initialize the neuron group search
-        maxmize_heuristic = self._get_heuristics()
+        maxmize_heuristic = get_heuristics(self.args.effect)
         logger.info(f"Select {self.args.effect} neurons. Maximize heuristics: {maxmize_heuristic}.")
         search = NeuronGroupSearch(
             neurons=neuron_lst,
@@ -195,10 +195,6 @@ class NeuronGroupSelector:
         logger.info(f"Method with highest heuristic: {results['best']}")
         logger.info(f"Method with target length: {results['target_size']}")
         return results
-
-    def _get_heuristics(self):
-        """Set the heuristic directions."""
-        return self.args.effect == "boost"
 
     def _get_save_path(self, step) -> Path:
         """Get the savepath based on current configurations."""
@@ -232,12 +228,12 @@ def main() -> None:
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     # order the steps in descending way
     step_dirs = sort_path(abl_path)
-    final_results = resume_results(args.resume, save_path, step_dirs)
+    final_results, step_dirs = resume_results(args.resume, save_path, step_dirs)
     # Process steps in the sorted order
-    for step, _ in step_dirs:
+    for _, step in step_dirs:
         try:
-            results = group_selector.process_single_step(step.name, unigram_distrib, longtail_threshold)
-            final_results[step.name] = results
+            results = group_selector.process_single_step(step, unigram_distrib, longtail_threshold)
+            final_results[step] = results
             # save the intermediate checkpoints
             JsonProcessor.save_json(final_results, save_path)
             logger.info(f"Save the results to {save_path}")

@@ -1,18 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=sel_70
+#SBATCH --job-name=extract_pickle
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=6
-#SBATCH --mem=60G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=80G
 #SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_70_%a.log
-#SBATCH --array=0-5
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/extract_pickle_%a.log
+#SBATCH --array=0-11%2
+
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
-MODELS=(
-    "EleutherAI/pythia-70m-deduped"
-)
+
 # Define the input arrays
 EFFECTS=(
     "suppress"
@@ -29,7 +28,10 @@ TOP_NS=(
     100
 )
 
-
+MODELS=(
+    "EleutherAI/pythia-70m-deduped"
+    "EleutherAI/pythia-410m-deduped"
+)
 
 # Calculate total combinations for validation
 TOTAL_COMBINATIONS=$((${#EFFECTS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#MODELS[@]}))
@@ -58,8 +60,9 @@ echo " Vector: $VECTOR"
 echo " Model: $MODEL"
 echo " Top N: $TOP_N"
 
+
 # Run the analysis with the selected combination
-python $SCRIPT_ROOT/sel_group.py \
+python $SCRIPT_ROOT/extract_pickle.py \
     -m "$MODEL" \
     --effect "$EFFECT" \
     --top_n "$TOP_N" \

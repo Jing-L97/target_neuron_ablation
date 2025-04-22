@@ -19,8 +19,6 @@ from neuron_analyzer import settings
 from neuron_analyzer.ablation.abl_util import (
     get_entropy_activation_df,
 )
-from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
-from neuron_analyzer.load_util import JsonProcessor
 from neuron_analyzer.model_util import ModelHandler, StepConfig
 
 T = t.TypeVar("T")
@@ -75,22 +73,6 @@ class NeuronAblationProcessor:
         # Change directory if specified
         if hasattr(args, "chdir") and args.chdir:
             os.chdir(args.chdir)
-
-    def get_tail_threshold_stat(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
-        """Calculate threshold for long-tail ablation mode."""
-        if self.args.ablation_mode == "longtail":
-            analyzer = ZipfThresholdAnalyzer(
-                unigram_distrib=unigram_distrib,
-                window_size=self.args.window_size,
-                tail_threshold=self.args.tail_threshold,
-                apply_elbow=self.args.apply_elbow,
-            )
-            longtail_threshold, threshold_stats = analyzer.get_tail_threshold()
-            JsonProcessor.save_json(threshold_stats, save_path / "zipf_threshold_stats.json")
-            self.logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.json")
-            return longtail_threshold
-        # Not in longtail mode, use default threshold
-        return None
 
     def process_single_step(self, step: int, save_path: Path) -> None:
         """Process a single step with the given configuration."""
