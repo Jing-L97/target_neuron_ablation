@@ -129,25 +129,38 @@ class StepPathProcessor:
         self.step_dirs = step_dirs
         return self.step_dirs
 
-    def resume_results(self, resume: bool, save_path: Path) -> tuple[dict, list[tuple[Path, int]]]:
+    def resume_results(
+        self, resume: bool, save_path: Path, file_path: Path = None
+    ) -> tuple[dict, list[tuple[Path, int]]]:
         """Resume results from the existing directory list."""
         if not self.step_dirs:
             self.sort_paths()
 
         if resume and save_path.is_file():
-            # Load JSON file
-            final_results = JsonProcessor.load_json(save_path)
-            # Get the generated checkpoints
-            completed_results = list(final_results.keys())
-            # Remove the existing files
-            remaining_step_dirs = [p for p in self.step_dirs if p[0].name not in completed_results]
+            final_results, remaining_step_dirs = self._get_step_intersection(save_path, self.step_dirs)
+            # check whether the target file path exsits
+            if file_path and file_path.is_file():
+                logger.info(f"Filter steps from existing file. Steps before filtering: {len(remaining_step_dirs)}")
+                _, remaining_step_dirs = self._get_step_intersection(file_path, remaining_step_dirs)
+                logger.info(f"Steps after filtering: {len(remaining_step_dirs)}")
             logger.info(f"Resume {len(self.step_dirs) - len(remaining_step_dirs)} states from {save_path}.")
             if len(remaining_step_dirs) == 0:
                 logger.info("All steps already processed. Exiting.")
                 sys.exit(0)  # or return, depending on your program structure
             return final_results, remaining_step_dirs
-
         return {}, self.step_dirs
+
+    def _get_step_intersection(
+        self, file_path: Path, remaining_step_dirs: list[tuple[Path, int]]
+    ) -> list[tuple[Path, int]]:
+        """Resume results from the selected indices."""
+        # Load JSON file
+        final_results = JsonProcessor.load_json(file_path)
+        # Get the generated checkpoints
+        completed_results = list(final_results.keys())
+        # Remove the existing files
+        remaining_step_dirs = [p for p in self.step_dirs if p[0].name not in completed_results]
+        return final_results, remaining_step_dirs
 
 
 #######################################################
