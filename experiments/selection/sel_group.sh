@@ -4,6 +4,7 @@
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=10
+#SBATCH --exclude=puck5
 #SBATCH --mem=70G
 #SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_group_%a.log

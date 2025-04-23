@@ -3,6 +3,7 @@ import gc
 import json
 import logging
 import random
+import sys
 import typing as t
 from pathlib import Path
 
@@ -103,6 +104,53 @@ class JsonProcessor:
 
 
 #######################################################
+# Stepwise path managing class
+
+
+class StepPathProcessor:
+    """Process paths and manage steps for resumable processing."""
+
+    def __init__(self, abl_path: Path):
+        """Initialize the PathProcessor with the base path."""
+        self.abl_path = abl_path
+        self.step_dirs: list[tuple[Path, int]] = []
+
+    def sort_paths(self) -> list[tuple[Path, int]]:
+        """Get the sorted directory by steps in descending order."""
+        step_dirs = []
+        for step in self.abl_path.iterdir():
+            if step.is_dir():
+                # Extract the number from directory name
+                step_num = int(step.name)
+                step_dirs.append((step, step_num))
+
+        # Sort directories by step number in descending order
+        step_dirs.sort(key=lambda x: x[1], reverse=True)
+        self.step_dirs = step_dirs
+        return self.step_dirs
+
+    def resume_results(self, resume: bool, save_path: Path) -> tuple[dict, list[tuple[Path, int]]]:
+        """Resume results from the existing directory list."""
+        if not self.step_dirs:
+            self.sort_paths()
+
+        if resume and save_path.is_file():
+            # Load JSON file
+            final_results = JsonProcessor.load_json(save_path)
+            # Get the generated checkpoints
+            completed_results = list(final_results.keys())
+            # Remove the existing files
+            remaining_step_dirs = [p for p in self.step_dirs if p[0].name not in completed_results]
+            logger.info(f"Resume {len(self.step_dirs) - len(remaining_step_dirs)} states from {save_path}.")
+            if len(remaining_step_dirs) == 0:
+                logger.info("All steps already processed. Exiting.")
+                sys.exit(0)  # or return, depending on your program structure
+            return final_results, remaining_step_dirs
+
+        return {}, self.step_dirs
+
+
+#######################################################
 # load and select eval set
 
 
@@ -155,7 +203,7 @@ def sel_eval(results_df: pd.DataFrame, eval_path: Path, result_dir: Path, filena
 
 
 #######################################################
-# load unigram file
+# load freq-related file
 
 
 def load_unigram(model_name, device) -> torch.Tensor:
@@ -177,6 +225,12 @@ def load_unigram(model_name, device) -> torch.Tensor:
         raise Exception(f"No unigram distribution for {model_name}")
 
     return unigram_distrib, unigram_count
+
+
+def load_tail_threshold_stat(longtail_path: Path) -> tuple[float | None, dict | None]:
+    """Load longtail threshold from the jason file."""
+    data = JsonProcessor.load_json(longtail_path)
+    return data["threshold_info"]["probability"]
 
 
 #######################################################

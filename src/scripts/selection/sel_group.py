@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.load_util import JsonProcessor, load_unigram
+from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor, load_tail_threshold_stat, load_unigram
 from neuron_analyzer.model_util import ModelHandler, NeuronLoader
 from neuron_analyzer.selection.group import GroupModelAblationAnalyzer, NeuronGroupSearch, get_heuristics
 
@@ -70,46 +70,12 @@ def load_neuron_index(args) -> list[int]:
     return layer_num, step_neuron, step_stat
 
 
-def load_tail_threshold_stat(args) -> tuple[float | None, dict | None]:
-    """Load longtail threshold from the jason file."""
-    data = JsonProcessor.load_json(settings.PATH.ablation_dir / args.vector / args.model / "zipf_threshold_stats.json")
-    return data["threshold_info"]["probability"]
-
-
 def set_path(args) -> Path:
     """Set save and cache path."""
     save_path = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic / args.effect
+    longtail_path = settings.PATH.ablation_dir / args.vector / args.model / "zipf_threshold_stats.json"
     save_path.mkdir(parents=True, exist_ok=True)
-    return save_path
-
-
-def sort_path(abl_path: Path) -> list[Path]:
-    """Get the sorted directory by steps."""
-    # Get all step directories and sort them by the number after "step" in descending order
-    step_dirs = []
-    for step in abl_path.iterdir():
-        if step.is_dir():
-            # Extract the number after "step" prefix
-            step_num = int(step.name)  # Remove "step" prefix and convert to integer
-            step_dirs.append((step, step_num))
-    # Sort directories by step number in descending order
-    step_dirs.sort(key=lambda x: x[1], reverse=True)
-    return step_dirs
-
-
-def resume_results(resume, save_path: Path, step_dirs: list[Path]):
-    """Resume results from the existing directory."""
-    # resume file and update the steps
-    if resume and save_path.is_file():
-        # load json file
-        final_results = JsonProcessor.load_json(save_path)
-        # get the generated ckpts
-        completed_results = list(final_results.keys())
-        # remove the existing files
-        step_dirs = [p for p in step_dirs if p not in completed_results]
-        logger.info(f"Resume {len(step_dirs) - len(completed_results)} states from {save_path}.")
-        return final_results, step_dirs
-    return {}, step_dirs
+    return save_path, longtail_path
 
 
 class NeuronGroupSelector:
@@ -214,22 +180,22 @@ def main() -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
 
     # configure save_dir
-    save_dir = set_path(args)
+    save_dir, longtail_path = set_path(args)
     save_path = save_dir / f"{args.data_range_end}_{args.top_n}.json"
     # load neuron
     layer_num, step_neuron, step_stat = load_neuron_index(args)
     unigram_distrib, _ = load_unigram(model_name=args.model, device=device)
-    longtail_threshold = load_tail_threshold_stat(args)
+    longtail_threshold = load_tail_threshold_stat(longtail_path)
     # initilize the selector class
     group_selector = NeuronGroupSelector(
         args=args, device=device, layer_num=layer_num, step_neuron=step_neuron, step_stat=step_stat, save_dir=save_dir
     )
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
-    # order the steps in descending way
-    step_dirs = sort_path(abl_path)
-    final_results, step_dirs = resume_results(args.resume, save_path, step_dirs)
-    # Process steps in the sorted order
+    # order and load the resumed file if any
+    step_processor = StepPathProcessor(abl_path)
+    final_results, step_dirs = step_processor.resume_results(args.resume, save_path)
+    # Process steps deom the resumed and sorted order
     for _, step in step_dirs:
         try:
             results = group_selector.process_single_step(step, unigram_distrib, longtail_threshold)
