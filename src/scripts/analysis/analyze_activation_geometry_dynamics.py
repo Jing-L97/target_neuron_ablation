@@ -107,7 +107,7 @@ def main() -> None:
 
     for step in step_dirs:
         activation_data, _, _, do_analysis = load_activation_indices(
-            args, abl_path, step_path, step_num, neuron_dir, device
+            args, abl_path, step[0], str(step[1]), neuron_dir, device
         )
         if do_analysis:
             # initilize the class
@@ -124,7 +124,7 @@ def main() -> None:
                 use_mixed_precision=use_mixed_precision,
             )
             results = geometry_analyzer.run_all_analyses()
-            final_results[step[1]] = results
+            final_results[str(step[1])] = results
             # assign col headers
             JsonProcessor.save_json(final_results, save_path)
             logger.info(f"Save file to {save_path}")
