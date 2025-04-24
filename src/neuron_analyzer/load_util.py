@@ -140,7 +140,9 @@ class StepPathProcessor:
             final_results, remaining_step_dirs = self._get_step_intersection(save_path, self.step_dirs)
             # check whether the target file path exsits
             if file_path and file_path.is_file():
-                logger.info(f"Filter steps from existing file. Steps before filtering: {len(remaining_step_dirs)}")
+                logger.info(
+                    f"Filter steps from existing neuron index file. Steps before filtering: {len(remaining_step_dirs)}"
+                )
                 _, remaining_step_dirs = self._get_step_intersection(file_path, remaining_step_dirs)
                 logger.info(f"Steps after filtering: {len(remaining_step_dirs)}")
             logger.info(f"Resume {len(self.step_dirs) - len(remaining_step_dirs)} states from {save_path}.")

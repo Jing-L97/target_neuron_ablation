@@ -146,7 +146,6 @@ def configure_path(args):
         / f"{args.data_range_end}_{args.top_n}{filename_suffix}"
     )
     save_path.parent.mkdir(parents=True, exist_ok=True)
-
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     # only set the path when loading the group neurons
     neuron_dir = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic
