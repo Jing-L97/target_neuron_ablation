@@ -8,7 +8,7 @@ from pathlib import Path
 
 from neuron_analyzer import settings
 from neuron_analyzer.load_util import JsonProcessor
-from neuron_analyzer.selection.group import get_heuristics
+from neuron_analyzer.selection.group_backup import get_heuristics
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

@@ -2,18 +2,16 @@
 import logging
 import pickle
 import sys
-import threading
-import time
 import traceback
 import typing as t
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
-from queue import Queue
 
 import numpy as np
 import pandas as pd
 import torch
+from sklearn.cluster import AgglomerativeClustering
 from transformer_lens import utils
 
 from neuron_analyzer.ablation.ablation import ModelAblationAnalyzer
@@ -339,16 +337,12 @@ def get_heuristics(effect) -> bool:
 
 @dataclass
 class SearchResult:
-    """Result of a neuron group search."""
-
     neurons: list[int]
     delta_loss: float
     is_target_size: bool = False
 
 
 class NeuronGroupSearch:
-    """Class for searching optimal neuron groups using various algorithms."""
-
     def __init__(
         self,
         neurons: list[int],
@@ -357,177 +351,34 @@ class NeuronGroupSearch:
         individual_delta_loss: list[float] | None = None,
         cache_dir: str | Path | None = None,
         maximize: bool = True,
-        max_iterations: int = 1000,  # Parameter for early stopping
-        timeout: int = 600,  # Timeout in seconds
-        parallel_methods: bool = True,  # Run different search methods in parallel
-        batch_size: int = 8,  # Size of evaluation batches
     ):
-        """Initialize the neuron group search.
-
-        Args:
-            neurons: List of neuron indices
-            evaluator: Class to evaluate neuron groups
-            target_size: Target size for neuron groups
-            individual_delta_loss: Pre-computed individual neuron scores
-            cache_dir: Directory for caching results
-            maximize: Whether to maximize or minimize the loss
-            max_iterations: Maximum iterations for iterative methods
-            timeout: Maximum time in seconds for each search method
-            parallel_methods: Whether to run different search methods in parallel
-            batch_size: Number of groups to evaluate in a batch
-
-        """
         self.neurons = neurons
-        self.evaluator = evaluator
+        self.evaluator = evaluator  # the class should be properly initialized
         self.target_size = min(target_size, len(neurons))
         self.cache_dir = Path(cache_dir) if cache_dir else None
-        self.maximize = maximize
-        self.max_iterations = max_iterations
-        self.timeout = timeout
-        self.parallel_methods = parallel_methods
-        self.batch_size = batch_size
-        self._evaluation_cache = {}  # Cache for group evaluations
-        self._evaluation_lock = threading.Lock()  # Lock for thread safety
+        self.maximize = maximize  # Store whether to maximize or minimize
 
         if self.cache_dir:
             self.cache_dir.mkdir(exist_ok=True, parents=True)
 
-        # Initialize individual neuron scores
         self.individual_delta_loss = (
             individual_delta_loss if individual_delta_loss is not None else self._compute_individual_scores()
         )
 
-        # For early stopping
-        self.best_score_history = []
-        self.patience = 5  # Number of iterations with no improvement before stopping
-
     def _compute_individual_scores(self) -> list[float]:
-        """Compute scores for individual neurons in batches for GPU efficiency."""
-        logger.info("Computing individual neuron scores")
-        scores = [None] * len(self.neurons)
-
-        # Process neurons in batches
-        for i in range(0, len(self.neurons), self.batch_size):
-            batch_neurons = self.neurons[i : min(i + self.batch_size, len(self.neurons))]
-            batch_indices = list(range(i, min(i + self.batch_size, len(self.neurons))))
-
-            # Evaluate each neuron in the batch
-            for j, (neuron, idx) in enumerate(zip(batch_neurons, batch_indices, strict=False)):
-                scores[idx] = self.evaluator.evaluate_neuron_group([neuron])
-
-            # Log progress
-            if (i + self.batch_size) % 50 == 0 or i + self.batch_size >= len(self.neurons):
-                logger.info(f"Processed {min(i + self.batch_size, len(self.neurons))}/{len(self.neurons)} neurons")
-
-        return scores
+        return [self.evaluator.evaluate_neuron_group([n]) for n in self.neurons]
 
     def _evaluate_group(self, group: list[int]) -> float:
-        """Evaluate a group of neurons with caching.
-
-        Args:
-            group: List of neurons to evaluate
-
-        Returns:
-            Evaluation score
-
-        """
-        # Create a hashable key for the group
-        group_key = tuple(sorted(group))
-
-        # Check cache first
-        with self._evaluation_lock:
-            if group_key in self._evaluation_cache:
-                return self._evaluation_cache[group_key]
-
-        # Evaluate the group
-        result = self.evaluator.evaluate_neuron_group(group)
-
-        # Cache the result
-        with self._evaluation_lock:
-            self._evaluation_cache[group_key] = result
-
-        return result
-
-    def _evaluate_groups_batch(self, groups: list[list[int]]) -> list[float]:
-        """Evaluate multiple groups with efficient GPU batching.
-
-        Args:
-            groups: List of neuron groups to evaluate
-
-        Returns:
-            List of evaluation scores
-
-        """
-        # Check which groups are already in cache
-        results = [None] * len(groups)
-        groups_to_evaluate = []
-        group_indices = []
-
-        with self._evaluation_lock:
-            for i, group in enumerate(groups):
-                group_key = tuple(sorted(group))
-                if group_key in self._evaluation_cache:
-                    results[i] = self._evaluation_cache[group_key]
-                else:
-                    groups_to_evaluate.append(group)
-                    group_indices.append(i)
-
-        # If all groups were in cache, return results
-        if not groups_to_evaluate:
-            return results
-
-        # Process remaining groups in smaller batches for GPU efficiency
-        for i in range(0, len(groups_to_evaluate), self.batch_size):
-            batch_groups = groups_to_evaluate[i : min(i + self.batch_size, len(groups_to_evaluate))]
-            batch_indices = group_indices[i : min(i + self.batch_size, len(group_indices))]
-
-            # Evaluate each group in the batch
-            for j, (group, idx) in enumerate(zip(batch_groups, batch_indices, strict=False)):
-                group_result = self.evaluator.evaluate_neuron_group(group)
-
-                # Cache the result
-                with self._evaluation_lock:
-                    self._evaluation_cache[tuple(sorted(group))] = group_result
-
-                # Store in results array
-                results[idx] = group_result
-
-        return results
-
-    def _should_stop_early(self, new_score: float) -> bool:
-        """Check if early stopping should be triggered."""
-        if not self.best_score_history:
-            self.best_score_history.append(new_score)
-            return False
-
-        best_so_far = self.best_score_history[-1]
-        improved = (self.maximize and new_score > best_so_far) or (not self.maximize and new_score < best_so_far)
-
-        if improved:
-            self.best_score_history.append(new_score)
-        else:
-            # Track the same best score
-            self.best_score_history.append(best_so_far)
-
-        # Check for early stopping condition
-        if len(self.best_score_history) >= self.patience:
-            # If the best score hasn't improved for 'patience' iterations
-            if len(set(self.best_score_history[-self.patience :])) == 1:
-                logger.info(f"Early stopping triggered after {len(self.best_score_history)} iterations")
-                return True
-
-        return False
+        return self.evaluator.evaluate_neuron_group(group)
 
     def _get_sorted_neurons(self) -> list[tuple[int, float]]:
-        """Get neurons sorted by their individual importance scores."""
         return sorted(
             [(i, self.individual_delta_loss[i]) for i in range(len(self.neurons))],
             key=lambda x: x[1],
-            reverse=self.maximize,
+            reverse=self.maximize,  # Use maximize flag to determine sort order
         )
 
     def _save_search_state(self, method: str, state: dict) -> None:
-        """Save search state to cache directory."""
         if not self.cache_dir:
             return
         path = self.cache_dir / f"{method}_search_state.pkl"
@@ -536,7 +387,6 @@ class NeuronGroupSearch:
             pickle.dump(state, f)
 
     def _load_search_state(self, method: str) -> dict | None:
-        """Load search state from cache directory."""
         if not self.cache_dir:
             return None
         path = self.cache_dir / f"{method}_search_state.pkl"
@@ -562,14 +412,11 @@ class NeuronGroupSearch:
             # Add more neurons to reach target size
             sorted_neurons = self._get_sorted_neurons()
 
-            # Use set for fast membership testing
-            result_set = set(result.neurons)
-
-            # Find neurons that aren't already in the result - more efficient
+            # Find neurons that aren't already in the result
             available_neurons = []
             for idx, _ in sorted_neurons:
                 neuron = self.neurons[idx]
-                if neuron not in result_set:
+                if neuron not in result.neurons:
                     available_neurons.append(neuron)
 
             # Add neurons until we reach target size
@@ -584,7 +431,7 @@ class NeuronGroupSearch:
         else:
             # Sort neurons by individual importance
             neuron_scores = [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in result.neurons]
-            neuron_scores.sort(key=lambda x: x[1], reverse=self.maximize)
+            neuron_scores.sort(key=lambda x: x[1], reverse=self.maximize)  # Use maximize flag
 
             # Keep the top neurons
             target_size_group = [n for n, _ in neuron_scores[: self.target_size]]
@@ -595,10 +442,9 @@ class NeuronGroupSearch:
 
     def progressive_beam_search(self, beam_width: int = 10) -> tuple[SearchResult, SearchResult]:
         """Progressive beam search for finding neuron groups."""
-        start_time = time.time()
         state = self._load_search_state("progressive_beam")
 
-        # Check if state exists and is marked as completed
+        # Check if state exists AND is marked as completed AND contains both result keys
         if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
             best_result = SearchResult(**state["best_result"])
             target_size_result = SearchResult(**state["target_size_result"])
@@ -610,7 +456,6 @@ class NeuronGroupSearch:
             start_size = state.get("next_size", beam_width)
             best_overall = state.get("best_overall")
             best_per_size = state.get("best_per_size", {})
-            iteration_counter = state.get("iteration_counter", 0)
         else:
             # Start from scratch
             sorted_indices = self._get_sorted_neurons()
@@ -619,7 +464,7 @@ class NeuronGroupSearch:
                 idx, _ = sorted_indices[i]
                 neuron = self.neurons[idx]
                 delta_loss = self.individual_delta_loss[idx]
-                current_beam.append((frozenset([neuron]), delta_loss))  # Use frozenset for faster set operations
+                current_beam.append(({neuron}, delta_loss))
 
             # Initialize tracking variables
             start_size = 2
@@ -629,73 +474,38 @@ class NeuronGroupSearch:
                 if sorted_indices
                 else {}
             )
-            iteration_counter = 0
 
-        # Progressive beam search with early stopping and timeout
+        # Progressive beam search
         logger.info("Performing progressive beam search")
         for size in range(start_size, self.target_size + 1):
-            iteration_counter += 1
-
-            # Check for timeout
-            if time.time() - start_time > self.timeout:
-                logger.info(f"Timeout reached after {time.time() - start_time:.2f} seconds")
-                break
-
-            # Check for max iterations
-            if iteration_counter > self.max_iterations:
-                logger.info(f"Maximum iterations ({self.max_iterations}) reached")
-                break
-
-            # Generate all candidate groups
             candidates = []
             sorted_indices = self._get_sorted_neurons()
 
-            # Create all candidate groups first
-            candidate_groups = []
             for group, _ in current_beam:
                 for idx, _ in sorted_indices:
                     neuron = self.neurons[idx]
                     if neuron not in group:
-                        new_group = group.union(frozenset([neuron]))
-                        # Check if this group is already a candidate
-                        if not any(g == new_group for g, _ in candidates):
-                            candidate_groups.append((new_group, list(new_group)))
-
-            # Batch evaluate all candidate groups
-            if candidate_groups:
-                group_lists = [group_list for _, group_list in candidate_groups]
-
-                # Process in batches for GPU efficiency
-                for i in range(0, len(group_lists), self.batch_size):
-                    batch_groups = group_lists[i : min(i + self.batch_size, len(group_lists))]
-                    batch_indices = list(range(i, min(i + self.batch_size, len(group_lists))))
-
-                    # Evaluate the batch
-                    batch_results = self._evaluate_groups_batch(batch_groups)
-
-                    # Create candidates with their scores
-                    for j, (idx, result) in enumerate(zip(batch_indices, batch_results, strict=False)):
-                        group, group_list = candidate_groups[idx]
-                        candidates.append((group, result))
-
-                # Checkpoint periodically
-                if iteration_counter % 2 == 0:
-                    self._save_search_state(
-                        "progressive_beam",
-                        {
-                            "current_beam": current_beam,
-                            "next_size": size,
-                            "best_overall": best_overall,
-                            "best_per_size": best_per_size,
-                            "iteration_counter": iteration_counter,
-                            "completed": False,
-                        },
-                    )
+                        new_group = group.union({neuron})
+                        if any(g == new_group for g, _ in candidates):
+                            continue
+                        delta_loss = self._evaluate_group(list(new_group))
+                        candidates.append((new_group, delta_loss))
+                        if len(candidates) % 10 == 0:
+                            self._save_search_state(
+                                "progressive_beam",
+                                {
+                                    "current_beam": current_beam,
+                                    "next_size": size,
+                                    "best_overall": best_overall,
+                                    "best_per_size": best_per_size,
+                                    "completed": False,
+                                },
+                            )
 
             if not candidates:
                 break
 
-            candidates.sort(key=lambda x: x[1], reverse=self.maximize)
+            candidates.sort(key=lambda x: x[1], reverse=self.maximize)  # Use maximize flag
             current_beam = candidates[:beam_width]
 
             # Update best for current size
@@ -719,11 +529,6 @@ class NeuronGroupSearch:
                         "neurons": list(best_candidate[0]),
                         "delta_loss": best_candidate[1],
                     }
-
-                # Check for early stopping
-                if self._should_stop_early(best_candidate[1]):
-                    logger.info(f"Early stopping at size {size}")
-                    break
 
         # Create the best overall result
         best_result = None
@@ -764,29 +569,164 @@ class NeuronGroupSearch:
                     "best_result": best_result.__dict__,
                     "target_size_result": target_size_result.__dict__,
                     "completed": True,
-                    "iteration_counter": iteration_counter,
                 },
             )
 
+        cleanup()
+
         return best_result, target_size_result
 
-    # Implementations for other search methods would follow similar patterns...
-    # For brevity, I'll include just one more method as an example
-
-    def iterative_pruning(self) -> tuple[SearchResult, SearchResult]:
-        """Iterative pruning search for finding neuron groups."""
-        start_time = time.time()
-        state = self._load_search_state("iterative_pruning")
-
+    def hierarchical_cluster_search(
+        self, n_clusters: int = 5, expansion_factor: int = 3
+    ) -> tuple[SearchResult, SearchResult]:
+        """Hierarchical clustering search for finding neuron groups."""
+        state = self._load_search_state("hierarchical_cluster")
         if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
             best_result = SearchResult(**state["best_result"])
             target_size_result = SearchResult(**state["target_size_result"])
             return best_result, target_size_result
 
-        # Initialize variables
+        features = np.array(self.individual_delta_loss).reshape(-1, 1)
+        if features.std() > 0:
+            features = (features - features.mean()) / features.std()
+
+        clustering = AgglomerativeClustering(n_clusters=min(n_clusters, len(self.neurons)))
+        cluster_labels = clustering.fit_predict(features)
+
+        clusters = defaultdict(list)
+        for i, neuron_idx in enumerate(range(len(self.neurons))):
+            clusters[cluster_labels[i]].append(neuron_idx)
+
+        representatives = []
+        for cluster_id, cluster_neurons in clusters.items():
+            sorted_cluster = sorted(
+                [(self.neurons[idx], self.individual_delta_loss[idx]) for idx in cluster_neurons],
+                key=lambda x: x[1],
+                reverse=self.maximize,  # Use maximize flag
+            )
+            representatives.extend([n for n, _ in sorted_cluster[:expansion_factor]])
+
+        # Track best result of any size
+        best_result = None
+
+        # Handle case where representatives are fewer than target size
+        if len(representatives) <= self.target_size:
+            delta_loss = self._evaluate_group(representatives)
+            best_result = SearchResult(neurons=representatives, delta_loss=delta_loss)
+
+            # Create target size result
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+            if self.cache_dir:
+                self._save_search_state(
+                    "hierarchical_cluster",
+                    {
+                        "best_result": best_result.__dict__,
+                        "target_size_result": target_size_result.__dict__,
+                        "completed": True,
+                    },
+                )
+
+            cleanup()
+
+            return best_result, target_size_result
+
+        # Sort representatives by importance
+        sorted_reps = sorted(
+            [(n, self.individual_delta_loss[self.neurons.index(n)]) for n in representatives],
+            key=lambda x: x[1],
+            reverse=self.maximize,  # Use maximize flag
+        )
+
+        # Initialize with top representatives
+        current_group = [n for n, _ in sorted_reps[: min(5, self.target_size)]]
+        best_per_size = {len(current_group): (current_group.copy(), self._evaluate_group(current_group))}
+
+        # Keep track of best group of any size
+        best_group = current_group.copy()
+        best_score = self._evaluate_group(best_group)
+
+        # Continue adding neurons
+        while len(current_group) < self.target_size:
+            best_candidate = None
+            # Initialize with opposite extreme value based on maximize
+            best_candidate_score = float("-inf") if self.maximize else float("inf")
+
+            for n, _ in sorted_reps:
+                if n in current_group:
+                    continue
+
+                test_group = current_group + [n]
+                delta_loss = self._evaluate_group(test_group)
+
+                # Update best candidate based on maximize flag
+                if (self.maximize and delta_loss > best_candidate_score) or (
+                    not self.maximize and delta_loss < best_candidate_score
+                ):
+                    best_candidate = n
+                    best_candidate_score = delta_loss
+
+                # Update best overall if better
+                if (self.maximize and delta_loss > best_score) or (not self.maximize and delta_loss < best_score):
+                    best_group = test_group.copy()
+                    best_score = delta_loss
+
+                if self.cache_dir and len(current_group) % 2 == 0:
+                    self._save_search_state(
+                        "hierarchical_cluster",
+                        {
+                            "current_group": current_group,
+                            "best_per_size": best_per_size,
+                            "best_group": best_group,
+                            "best_score": best_score,
+                            "completed": False,
+                        },
+                    )
+
+            if best_candidate:
+                current_group.append(best_candidate)
+                # Store best for this size
+                best_per_size[len(current_group)] = (current_group.copy(), best_candidate_score)
+            else:
+                break
+
+        # Create best overall result
+        best_result = SearchResult(neurons=best_group, delta_loss=best_score)
+
+        # Create target size result
+        if len(current_group) == self.target_size:
+            target_loss = self._evaluate_group(current_group)
+            target_size_result = SearchResult(neurons=current_group, delta_loss=target_loss, is_target_size=True)
+        else:
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+        # Save state
+        if self.cache_dir:
+            self._save_search_state(
+                "hierarchical_cluster",
+                {
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
+                    "completed": True,
+                },
+            )
+
+        cleanup()
+
+        return best_result, target_size_result
+
+    def iterative_pruning(self) -> tuple[SearchResult, SearchResult]:
+        """Iterative pruning search for finding neuron groups."""
+        state = self._load_search_state("iterative_pruning")
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
+
+        # Initialize variables - properly handle None state
         current_group = state["current_group"] if state and "current_group" in state else self.neurons.copy()
+
         best_per_size = {} if not state else state.get("best_per_size", {})
-        iteration_counter = 0 if not state else state.get("iteration_counter", 0)
 
         # Track best group of any size
         if state and "best_group" in state and "best_score" in state:
@@ -794,85 +734,42 @@ class NeuronGroupSearch:
             best_score = state["best_score"]
         else:
             best_group = current_group.copy()
-            best_score = self._evaluate_group(current_group)
+            best_score = self._evaluate_group(best_group)
 
         # Start with full set and record initial score
         initial_score = self._evaluate_group(current_group)
         best_per_size[len(current_group)] = (current_group.copy(), initial_score)
 
-        # For early stopping
-        best_scores = [best_score]
-
         # Prune until we reach target size
         while len(current_group) > self.target_size:
-            iteration_counter += 1
-
-            # Check for timeout
-            if time.time() - start_time > self.timeout:
-                logger.info(f"Timeout reached after {time.time() - start_time:.2f} seconds")
-                break
-
-            # Check for max iterations
-            if iteration_counter > self.max_iterations:
-                logger.info(f"Maximum iterations ({self.max_iterations}) reached")
-                break
-
-            # Prepare groups to evaluate
-            candidate_groups = []
-            neurons_to_remove = []
-
-            # Try removing each neuron
-            for n in current_group:
-                test_group = [x for x in current_group if x != n]
-                candidate_groups.append(test_group)
-                neurons_to_remove.append(n)
-
-            # Process in batches for GPU efficiency
-            best_idx = -1
+            worst_neuron = None
+            # Initialize with opposite extreme value based on maximize
             best_pruned_score = float("-inf") if self.maximize else float("inf")
 
-            for i in range(0, len(candidate_groups), self.batch_size):
-                batch_groups = candidate_groups[i : min(i + self.batch_size, len(candidate_groups))]
-                batch_indices = list(range(i, min(i + self.batch_size, len(candidate_groups))))
+            # Try removing each neuron and find the one that affects performance the most favorably
+            for n in current_group:
+                test_group = [x for x in current_group if x != n]
+                delta_loss = self._evaluate_group(test_group)
 
-                # Evaluate the batch
-                batch_results = self._evaluate_groups_batch(batch_groups)
-
-                # Find best candidate in this batch
-                for j, (idx, result) in enumerate(zip(batch_indices, batch_results, strict=False)):
-                    if (self.maximize and result > best_pruned_score) or (
-                        not self.maximize and result < best_pruned_score
-                    ):
-                        best_idx = idx
-                        best_pruned_score = result
-
-            # If we found a better result
-            if best_idx >= 0:
-                # Update best overall if better
-                if (self.maximize and best_pruned_score > best_score) or (
-                    not self.maximize and best_pruned_score < best_score
+                # Update based on maximize flag
+                if (self.maximize and delta_loss > best_pruned_score) or (
+                    not self.maximize and delta_loss < best_pruned_score
                 ):
-                    best_group = candidate_groups[best_idx].copy()
-                    best_score = best_pruned_score
-                    best_scores.append(best_score)
-                else:
-                    # No improvement
-                    best_scores.append(best_score)
+                    best_pruned_score = delta_loss
+                    worst_neuron = n
 
-                # Remove worst neuron
-                worst_neuron = neurons_to_remove[best_idx]
+                # Update best overall if better
+                if (self.maximize and delta_loss > best_score) or (not self.maximize and delta_loss < best_score):
+                    best_group = test_group.copy()
+                    best_score = delta_loss
+
+            # Remove worst neuron
+            if worst_neuron is not None:
                 current_group.remove(worst_neuron)
-
                 # Store best for this size
                 best_per_size[len(current_group)] = (current_group.copy(), best_pruned_score)
 
-                # Check for early stopping
-                if len(best_scores) >= self.patience and len(set(best_scores[-self.patience :])) == 1:
-                    logger.info(f"Early stopping triggered after {iteration_counter} iterations")
-                    break
-
-                # Checkpoint periodically
-                if iteration_counter % 5 == 0 and self.cache_dir:
+                if self.cache_dir and len(current_group) % 5 == 0:
                     self._save_search_state(
                         "iterative_pruning",
                         {
@@ -880,7 +777,6 @@ class NeuronGroupSearch:
                             "best_per_size": best_per_size,
                             "best_group": best_group,
                             "best_score": best_score,
-                            "iteration_counter": iteration_counter,
                             "completed": False,
                         },
                     )
@@ -908,87 +804,228 @@ class NeuronGroupSearch:
                 },
             )
 
+        cleanup()
+
         return best_result, target_size_result
 
-    def run_methods_sequentially(self) -> dict[str, tuple[SearchResult, SearchResult]]:
-        """Run all search methods sequentially and return the results."""
+    def importance_weighted_sampling(
+        self, n_iterations: int = 100, learning_rate: float = 0.1, checkpoint_freq: int = 20
+    ) -> tuple[SearchResult, SearchResult]:
+        """Find neuron groups using importance weighted sampling."""
+        method = "importance_weighted"
+        state = self._load_search_state(method)
+
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
+
+        logger.info("Performing importance weighted sampling")
+        # Initialize variables
+        if state and not state.get("completed"):
+            weights = state["weights"]
+            best_group = state["best_group"]
+            best_score = state["best_score"]
+            best_target_size_group = state.get("best_target_size_group")
+            best_target_size_score = state.get(
+                "best_target_size_score", float("-inf") if self.maximize else float("inf")
+            )
+            start_iteration = state["iteration"]
+        else:
+            # Start from scratch
+            scores = np.array(self.individual_delta_loss)
+            # Adjust initialization based on maximization goal
+            if self.maximize:
+                min_score = scores.min()
+                weights = scores - min_score + 1e-6
+            else:
+                max_score = scores.max()
+                weights = max_score - scores + 1e-6
+
+            weights = weights / weights.sum()
+            best_group = None
+            best_score = float("-inf") if self.maximize else float("inf")
+            best_target_size_group = None
+            best_target_size_score = float("-inf") if self.maximize else float("inf")
+            start_iteration = 0
+
+        # Run the sampling
+        for i in range(start_iteration, n_iterations):
+            if len(self.neurons) <= self.target_size:
+                sampled_indices = np.arange(len(self.neurons))
+            else:
+                sampled_indices = np.random.choice(len(self.neurons), size=self.target_size, replace=False, p=weights)
+
+            sampled_group = [self.neurons[idx] for idx in sampled_indices]
+            score = self._evaluate_group(sampled_group)
+
+            # Update best overall
+            if (self.maximize and score > best_score) or (not self.maximize and score < best_score):
+                best_group = sampled_group.copy()
+                best_score = score
+
+            # Update best target size (if exactly target size)
+            if len(sampled_group) == self.target_size and (
+                (self.maximize and score > best_target_size_score)
+                or (not self.maximize and score < best_target_size_score)
+            ):
+                best_target_size_group = sampled_group.copy()
+                best_target_size_score = score
+
+            # Update weights - if maximizing, reward higher scores, if minimizing, reward lower scores
+            adjustment = learning_rate * score if self.maximize else learning_rate * (1.0 / (score + 1e-10))
+            for idx in sampled_indices:
+                weights[idx] += adjustment
+            weights = weights / weights.sum()
+
+            # Checkpoint
+            if self.cache_dir and (i + 1) % checkpoint_freq == 0:
+                self._save_search_state(
+                    method,
+                    {
+                        "iteration": i + 1,
+                        "weights": weights,
+                        "best_group": best_group,
+                        "best_score": best_score,
+                        "best_target_size_group": best_target_size_group,
+                        "best_target_size_score": best_target_size_score,
+                        "completed": False,
+                    },
+                )
+
+        # Create best overall result
+        default_score = 0.0 if self.maximize else float("inf")
+        best_result = SearchResult(
+            neurons=best_group if best_group else [],
+            delta_loss=best_score
+            if best_score != (float("-inf") if self.maximize else float("inf"))
+            else default_score,
+        )
+
+        # Create target size result
+        if best_target_size_group:
+            target_size_result = SearchResult(
+                neurons=best_target_size_group, delta_loss=best_target_size_score, is_target_size=True
+            )
+        else:
+            _, target_size_result = self._ensure_target_size_group(best_result)
+
+        # Save state
+        if self.cache_dir:
+            self._save_search_state(
+                method,
+                {
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
+                    "completed": True,
+                },
+            )
+
+        cleanup()
+
+        return best_result, target_size_result
+
+    def hybrid_search(
+        self, n_clusters: int = 5, expansion_factor: int = 3, beam_width: int = 10
+    ) -> tuple[SearchResult, SearchResult]:
+        """Hybrid clustering and beam search for finding neuron groups."""
+        state = self._load_search_state("hybrid")
+        if state and state.get("completed") and "best_result" in state and "target_size_result" in state:
+            best_result = SearchResult(**state["best_result"])
+            target_size_result = SearchResult(**state["target_size_result"])
+            return best_result, target_size_result
+
+        # Step 1: Get representatives using clustering
+        features = np.array(self.individual_delta_loss).reshape(-1, 1)
+        if features.std() > 0:
+            features = (features - features.mean()) / features.std()
+
+        clustering = AgglomerativeClustering(n_clusters=min(n_clusters, len(self.neurons)))
+        cluster_labels = clustering.fit_predict(features)
+
+        clusters = defaultdict(list)
+        for i, neuron_idx in enumerate(range(len(self.neurons))):
+            clusters[cluster_labels[i]].append(neuron_idx)
+
+        representatives = []
+        for cluster_id, cluster_neurons in clusters.items():
+            sorted_cluster = sorted(
+                [(self.neurons[idx], self.individual_delta_loss[idx]) for idx in cluster_neurons],
+                key=lambda x: x[1],
+                reverse=self.maximize,  # Use maximize flag
+            )
+            representatives.extend([n for n, _ in sorted_cluster[:expansion_factor]])
+
+        # Step 2: Run beam search over reduced set
+        reduced_search = NeuronGroupSearch(
+            neurons=representatives,
+            evaluator=self.evaluator,
+            target_size=self.target_size,
+            individual_delta_loss=[self.individual_delta_loss[self.neurons.index(n)] for n in representatives],
+            maximize=self.maximize,  # Pass the maximize flag to the new instance
+        )
+        best_result, target_size_result = reduced_search.progressive_beam_search(beam_width=beam_width)
+
+        # Save state
+        if self.cache_dir:
+            self._save_search_state(
+                "hybrid",
+                {
+                    "best_result": best_result.__dict__,
+                    "target_size_result": target_size_result.__dict__,
+                    "completed": True,
+                },
+            )
+
+        cleanup()
+
+        return best_result, target_size_result
+
+    def run_all_methods(self) -> dict[str, tuple[SearchResult, SearchResult]]:
+        """Run all search methods and return the results."""
         results = {}
-        methods = [
-            ("progressive_beam", self.progressive_beam_search),
-            ("hierarchical_cluster", self.hierarchical_cluster_search),
-            ("iterative_pruning", self.iterative_pruning),
-            ("importance_weighted", self.importance_weighted_sampling),
-            ("hybrid", self.hybrid_search),
-        ]
 
-        for method_name, method_func in methods:
-            try:
-                logger.info(f"Starting {method_name}")
-                result = method_func()
-                logger.info(f"Completed {method_name}")
-                results[method_name] = result
-            except Exception as e:
-                logger.error(f"Error in {method_name}: {e}")
-                import traceback
+        # Run all methods with error handling
+        try:
+            results["progressive_beam"] = self.progressive_beam_search()
+        except Exception as e:
+            logger.error(f"Error in progressive_beam_search: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["progressive_beam"] = (empty_result, empty_result)
 
-                logger.error(traceback.format_exc())
-                empty_result = SearchResult(neurons=[], delta_loss=0.0)
-                results[method_name] = (empty_result, empty_result)
+        try:
+            results["hierarchical_cluster"] = self.hierarchical_cluster_search()
+        except Exception as e:
+            logger.error(f"Error in hierarchical_cluster_search: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["hierarchical_cluster"] = (empty_result, empty_result)
 
-        return results
+        try:
+            results["iterative_pruning"] = self.iterative_pruning()
+        except Exception as e:
+            logger.error(f"Error in iterative_pruning: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["iterative_pruning"] = (empty_result, empty_result)
 
-    def run_methods_parallel(self) -> dict[str, tuple[SearchResult, SearchResult]]:
-        """Run all search methods in parallel and return the results."""
-        results = {}
-        methods = [
-            ("progressive_beam", self.progressive_beam_search),
-            ("hierarchical_cluster", self.hierarchical_cluster_search),
-            ("iterative_pruning", self.iterative_pruning),
-            ("importance_weighted", self.importance_weighted_sampling),
-            ("hybrid", self.hybrid_search),
-        ]
+        try:
+            results["importance_weighted"] = self.importance_weighted_sampling()
+        except Exception as e:
+            logger.error(f"Error in importance_weighted_sampling: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["importance_weighted"] = (empty_result, empty_result)
 
-        # Thread-based parallelization for running methods
-        threads = []
-        results_queue = Queue()
-
-        def run_method_thread(method_name, method_func):
-            try:
-                logger.info(f"Starting {method_name}")
-                result = method_func()
-                logger.info(f"Completed {method_name}")
-                results_queue.put((method_name, result))
-            except Exception as e:
-                logger.error(f"Error in {method_name}: {e}")
-                import traceback
-
-                logger.error(traceback.format_exc())
-                empty_result = SearchResult(neurons=[], delta_loss=0.0)
-                results_queue.put((method_name, (empty_result, empty_result)))
-
-        # Start threads for each method
-        for method_name, method_func in methods:
-            thread = threading.Thread(target=run_method_thread, args=(method_name, method_func))
-            threads.append(thread)
-            thread.start()
-
-        # Wait for all threads to complete
-        for thread in threads:
-            thread.join()
-
-        # Collect results
-        while not results_queue.empty():
-            method_name, result = results_queue.get()
-            results[method_name] = result
+        try:
+            results["hybrid"] = self.hybrid_search()
+        except Exception as e:
+            logger.error(f"Error in hybrid_search: {e}")
+            empty_result = SearchResult(neurons=[], delta_loss=0.0)
+            results["hybrid"] = (empty_result, empty_result)
 
         return results
 
     def get_best_result(self) -> dict[str, t.Any]:
         """Run all methods and return the best method and its results."""
-        if self.parallel_methods:
-            results = self.run_methods_parallel()
-        else:
-            results = self.run_methods_sequentially()
+        results = self.run_all_methods()
 
         # Comparison function based on maximization goal
         if self.maximize:
@@ -998,10 +1035,4 @@ class NeuronGroupSearch:
             best_method_name = min(results.keys(), key=lambda x: results[x][0].delta_loss)
             target_method_name = min(results.keys(), key=lambda x: results[x][1].delta_loss)
 
-        return {
-            "best": results[best_method_name][0],
-            "target_size": results[target_method_name][1],
-            "total": results,
-            "best_method": best_method_name,
-            "target_method": target_method_name,
-        }
+        return {"best": results[best_method_name][0], "target_size": results[target_method_name][1], "total": results}

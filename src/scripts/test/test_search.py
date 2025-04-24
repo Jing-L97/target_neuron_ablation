@@ -1,7 +1,7 @@
 import argparse
 import logging
 
-from neuron_analyzer.selection.group import NeuronGroupSearch
+from neuron_analyzer.selection.group_backup import NeuronGroupSearch
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")

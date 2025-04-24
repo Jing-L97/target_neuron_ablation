@@ -10,7 +10,7 @@ import torch
 from neuron_analyzer import settings
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor, load_tail_threshold_stat, load_unigram
 from neuron_analyzer.model_util import ModelHandler, NeuronLoader
-from neuron_analyzer.selection.group import GroupModelAblationAnalyzer, NeuronGroupSearch, get_heuristics
+from neuron_analyzer.selection.group_backup import GroupModelAblationAnalyzer, NeuronGroupSearch, get_heuristics
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -29,12 +29,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
     )
-    parser.add_argument("--top_n", type=int, default=10, help="use_bos_only if enabled")
+    parser.add_argument("--top_n", type=int, default=100, help="use_bos_only if enabled")
     parser.add_argument("--data_range_start", type=int, default=0, help="the selected datarange")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
-    parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
+    parser.add_argument("--k", type=int, default=100, help="use_bos_only if enabled")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
+    parser.add_argument("--parallel_methods", action="store_true", help="run parallel processing")
+    parser.add_argument("--max_iterations", type=int, default=500, help="max_iterations for each method")
+    parser.add_argument("--batch_size", type=int, default=8, help="maximum seconds for each method")
+    parser.add_argument("--timeout", type=int, default=3600, help="maximum seconds for each method")
     parser.add_argument("--seed", type=int, default=42, help="random seed to select neurons")
     parser.add_argument("--dataset", type=str, default="stas/c4-en-10k", help="random seed to select neurons")
     return parser.parse_args()
@@ -155,6 +159,10 @@ class NeuronGroupSelector:
             target_size=self.args.top_n,
             cache_dir=self.cache_dir,
             maximize=maxmize_heuristic,
+            max_iterations=self.args.max_iterations,
+            timeout=self.args.timeout,
+            parallel_methods=self.args.parallel_methods,
+            batch_size=self.args.batch_size,
         )
         # Get the best result using all methods
         results = search.get_best_result()
