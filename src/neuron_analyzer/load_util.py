@@ -146,7 +146,7 @@ class StepPathProcessor:
             logger.info(f"Resume {len(self.step_dirs) - len(remaining_step_dirs)} states from {save_path}.")
             if len(remaining_step_dirs) == 0:
                 logger.info("All steps already processed. Exiting.")
-                sys.exit(0)  # or return, depending on your program structure
+                sys.exit(0)
             return final_results, remaining_step_dirs
         return {}, self.step_dirs
 

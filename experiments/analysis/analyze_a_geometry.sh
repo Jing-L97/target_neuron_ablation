@@ -65,7 +65,7 @@ MODEL="${MODELS[$model_idx]}"
 VECTOR="${VECTORS[$vector_idx]}"
 TOP_N="${TOP_NS[$top_n_idx]}"
 HEURISTIC="${HEURISTICS[$heuristic_idx]}"
-GROUP_SIZE="${HEURISTICS[$group_size_idx]}"
+GROUP_SIZE="${GROUP_SIZES[$group_size_idx]}"
 
 # Log what's happening
 echo "Processing parameters:"
