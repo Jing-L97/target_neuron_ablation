@@ -10,7 +10,7 @@ import torch
 from neuron_analyzer import settings
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor, load_tail_threshold_stat, load_unigram
 from neuron_analyzer.model_util import ModelHandler, NeuronLoader
-from neuron_analyzer.selection.group_backup import GroupModelAblationAnalyzer, NeuronGroupSearch, get_heuristics
+from neuron_analyzer.selection.group import GroupModelAblationAnalyzer, NeuronGroupSearch, get_heuristics
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -37,7 +37,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--parallel_methods", action="store_true", help="run parallel processing")
     parser.add_argument("--max_iterations", type=int, default=500, help="max_iterations for each method")
-    parser.add_argument("--batch_size", type=int, default=8, help="maximum seconds for each method")
+    parser.add_argument("--batch_size", type=int, default=64, help="maximum seconds for each method")
     parser.add_argument("--timeout", type=int, default=3600, help="maximum seconds for each method")
     parser.add_argument("--seed", type=int, default=42, help="random seed to select neurons")
     parser.add_argument("--dataset", type=str, default="stas/c4-en-10k", help="random seed to select neurons")

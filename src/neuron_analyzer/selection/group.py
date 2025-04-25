@@ -47,7 +47,7 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
         layer_idx: int,  # Layer index for neuron groups
         device: str = "cuda",
         k: int = 10,
-        chunk_size: int = 20,
+        chunk_size: int = 80,
         ablation_mode: str = "mean",
         longtail_threshold: float = 0.001,
     ):
@@ -388,7 +388,9 @@ class NeuronGroupSearch:
         self.parallel_methods = parallel_methods
         self.batch_size = batch_size
         self._evaluation_cache = {}  # Cache for group evaluations
+        logger.info("Finished loading all the safe var.")
         self._evaluation_lock = threading.Lock()  # Lock for thread safety
+        logger.info("Finished locking threads.")
 
         if self.cache_dir:
             self.cache_dir.mkdir(exist_ok=True, parents=True)
@@ -403,6 +405,7 @@ class NeuronGroupSearch:
         # For early stopping
         self.best_score_history = []
         self.patience = 5  # Number of iterations with no improvement before stopping
+        logger.info("-----------------------------------")
         logger.info("Finished intilizing the class.")
 
     def _compute_individual_scores(self) -> list[float]:
@@ -912,7 +915,7 @@ class NeuronGroupSearch:
         return best_result, target_size_result
 
     def hierarchical_cluster_search(
-        self, n_clusters: int = 5, expansion_factor: int = 3
+        self, n_clusters: int = 10, expansion_factor: int = 10
     ) -> tuple[SearchResult, SearchResult]:
         """Hierarchical clustering search for finding neuron groups."""
         start_time = time.time()
