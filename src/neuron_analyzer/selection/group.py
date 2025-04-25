@@ -47,7 +47,7 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
         layer_idx: int,  # Layer index for neuron groups
         device: str = "cuda",
         k: int = 10,
-        chunk_size: int = 80,
+        chunk_size: int = 40,
         ablation_mode: str = "mean",
         longtail_threshold: float = 0.001,
     ):
@@ -68,6 +68,8 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 
         self.layer_idx = layer_idx
         self.results = pd.DataFrame()  # Override the dict with a DataFrame for this class
+        # Add a model access lock for thread safety
+        self.model_lock = threading.Lock()
         logger.info(f"ablate_components: ablate with k = {self.k}, long-tail threshold = {self.longtail_threshold}")
 
     def build_group_activation_means(self, filtered_entropy_df: pd.DataFrame, neuron_group: list[int]) -> torch.Tensor:
@@ -188,7 +190,10 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
                 filtered_inp = original_tok_seq[positions].unsqueeze(0).to(self.device)
 
                 # Compute loss
-                loss_post_ablation_batch = self.model.loss_fn(ablated_logits, filtered_inp, per_token=True).cpu()
+                # loss_post_ablation_batch = self.model.loss_fn(ablated_logits, filtered_inp, per_token=True).cpu()
+                loss_post_ablation_batch = (
+                    self.model.loss_fn(ablated_logits, filtered_inp, per_token=True).detach().cpu()
+                )
                 loss_post_ablation_batch = np.concatenate(
                     (loss_post_ablation_batch, np.zeros((loss_post_ablation_batch.shape[0], 1))), axis=1
                 )
@@ -196,12 +201,12 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 
                 # Compute entropy
                 entropy_post_ablation_batch = self.get_entropy(ablated_logits)
-                entropy_post_ablation.append(entropy_post_ablation_batch.cpu())
+                entropy_post_ablation.append(entropy_post_ablation_batch.detach().cpu())
 
                 # Process frozen unigram results
-                loss_post_ablation_with_frozen_unigram_batch = self.model.loss_fn(
-                    ablated_logits_with_frozen_unigram, filtered_inp, per_token=True
-                ).cpu()
+                loss_post_ablation_with_frozen_unigram_batch = (
+                    self.model.loss_fn(ablated_logits_with_frozen_unigram, filtered_inp, per_token=True).detach().cpu()
+                )
                 loss_post_ablation_with_frozen_unigram_batch = np.concatenate(
                     (
                         loss_post_ablation_with_frozen_unigram_batch,
@@ -213,7 +218,9 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 
                 # Compute entropy for frozen unigram
                 entropy_post_ablation_with_frozen_unigram_batch = self.get_entropy(ablated_logits_with_frozen_unigram)
-                entropy_post_ablation_with_frozen_unigram.append(entropy_post_ablation_with_frozen_unigram_batch.cpu())
+                entropy_post_ablation_with_frozen_unigram.append(
+                    entropy_post_ablation_with_frozen_unigram_batch.detach().cpu()
+                )
 
                 # Clean up
                 del ablated_logits, ablated_logits_with_frozen_unigram
@@ -321,11 +328,13 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 
     def evaluate_neuron_group(self, neuron_group: list[int]) -> float:
         """Evaluate a neuron group and return a heuristic."""
-        results = self.mean_ablate_components(neuron_group)
-        delta_loss = self.compute_heuristic(results)
-        logger.info(f"Heuristic for current search: {delta_loss}")
-        cleanup()
-        return delta_loss
+        # Use the lock to ensure exclusive access to the model and cache
+        with self.model_lock:
+            results = self.mean_ablate_components(neuron_group)
+            delta_loss = self.compute_heuristic(results)
+            logger.info(f"Heuristic for current search: {delta_loss}")
+            cleanup()
+            return delta_loss
 
 
 #######################################################################################################
@@ -363,21 +372,7 @@ class NeuronGroupSearch:
         parallel_methods: bool = True,  # Run different search methods in parallel
         batch_size: int = 8,  # Size of evaluation batches
     ):
-        """Initialize the neuron group search.
-
-        Args:
-            neurons: List of neuron indices
-            evaluator: Class to evaluate neuron groups
-            target_size: Target size for neuron groups
-            individual_delta_loss: Pre-computed individual neuron scores
-            cache_dir: Directory for caching results
-            maximize: Whether to maximize or minimize the loss
-            max_iterations: Maximum iterations for iterative methods
-            timeout: Maximum time in seconds for each search method
-            parallel_methods: Whether to run different search methods in parallel
-            batch_size: Number of groups to evaluate in a batch
-
-        """
+        """Initialize the neuron group search."""
         self.neurons = neurons
         self.evaluator = evaluator
         self.target_size = min(target_size, len(neurons))
@@ -388,25 +383,14 @@ class NeuronGroupSearch:
         self.parallel_methods = parallel_methods
         self.batch_size = batch_size
         self._evaluation_cache = {}  # Cache for group evaluations
-        logger.info("Finished loading all the safe var.")
         self._evaluation_lock = threading.Lock()  # Lock for thread safety
-        logger.info("Finished locking threads.")
-
         if self.cache_dir:
             self.cache_dir.mkdir(exist_ok=True, parents=True)
-
         # Initialize individual neuron scores
-        """
-        self.individual_delta_loss = (
-            individual_delta_loss if individual_delta_loss is not None else self._compute_individual_scores()
-        )
-        """
         self.individual_delta_loss = individual_delta_loss
         # For early stopping
         self.best_score_history = []
         self.patience = 5  # Number of iterations with no improvement before stopping
-        logger.info("-----------------------------------")
-        logger.info("Finished intilizing the class.")
 
     def _compute_individual_scores(self) -> list[float]:
         """Compute scores for individual neurons in batches for GPU efficiency."""
@@ -452,24 +436,16 @@ class NeuronGroupSearch:
         # Cache the result
         with self._evaluation_lock:
             self._evaluation_cache[group_key] = result
-
         return result
 
     def _evaluate_groups_batch(self, groups: list[list[int]]) -> list[float]:
-        """Evaluate multiple groups with efficient GPU batching.
-
-        Args:
-            groups: List of neuron groups to evaluate
-
-        Returns:
-            List of evaluation scores
-
-        """
+        """Evaluate multiple groups with efficient GPU batching."""
         # Check which groups are already in cache
         results = [None] * len(groups)
         groups_to_evaluate = []
         group_indices = []
 
+        # This part checks the cache - need thread safety
         with self._evaluation_lock:
             for i, group in enumerate(groups):
                 group_key = tuple(sorted(group))
@@ -483,16 +459,15 @@ class NeuronGroupSearch:
         if not groups_to_evaluate:
             return results
 
-        # Process remaining groups in smaller batches for GPU efficiency
         for i in range(0, len(groups_to_evaluate), self.batch_size):
             batch_groups = groups_to_evaluate[i : min(i + self.batch_size, len(groups_to_evaluate))]
             batch_indices = group_indices[i : min(i + self.batch_size, len(group_indices))]
 
-            # Evaluate each group in the batch
+            # Evaluate each group in the batch - the evaluator now has its own lock
             for j, (group, idx) in enumerate(zip(batch_groups, batch_indices, strict=False)):
                 group_result = self.evaluator.evaluate_neuron_group(group)
 
-                # Cache the result
+                # Cache the result - need thread safety
                 with self._evaluation_lock:
                     self._evaluation_cache[tuple(sorted(group))] = group_result
 
@@ -1357,7 +1332,6 @@ class NeuronGroupSearch:
             ("importance_weighted", self.importance_weighted_sampling),
             ("hybrid", self.hybrid_search),
         ]
-
         # Thread-based parallelization for running methods
         threads = []
         results_queue = Queue()
@@ -1365,6 +1339,7 @@ class NeuronGroupSearch:
         def run_method_thread(method_name, method_func):
             try:
                 logger.info(f"Starting {method_name}")
+                # The evaluator has its own locks now, so methods can run in parallel
                 result = method_func()
                 logger.info(f"Completed {method_name}")
                 results_queue.put((method_name, result))

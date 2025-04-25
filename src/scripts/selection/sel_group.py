@@ -8,7 +8,7 @@ import pandas as pd
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor, load_tail_threshold_stat, load_unigram
+from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor, cleanup, load_tail_threshold_stat, load_unigram
 from neuron_analyzer.model_util import ModelHandler, NeuronLoader
 from neuron_analyzer.selection.group import GroupModelAblationAnalyzer, NeuronGroupSearch, get_heuristics
 
@@ -32,12 +32,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--top_n", type=int, default=100, help="use_bos_only if enabled")
     parser.add_argument("--data_range_start", type=int, default=0, help="the selected datarange")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
-    parser.add_argument("--k", type=int, default=100, help="use_bos_only if enabled")
+    parser.add_argument("--k", type=int, default=10, help="number of randomly selected chunks")
+    parser.add_argument("--chunk_size", type=int, default=256, help="Number of neurons to be processed in parallel")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--parallel_methods", action="store_true", help="run parallel processing")
-    parser.add_argument("--max_iterations", type=int, default=500, help="max_iterations for each method")
-    parser.add_argument("--batch_size", type=int, default=64, help="maximum seconds for each method")
+    parser.add_argument("--max_iterations", type=int, default=1000, help="max_iterations for each method")
+    parser.add_argument("--batch_size", type=int, default=10240, help="maximum seconds for each method")
     parser.add_argument("--timeout", type=int, default=3600, help="maximum seconds for each method")
     parser.add_argument("--seed", type=int, default=42, help="random seed to select neurons")
     parser.add_argument("--dataset", type=str, default="stas/c4-en-10k", help="random seed to select neurons")
@@ -144,6 +145,7 @@ class NeuronGroupSelector:
             entropy_df=entropy_df,
             layer_idx=self.layer_num,
             k=self.args.k,
+            chunk_size=self.args.chunk_size,
             ablation_mode=self.args.vector,
             longtail_threshold=longtail_threshold,
         )
@@ -211,8 +213,11 @@ def main() -> None:
             # save the intermediate checkpoints
             JsonProcessor.save_json(final_results, save_path)
             logger.info(f"Save the results to {save_path}")
+            cleanup()
         except:
             logger.info(f"Something wrong with {step}")
+
+    cleanup()
 
 
 if __name__ == "__main__":
