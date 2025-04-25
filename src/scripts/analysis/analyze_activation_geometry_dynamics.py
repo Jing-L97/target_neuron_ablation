@@ -106,28 +106,31 @@ def main() -> None:
         sys.exit(0)
 
     for step in step_dirs:
-        activation_data, _, _, do_analysis = load_activation_indices(
-            args, abl_path, step[0], str(step[1]), neuron_dir, device
-        )
-        if do_analysis:
-            # initilize the class
-            geometry_analyzer = ActivationGeometricAnalyzer(
-                activation_data=activation_data,
-                boost_neuron_indices=boost_neuron_indices,
-                suppress_neuron_indices=suppress_neuron_indices,
-                activation_column="activation",
-                token_column="str_tokens",
-                context_column="context",
-                component_column="component_name",
-                num_random_groups=2,
-                device=device,
-                use_mixed_precision=use_mixed_precision,
+        try:
+            activation_data, _, _, do_analysis = load_activation_indices(
+                args, abl_path, step[0], str(step[1]), neuron_dir, device
             )
-            results = geometry_analyzer.run_all_analyses()
-            final_results[str(step[1])] = results
-            # assign col headers
-            JsonProcessor.save_json(final_results, save_path)
-            logger.info(f"Save file to {save_path}")
+            if do_analysis:
+                # initilize the class
+                geometry_analyzer = ActivationGeometricAnalyzer(
+                    activation_data=activation_data,
+                    boost_neuron_indices=boost_neuron_indices,
+                    suppress_neuron_indices=suppress_neuron_indices,
+                    activation_column="activation",
+                    token_column="str_tokens",
+                    context_column="context",
+                    component_column="component_name",
+                    num_random_groups=2,
+                    device=device,
+                    use_mixed_precision=use_mixed_precision,
+                )
+                results = geometry_analyzer.run_all_analyses()
+                final_results[str(step[1])] = results
+                # assign col headers
+                JsonProcessor.save_json(final_results, save_path)
+                logger.info(f"Save file to {save_path}")
+        except:
+            logger.info(f"Something wrong with {step}")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=geometry_group
+#SBATCH --job-name=geometry_dyna_group
 #SBATCH --export=ALL
-#SBATCH --partition=cpu
-#SBATCH --mem=80G
+#SBATCH --partition=gpu
+#SBATCH --mem=70G
+#SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
-#SBATCH --cpus-per-task=8
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_group_%a.log
+#SBATCH --cpus-per-task=10
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_dyna_group_%a.log
 #SBATCH --array=0-5  # Modified array size to include all combinations
 
 # Define constants
@@ -15,7 +16,7 @@ GROUP_TYPE="group"
 
 # Define arrays
 MODELS=(
-    "EleutherAI/pythia-70m-deduped"
+    "EleutherAI/pythia-410m-deduped"
 )
 VECTORS=(
     "longtail_50"

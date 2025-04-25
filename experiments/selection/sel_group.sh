@@ -7,7 +7,7 @@
 #SBATCH --mem=70G
 #SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_gorup_%a.log
-#SBATCH --array=0-7%4
+#SBATCH --array=0-7
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"

@@ -121,8 +121,11 @@ class StepPathProcessor:
         for step in self.abl_path.iterdir():
             if step.is_dir():
                 # Extract the number from directory name
-                step_num = int(step.name)
-                step_dirs.append((step, step_num))
+                try:
+                    step_num = int(step.name)
+                    step_dirs.append((step, step_num))
+                except:
+                    logger.info(f"Something wrong with step {step}")
 
         # Sort directories by step number in descending order
         step_dirs.sort(key=lambda x: x[1], reverse=True)
