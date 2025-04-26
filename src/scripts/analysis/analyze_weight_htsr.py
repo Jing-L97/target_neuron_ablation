@@ -1,14 +1,13 @@
 #!/usr/bin/env python
 import argparse
 import logging
+from pathlib import Path
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.geometry_util import (
-    get_device,
-    load_activation_indices,
-)
+from neuron_analyzer.analysis.geometry_util import NeuronGroupAnalyzer, get_device
 from neuron_analyzer.analysis.htsr import WeightSpaceHeavyTailedAnalyzer
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
+from neuron_analyzer.model_util import ModelHandler
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -18,11 +17,11 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Analyze geometric features in activation space.")
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-410m-deduped", help="Target model name")
+    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument("--heuristic", type=str, choices=["KL", "prob"], default="prob", help="selection heuristic")
     parser.add_argument(
-        "--group_type", type=str, choices=["individual", "group"], default="group", help="different neuron groups"
+        "--group_type", type=str, choices=["individual", "group"], default="individual", help="different neuron groups"
     )
     parser.add_argument(
         "--group_size", type=str, choices=["best", "target_size"], default="best", help="different group size"
@@ -52,6 +51,7 @@ def configure_path(args):
     group_name = f"{args.group_type}_{args.group_size}" if args.group_type == "group" else args.group_type
     save_path = (
         settings.PATH.direction_dir
+        / "htsr"
         / group_name
         / "activation"
         / args.vector
@@ -66,6 +66,38 @@ def configure_path(args):
     return save_path, abl_path, neuron_dir
 
 
+def get_layer_num(model: str) -> int:
+    return 5 if "70" in model else 23
+
+
+def run_analysis(args, device, step, abl_path: Path) -> dict:
+    """Run the analysis pipeline."""
+    neuron_analyzer = NeuronGroupAnalyzer(
+        args,
+        device=device,
+        step_path=step[0],
+        abl_path=abl_path,
+    )
+    boost_neuron_indices, suppress_neuron_indices = neuron_analyzer.load_neurons()
+    model_handler = ModelHandler()
+    model, _ = model_handler.load_model_and_tokenizer(
+        step=step[1],
+        model_name=args.model,
+        hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",
+        device=device,
+    )
+
+    # initilize the class
+    geometry_analyzer = WeightSpaceHeavyTailedAnalyzer(
+        model=model,
+        boost_neurons=boost_neuron_indices,
+        suppress_neurons=suppress_neuron_indices,
+        device=device,
+        layer_num=get_layer_num(args.model),
+    )
+    return geometry_analyzer.run_all_analyses()
+
+
 #######################################################################################################
 # Entry point of the script
 #######################################################################################################
@@ -74,35 +106,24 @@ def configure_path(args):
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
-    device, use_mixed_precision = get_device()
+    device, _ = get_device()
 
     # loop over different steps
     save_path, abl_path, neuron_dir = configure_path(args)
-
     # load and update result json
     step_processor = StepPathProcessor(abl_path)
     final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)
 
     for step in step_dirs:
-        try:
-            activation_data, boost_neuron_indices, suppress_neuron_indices, do_analysis = load_activation_indices(
-                args, abl_path, step[0], str(step[1]), neuron_dir, device
-            )
-            if do_analysis:
-                # initilize the class
-                geometry_analyzer = WeightSpaceHeavyTailedAnalyzer(
-                    model=model,
-                    boost_neuron_indices=boost_neuron_indices,
-                    suppress_neuron_indices=suppress_neuron_indices,
-                    device=device,
-                )
-                results = geometry_analyzer.run_all_analyses()
-                final_results[str(step[1])] = results
-                # assign col headers
-                JsonProcessor.save_json(final_results, save_path)
-                logger.info(f"Save file to {save_path}")
+        results = run_analysis(args, device, step, abl_path)
+        final_results[str(step[1])] = results
+        # assign col headers
+        JsonProcessor.save_json(final_results, save_path)
+        logger.info(f"Save file to {save_path}")
+        """
         except:
             logger.info(f"Something wrong with {step}")
+        """
 
 
 if __name__ == "__main__":

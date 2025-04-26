@@ -19,7 +19,15 @@ logger = logging.getLogger(__name__)
 
 
 class NeuronGroupAnalyzer:
-    def __init__(self, args, device: str, feather_path: Path, step_path: Path, abl_path: Path, neuron_dir: Path = None):
+    def __init__(
+        self,
+        args,
+        device: str,
+        feather_path: Path = None,
+        step_path: Path = None,
+        abl_path: Path = None,
+        neuron_dir: Path = None,
+    ):
         self.args = args
         self.device = device
         self.feather_path = feather_path
@@ -27,11 +35,16 @@ class NeuronGroupAnalyzer:
         self.abl_path = abl_path
         self.neuron_dir = neuron_dir  # optional: only apply this when loading group neurons
 
-    def run_pipeline(self):
+    def run_pipeline(self) -> tuple[pd.DataFrame, list[int], list[int]]:
         """Run pipeline of the neuron selection."""
         # get activation data
         activation_data = self.load_activation_df()
         # get different neuron groups
+        boost_neuron_indices, suppress_neuron_indices = self.load_neurons(activation_data)
+        return activation_data, boost_neuron_indices, suppress_neuron_indices
+
+    def load_neurons(self, activation_data=None) -> tuple[list[int], list[int]]:
+        """Load neurons in different conditions."""
         if self.args.load_stat:
             boost_neuron_indices, suppress_neuron_indices = self.load_neuron_from_stat()
             logger.info(f"Loading the {self.args.group_type} neurons from stat")
@@ -42,9 +55,9 @@ class NeuronGroupAnalyzer:
             if self.args.group_type == "individual":
                 boost_neuron_indices, suppress_neuron_indices = self.load_individual_neuron(activation_data)
                 logger.info("Selecting from the individual neurons")
-        return activation_data, boost_neuron_indices, suppress_neuron_indices
+        return boost_neuron_indices, suppress_neuron_indices
 
-    def load_activation_df(self) -> tuple[pd.DataFrame, list[int], list[int]]:
+    def load_activation_df(self) -> pd.DataFrame:
         """Filter neuron index for different interventions and return the grouped data."""
         # load selector
         self.neuron_selector = NeuronSelector(

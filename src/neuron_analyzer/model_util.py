@@ -242,8 +242,13 @@ class NeuronLoader:
             rand_int = random.randint(self.min_val, max_val)
             if rand_int not in excluded_ints and rand_int not in result:
                 result.append(rand_int)
-
         return result
+
+    def get_neuron_indices(self, model):
+        """Get neuruon indices."""
+        if model:
+            return list(range(model.cfg.d_mlp))
+        return list(range(self.min_val, self.max_val))
 
 
 #######################################################

@@ -5,6 +5,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+import scipy
 import torch
 
 from neuron_analyzer.load_util import cleanup
@@ -395,21 +396,14 @@ class BaseHeavyTailedAnalyzer(ABC):
 class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
     """Analyzer for Heavy-Tailed Self-Regularization properties in weight space."""
 
-    def __init__(
-        self,
-        model,
-        layer_num: int,
-        boost_neurons: list[int],
-        suppress_neurons: list[int],
-        device=None,
-        random_sample_size: int = None,
-    ):
+    def __init__(self, model, layer_num: int, boost_neurons: list[int], suppress_neurons: list[int], device=None):
         """Initialize the analyzer with model and neuron groups."""
         super().__init__(boost_neurons, suppress_neurons, device)
         self.model = model
         self.layer_num = layer_num
-
+        self.all_neuron_indices = self._get_all_neuron_indices()
         # Get common neurons and create random samples
+        random_sample_size = min(len(boost_neurons), len(suppress_neurons))
         self.common_neurons, self.sampled_common_neurons = self._get_common_neurons(random_sample_size)
 
         # Create neuron group dictionary
