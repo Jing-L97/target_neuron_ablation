@@ -33,6 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--step_index", type=int, default=-1, help="target step index")
     parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
     parser.add_argument("--load_stat", action="store_true", help="Whether to load from existing index")
+    parser.add_argument("--exclude_random", action="store_true", help="Whether to exclude existing random")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Check existing file and resume when setting this")
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
@@ -61,6 +62,11 @@ def get_save_path(args, step_num: str) -> Path:
     """Configure save path based on the setting."""
     filename_suffix = ".debug" if args.debug else ".json"
     group_name, save_heuristic = get_dir_name(args)
+    filename = (
+        f"{args.data_range_end}_{args.top_n}_check_random{filename_suffix}"
+        if args.exclude_random
+        else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
+    )
     save_path = (
         settings.PATH.direction_dir
         / "dynamic"
@@ -70,7 +76,7 @@ def get_save_path(args, step_num: str) -> Path:
         / args.vector
         / args.model
         / save_heuristic
-        / f"{args.data_range_end}_{args.top_n}{filename_suffix}"
+        / filename
     )
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -97,8 +103,8 @@ def main() -> None:
     save_path = get_save_path(args, step_num)
     final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)
     # load the neuron indices of the target single step
-    activation_data, boost_neuron_indices, suppress_neuron_indices, do_analysis = load_activation_indices(
-        args, abl_path, step_path, step_num, neuron_dir, device
+    activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
+        load_activation_indices(args, abl_path, step_path, step_num, neuron_dir, device)
     )
     logger.info(f"Load neuron indices of step {step_num}.")
     if not do_analysis:
@@ -116,6 +122,7 @@ def main() -> None:
                     activation_data=activation_data,
                     boost_neuron_indices=boost_neuron_indices,
                     suppress_neuron_indices=suppress_neuron_indices,
+                    excluded_neuron_indices=random_indices,
                     activation_column="activation",
                     token_column="str_tokens",
                     context_column="context",
@@ -130,7 +137,7 @@ def main() -> None:
                 JsonProcessor.save_json(final_results, save_path)
                 logger.info(f"Save file to {save_path}")
         except:
-            logger.info(f"Something wrong with {step}")
+            logger.info(f"Something wrong with {step[1]}")
 
 
 if __name__ == "__main__":

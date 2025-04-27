@@ -28,6 +28,7 @@ class ActivationGeometricAnalyzer:
         activation_data: pd.DataFrame,
         boost_neuron_indices: list[int],
         suppress_neuron_indices: list[int],
+        excluded_neuron_indices: list[int],
         activation_column: str = "activation",
         token_column: str = "str_tokens",
         context_column: str = "context",
@@ -45,6 +46,7 @@ class ActivationGeometricAnalyzer:
         self.data = activation_data
         self.boost_neuron_indices = boost_neuron_indices
         self.suppress_neuron_indices = suppress_neuron_indices
+        self.excluded_neuron_indices = excluded_neuron_indices
         self.activation_column = activation_column
         self.token_column = token_column
         self.context_column = context_column
@@ -154,7 +156,7 @@ class ActivationGeometricAnalyzer:
     def _generate_random_groups(self) -> tuple[list[list[int]], list[list[int]]]:
         """Generate non-overlapping random neuron groups that don't overlap with boost or suppress neurons."""
         group_size = max(len(self.boost_neuron_indices), len(self.suppress_neuron_indices))
-        special_indices = set(self.boost_neuron_indices + self.suppress_neuron_indices)
+        special_indices = set(self.boost_neuron_indices + self.suppress_neuron_indices + self.excluded_neuron_indices)
         non_special_indices = [idx for idx in self.all_neuron_indices if idx not in special_indices]
 
         random_indices = []

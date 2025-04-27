@@ -80,6 +80,10 @@ class _MyPathSettings:
     def direction_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "geometry"
 
+    @property
+    def classify_dir(self) -> _Path:
+        return self.DATA_DIR / "results" / "classify"
+
 
 #######################################################
 # Instance of Settings

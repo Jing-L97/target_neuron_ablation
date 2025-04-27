@@ -30,6 +30,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--load_stat", action="store_true", help="Whether to load from existing index")
+    parser.add_argument("--exclude_random", action="store_true", help="Whether to exclude existing random")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Check existing file and resume when setting this")
     parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
@@ -50,14 +51,14 @@ def configure_path(args):
     save_heuristic = f"{args.heuristic}_med" if args.sel_by_med else args.heuristic
     filename_suffix = ".debug" if args.debug else ".json"
     group_name = f"{args.group_type}_{args.group_size}" if args.group_type == "group" else args.group_type
+    filename = (
+        f"{args.data_range_end}_{args.top_n}_check_random{filename_suffix}"
+        if args.exclude_random
+        else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
+    )
+
     save_path = (
-        settings.PATH.direction_dir
-        / group_name
-        / "activation"
-        / args.vector
-        / args.model
-        / save_heuristic
-        / f"{args.data_range_end}_{args.top_n}{filename_suffix}"
+        settings.PATH.direction_dir / group_name / "activation" / args.vector / args.model / save_heuristic / filename
     )
     save_path.parent.mkdir(parents=True, exist_ok=True)
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
@@ -75,7 +76,8 @@ def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
     device, use_mixed_precision = get_device()
-
+    if args.exclude_random:
+        logger.info("Exclude the existing random neurons")
     # loop over different steps
     save_path, abl_path, neuron_dir = configure_path(args)
 
@@ -85,8 +87,8 @@ def main() -> None:
 
     for step in step_dirs:
         try:
-            activation_data, boost_neuron_indices, suppress_neuron_indices, do_analysis = load_activation_indices(
-                args, abl_path, step[0], str(step[1]), neuron_dir, device
+            activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
+                load_activation_indices(args, abl_path, step[0], str(step[1]), neuron_dir, device)
             )
             if do_analysis:
                 # initilize the class
@@ -94,6 +96,7 @@ def main() -> None:
                     activation_data=activation_data,
                     boost_neuron_indices=boost_neuron_indices,
                     suppress_neuron_indices=suppress_neuron_indices,
+                    excluded_neuron_indices=random_indices,
                     activation_column="activation",
                     token_column="str_tokens",
                     context_column="context",
@@ -107,8 +110,9 @@ def main() -> None:
                 # assign col headers
                 JsonProcessor.save_json(final_results, save_path)
                 logger.info(f"Save file to {save_path}")
+
         except:
-            logger.info(f"Something wrong with {step}")
+            logger.info(f"Something wrong with {step[1]}")
 
 
 if __name__ == "__main__":

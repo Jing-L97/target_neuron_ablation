@@ -40,14 +40,19 @@ class NeuronGroupAnalyzer:
         # get activation data
         activation_data = self.load_activation_df()
         # get different neuron groups
-        boost_neuron_indices, suppress_neuron_indices = self.load_neurons(activation_data)
-        return activation_data, boost_neuron_indices, suppress_neuron_indices
+        boost_neuron_indices, suppress_neuron_indices, random_neuron_indices = self.load_neurons(activation_data)
+        if self.args.exclude_random:
+            return activation_data, boost_neuron_indices, suppress_neuron_indices, random_neuron_indices
+        return activation_data, boost_neuron_indices, suppress_neuron_indices, []
 
     def load_neurons(self, activation_data=None) -> tuple[list[int], list[int]]:
         """Load neurons in different conditions."""
         if self.args.load_stat:
-            boost_neuron_indices, suppress_neuron_indices = self.load_neuron_from_stat()
+            boost_neuron_indices, suppress_neuron_indices, random_neuron_indices = self.load_neuron_from_stat()
             logger.info(f"Loading the {self.args.group_type} neurons from stat")
+            if self.args.exclude_random:
+                logger.info("Including random neurons")
+                return boost_neuron_indices, suppress_neuron_indices, random_neuron_indices
         else:
             if self.args.group_type == "group":
                 boost_neuron_indices, suppress_neuron_indices = self.load_group_neuron()
@@ -55,7 +60,7 @@ class NeuronGroupAnalyzer:
             if self.args.group_type == "individual":
                 boost_neuron_indices, suppress_neuron_indices = self.load_individual_neuron(activation_data)
                 logger.info("Selecting from the individual neurons")
-        return boost_neuron_indices, suppress_neuron_indices
+        return boost_neuron_indices, suppress_neuron_indices, []
 
     def load_activation_df(self) -> pd.DataFrame:
         """Filter neuron index for different interventions and return the grouped data."""
@@ -82,9 +87,17 @@ class NeuronGroupAnalyzer:
     def load_neuron_from_stat(self) -> tuple[list[int], list[int]]:
         """Load neuron from existing activation stats."""
         neuron_dict = self._get_stat_file()
+        if self.args.exclude_random:
+            return (
+                neuron_dict[self.step.name]["neuron_indices"]["boost"],
+                neuron_dict[self.step.name]["neuron_indices"]["suppress"],
+                neuron_dict[self.step.name]["neuron_indices"]["random_1"]
+                + neuron_dict[self.step.name]["neuron_indices"]["random_2"],
+            )
         return (
             neuron_dict[self.step.name]["neuron_indices"]["boost"],
             neuron_dict[self.step.name]["neuron_indices"]["suppress"],
+            [],
         )
 
     def load_group_neuron(self) -> tuple[list[int], list[int]]:
@@ -156,9 +169,9 @@ def load_activation_indices(args, abl_path: Path, step_path: Path, step_num: str
             neuron_dir=neuron_dir,
             device=device,
         )
-        activation_data, boost_neuron_indices, suppress_neuron_indices = group_analyzer.run_pipeline()
-        return activation_data, boost_neuron_indices, suppress_neuron_indices, True
-    return None, None, None, False
+        activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices = group_analyzer.run_pipeline()
+        return activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, True
+    return None, None, None, None, False
 
 
 #######################################################
