@@ -26,6 +26,9 @@ logger = logging.getLogger(__name__)
 sys.path.append("../")
 T = t.TypeVar("T")
 
+#######################################################################################################
+# Group eval class
+
 
 @dataclass
 class NeuronEvalResult:
@@ -339,7 +342,6 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 
 #######################################################################################################
 # Functions applying search strategy
-#######################################################################################################
 
 
 def get_heuristics(effect) -> bool:
