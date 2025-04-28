@@ -6,6 +6,7 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
+from sklearn.base import clone
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import accuracy_score, classification_report, confusion_matrix, f1_score, silhouette_score
 from sklearn.model_selection import StratifiedKFold, permutation_test_score, train_test_split
@@ -15,6 +16,33 @@ from sklearn.svm import SVC, LinearSVC
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
+
+
+def clone_from_sklearn_estimator(estimator):
+    """Clone a scikit-learn estimator for the bootstrap confidence intervals method."""
+    try:
+        return clone(estimator)
+    except:
+        # If clone doesn't work, try to initialize with the same parameters
+        if isinstance(estimator, SVC):
+            return SVC(
+                C=estimator.C,
+                kernel=estimator.kernel,
+                degree=estimator.degree,
+                gamma=estimator.gamma,
+                coef0=estimator.coef0,
+                random_state=np.random.randint(1000),
+            )
+        if isinstance(estimator, LinearSVC):
+            return LinearSVC(
+                C=estimator.C,
+                penalty=estimator.penalty,
+                loss=estimator.loss,
+                dual=estimator.dual,
+                random_state=np.random.randint(1000),
+                max_iter=10000,
+            )
+        raise ValueError(f"Cannot clone estimator of type {type(estimator)}")
 
 
 class NeuronClassifier:
@@ -49,6 +77,11 @@ class NeuronClassifier:
         self.results = {}
         self.feature_importance = {}
         self.hyperplanes = {}
+        # Record class distribution
+        self.class_distribution = {str(c): int(np.sum(self.y == c)) for c in np.unique(self.y)}
+        self.class_weights = {
+            str(c): len(self.y) / (len(np.unique(self.y)) * np.sum(self.y == c)) for c in np.unique(self.y)
+        }
 
     def prepare_data(self, test_size: float = 0.2) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Split data into training and testing sets."""
@@ -115,6 +148,7 @@ class NeuronClassifier:
         penalty: str = "l2",
         loss: str = "squared_hinge",
         dual: bool = True,
+        class_weight: str = "balanced",  # use weighted loss for class imbalance
         test_size: float = 0.2,
     ) -> dict:
         """Train a LinearSVC classifier (optimized for linear kernel)."""
@@ -127,6 +161,7 @@ class NeuronClassifier:
             penalty=penalty,
             loss=loss,
             dual=dual,
+            class_weight=class_weight,
             random_state=self.random_state,
             max_iter=10000,  # Increased to ensure convergence
         )
@@ -223,10 +258,21 @@ class NeuronClassifier:
 
         return comparison_results
 
-    def cross_validate_svm(self, kernel: str = "linear", C: float = 1.0, n_splits: int = 5) -> dict:
-        """Perform cross-validation to check hyperplane robustness."""
+    def cross_validate_svm(
+        self,
+        kernel: str = "linear",
+        C: float = 1.0,
+        class_weight: str = "balanced",  # Added parameter
+        n_splits: int = 5,
+    ) -> dict:
+        """Perform cross-validation for SVM classifier."""
         # Initialize the classifier
-        clf = SVC(kernel=kernel, C=C, random_state=self.random_state)
+        clf = SVC(
+            kernel=kernel,
+            C=C,
+            class_weight=class_weight,  # Added parameter
+            random_state=self.random_state,
+        )
 
         # Initialize k-fold cross-validation
         kfold = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=self.random_state)
@@ -234,6 +280,9 @@ class NeuronClassifier:
         # Lists to store results
         accuracies = []
         f1_scores = []
+
+        # Initialize per-class F1 scores
+        class_f1_scores = {str(cls): [] for cls in np.unique(self.y)}
 
         # Perform cross-validation
         for train_idx, test_idx in kfold.split(self.X, self.y):
@@ -250,11 +299,31 @@ class NeuronClassifier:
             accuracies.append(accuracy_score(y_test, y_pred))
             f1_scores.append(f1_score(y_test, y_pred, average="weighted"))
 
+            # Calculate per-class F1 scores
+            if len(np.unique(self.y)) <= 2:
+                # Binary classification
+                for i, cls in enumerate(np.unique(self.y)):
+                    cls_f1 = f1_score(y_test, y_pred, average="binary") if i == 1 else None
+
+                    if cls_f1 is not None:
+                        class_f1_scores[str(cls)].append(cls_f1)
+            else:
+                # Multi-class classification
+                f1s = f1_score(y_test, y_pred, average=None)
+                for i, cls in enumerate(np.unique(y_test)):
+                    class_f1_scores[str(cls)].append(f1s[i])
+
         # Calculate mean and std of metrics
         mean_accuracy = np.mean(accuracies)
         std_accuracy = np.std(accuracies)
         mean_f1 = np.mean(f1_scores)
         std_f1 = np.std(f1_scores)
+
+        # Calculate per-class F1 statistics
+        class_f1_stats = {}
+        for cls, scores in class_f1_scores.items():
+            if scores:  # Check if we have scores for this class
+                class_f1_stats[cls] = {"mean": np.mean(scores), "std": np.std(scores), "values": scores}
 
         # Store cross-validation results
         cv_results = {
@@ -264,6 +333,8 @@ class NeuronClassifier:
             "std_f1": std_f1,
             "fold_accuracies": accuracies,
             "fold_f1_scores": f1_scores,
+            "class_f1_scores": class_f1_stats,
+            "class_distribution": {str(c): int(np.sum(self.y == c)) for c in np.unique(self.y)},
         }
 
         model_name = f"cv_svm_{kernel}"
@@ -309,7 +380,7 @@ class NeuronClassifier:
 
         return perm_test_results
 
-    def calculate_margin_statistics(self, clf_name: str = "linear_svc") -> dict:
+    def calculate_margin_statistics(self, clf_name: str = "linear_svc") -> Dict:
         """Calculate statistics about the margin distribution."""
         if clf_name not in self.classifiers:
             raise ValueError(f"Classifier '{clf_name}' not found. Train it first.")
@@ -358,7 +429,7 @@ class NeuronClassifier:
             proba = clf.predict_proba(self.X)
             distances = np.max(proba, axis=1)  # Use max probability as confidence
 
-        # Calculate statistics
+        # Calculate overall statistics
         margin_stats = {
             "mean_distance": np.mean(distances),
             "median_distance": np.median(distances),
@@ -366,10 +437,6 @@ class NeuronClassifier:
             "min_distance": np.min(distances),
             "max_distance": np.max(distances),
         }
-
-        # Store margin statistics in results
-        margin_key = f"margin_stats_{clf_name}"
-        self.results[margin_key] = margin_stats
 
         # Create DataFrame with neuron indices, classes, and distances
         margin_df = pd.DataFrame(
@@ -381,12 +448,103 @@ class NeuronClassifier:
         )
 
         # Group by class and calculate statistics
-        class_margins = margin_df.groupby("class")["distance"].agg(["mean", "median", "std", "min", "max"]).to_dict()
+        class_margins = (
+            margin_df.groupby("class")["distance"]
+            .agg(
+                [
+                    "count",  # Count samples in each class
+                    "mean",
+                    "median",
+                    "std",
+                    "min",
+                    "max",
+                ]
+            )
+            .to_dict()
+        )
 
-        # Add class-specific margin statistics
-        self.results[margin_key]["class_margins"] = class_margins
+        # Add class proportions
+        class_proportions = {}
+        for cls in class_margins["count"]:
+            class_proportions[str(int(cls))] = class_margins["count"][cls] / len(margin_df)
 
-        return margin_stats
+        # Add normalized margin - relative to class averages
+        class_means = margin_df.groupby("class")["distance"].mean().to_dict()
+        margin_df["normalized_distance"] = margin_df.apply(
+            lambda row: row["distance"] / class_means[row["class"]], axis=1
+        )
+
+        # Calculate quartiles for each class
+        quartiles = margin_df.groupby("class")["distance"].quantile([0.25, 0.50, 0.75]).unstack().to_dict()
+
+        # Find outliers for each class (1.5 * IQR rule)
+        class_outliers = {}
+        for cls in np.unique(margin_df["class"]):
+            cls_data = margin_df[margin_df["class"] == cls]
+            q1 = quartiles[0.25][cls]
+            q3 = quartiles[0.75][cls]
+            iqr = q3 - q1
+            lower_bound = q1 - 1.5 * iqr
+            upper_bound = q3 + 1.5 * iqr
+
+            outliers = cls_data[(cls_data["distance"] < lower_bound) | (cls_data["distance"] > upper_bound)]
+            class_outliers[str(int(cls))] = {
+                "count": len(outliers),
+                "percentage": len(outliers) / len(cls_data) * 100,
+                "neuron_ids": outliers["neuron_id"].tolist()
+                if len(outliers) < 50
+                else outliers["neuron_id"].tolist()[:50],
+            }
+
+        # Enhance the class margins with additional statistics
+        enhanced_class_margins = {}
+        for cls in np.unique(margin_df["class"]):
+            cls_str = str(int(cls))
+            enhanced_class_margins[cls_str] = {
+                "count": class_margins["count"][cls],
+                "proportion": class_proportions[cls_str],
+                "mean": class_margins["mean"][cls],
+                "median": class_margins["median"][cls],
+                "std": class_margins["std"][cls],
+                "min": class_margins["min"][cls],
+                "max": class_margins["max"][cls],
+                "quartiles": {"q1": quartiles[0.25][cls], "q2": quartiles[0.50][cls], "q3": quartiles[0.75][cls]},
+                "outliers": class_outliers[cls_str],
+            }
+
+        # Store margin statistics in results
+        margin_key = f"margin_stats_{clf_name}"
+        self.results[margin_key] = {
+            "overall": margin_stats,
+            "class_margins": enhanced_class_margins,
+            "class_distribution": {str(c): int(np.sum(self.y_original == c)) for c in np.unique(self.y_original)},
+        }
+
+        # Additional analysis for misclassified points and their margins
+        if hasattr(clf, "predict"):
+            predictions = clf.predict(self.X)
+            correct_mask = predictions == self.y
+            incorrect_mask = ~correct_mask
+
+            # Margin statistics for correctly and incorrectly classified points
+            classification_margins = {
+                "correct": {
+                    "count": np.sum(correct_mask),
+                    "mean_distance": np.mean(distances[correct_mask]) if np.any(correct_mask) else 0,
+                    "median_distance": np.median(distances[correct_mask]) if np.any(correct_mask) else 0,
+                    "std_distance": np.std(distances[correct_mask]) if np.any(correct_mask) else 0,
+                },
+                "incorrect": {
+                    "count": np.sum(incorrect_mask),
+                    "mean_distance": np.mean(distances[incorrect_mask]) if np.any(incorrect_mask) else 0,
+                    "median_distance": np.median(distances[incorrect_mask]) if np.any(incorrect_mask) else 0,
+                    "std_distance": np.std(distances[incorrect_mask]) if np.any(incorrect_mask) else 0,
+                },
+            }
+
+            self.results[margin_key]["classification_margins"] = classification_margins
+
+        return self.results[margin_key]
 
     def bootstrap_confidence_intervals(
         self, clf_name: str = "linear_svc", n_bootstraps: int = 1000, confidence_level: float = 0.95
@@ -401,20 +559,46 @@ class NeuronClassifier:
         accuracies = []
         f1_scores = []
 
+        # Store per-class F1 scores
+        class_f1_scores = {str(cls): [] for cls in np.unique(self.y)}
+
         # Perform bootstrap sampling
         for _ in range(n_bootstraps):
-            # Sample with replacement
-            indices = np.random.choice(range(len(self.X)), size=len(self.X), replace=True)
-            X_bootstrap = self.X[indices]
-            y_bootstrap = self.y[indices]
+            # Create stratified bootstrap samples
+            bootstrap_indices = []
+            for cls in np.unique(self.y):
+                # Get indices for this class
+                cls_indices = np.where(self.y == cls)[0]
+
+                # Sample with replacement from this class
+                cls_bootstrap = np.random.choice(cls_indices, size=len(cls_indices), replace=True)
+
+                # Add to our bootstrap indices
+                bootstrap_indices.extend(cls_bootstrap)
+
+            # Shuffle the indices
+            np.random.shuffle(bootstrap_indices)
+
+            # Get bootstrap sample
+            X_bootstrap = self.X[bootstrap_indices]
+            y_bootstrap = self.y[bootstrap_indices]
 
             # Split into train and test sets
             X_train, X_test, y_train, y_test = train_test_split(
-                X_bootstrap, y_bootstrap, test_size=0.2, random_state=np.random.randint(1000)
+                X_bootstrap,
+                y_bootstrap,
+                test_size=0.2,
+                random_state=np.random.randint(1000),
+                stratify=y_bootstrap,  # Ensure stratified split
             )
 
             # Clone and train the classifier
             clf_bootstrap = clone_from_sklearn_estimator(clf)
+
+            # Set class_weight='balanced' if applicable
+            if hasattr(clf_bootstrap, "class_weight"):
+                clf_bootstrap.class_weight = "balanced"
+
             clf_bootstrap.fit(X_train, y_train)
 
             # Make predictions
@@ -423,6 +607,19 @@ class NeuronClassifier:
             # Calculate metrics
             accuracies.append(accuracy_score(y_test, y_pred))
             f1_scores.append(f1_score(y_test, y_pred, average="weighted"))
+
+            # Calculate per-class F1 scores
+            if len(np.unique(y_test)) <= 2:
+                # Binary classification
+                for cls in np.unique(y_test):
+                    if cls == 1:  # positive class
+                        cls_f1 = f1_score(y_test, y_pred, average="binary")
+                        class_f1_scores[str(cls)].append(cls_f1)
+            else:
+                # Multi-class classification
+                f1s = f1_score(y_test, y_pred, average=None)
+                for i, cls in enumerate(np.unique(y_test)):
+                    class_f1_scores[str(cls)].append(f1s[i])
 
         # Calculate confidence intervals
         alpha = (1 - confidence_level) / 2
@@ -437,12 +634,24 @@ class NeuronClassifier:
         f1_upper = np.percentile(f1_scores, 100 * (1 - alpha))
         f1_mean = np.mean(f1_scores)
 
+        # For per-class F1 scores
+        class_f1_ci = {}
+        for cls, scores in class_f1_scores.items():
+            if scores:  # Check if we have scores for this class
+                class_f1_ci[cls] = {
+                    "lower": np.percentile(scores, 100 * alpha),
+                    "mean": np.mean(scores),
+                    "upper": np.percentile(scores, 100 * (1 - alpha)),
+                }
+
         # Store bootstrap results
         bootstrap_results = {
             "accuracy_ci": {"lower": acc_lower, "mean": acc_mean, "upper": acc_upper},
             "f1_score_ci": {"lower": f1_lower, "mean": f1_mean, "upper": f1_upper},
+            "class_f1_ci": class_f1_ci,
             "n_bootstraps": n_bootstraps,
             "confidence_level": confidence_level,
+            "class_distribution": {str(c): int(np.sum(self.y == c)) for c in np.unique(self.y)},
         }
 
         bootstrap_key = f"bootstrap_{clf_name}"
@@ -532,6 +741,7 @@ class NeuronClassifier:
             "linear_svc": {
                 "accuracy": self.results["linear_svc"]["accuracy"],
                 "f1_score": self.results["linear_svc"]["f1_score"],
+                "class_wise_f1": self.results["linear_svc"]["classification_report"]["weighted avg"],
                 "silhouette_score": self.results["linear_svc"]["silhouette_score"],
             },
             "svm_linear": {

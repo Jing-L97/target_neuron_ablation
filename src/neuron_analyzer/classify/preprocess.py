@@ -19,12 +19,13 @@ def get_threshold(data_path: Path, threshold_mode: str) -> float:
 class LabelAnnotator:
     """Class for annotating neuron data with labels based on thresholds."""
 
-    def __init__(self, resume: bool, threshold: float, threshold_mode: str, data_dir: Path):
+    def __init__(self, resume: bool, threshold: float, threshold_mode: str, data_dir: Path, normalize: bool = True):
         """Initialize the LabelAnnotator."""
         self.threshold_mode = threshold_mode
         self.data_dir = data_dir
         self.threshold = threshold
         self.resume = resume
+        self.normalize = normalize
         # Load step data
         self.data = JsonProcessor.load_json(self.data_dir / "features.json")
 
@@ -49,7 +50,7 @@ class LabelAnnotator:
             return 2  # Suppress neuron
         return -1
 
-    def run_pipeline(self, normalize: bool = True) -> tuple[np.ndarray, np.ndarray, list[str]]:
+    def run_pipeline(self) -> tuple[np.ndarray, np.ndarray, list[str]]:
         """Prepare data for machine learning from annotated step data."""
         # Load data if path provided
         out_path = self.data_dir / f"{self.threshold_mode}.json"
@@ -59,23 +60,17 @@ class LabelAnnotator:
         X = self.load_fea()
         y = self.annotate_label()
         # Normalize if requested
-        if normalize:
+        if self.normalize:
             scaler = StandardScaler()
             X = scaler.fit_transform(X)
         # save the results
-        self.save_dataset(X, y, out_path)
-        return X, y
+        return self.save_dataset(X, y, out_path)
 
-    def save_dataset(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        neuron_indices: list[str],
-        out_path: Path,
-    ) -> None:
+    def save_dataset(self, X: np.ndarray, y: np.ndarray, out_path: Path) -> None:
         """Save ML dataset to disk."""
         out_path.parent.mkdir(parents=True, exist_ok=True)
-        neuron_indices = list(self.data["neuron_features"].keys())
         metadata = {"threshold": self.threshold, "threshold_mode": self.threshold_mode}
+        neuron_indices = list(self.data["neuron_features"].keys())
         data = {"X": X, "y": y, "neuron_indices": neuron_indices, "metadata": metadata}
         JsonProcessor.save_json(data, out_path)
+        return X, y, neuron_indices, metadata

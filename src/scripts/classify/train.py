@@ -3,11 +3,11 @@ import argparse
 import logging
 from pathlib import Path
 
-import torch
-
 from neuron_analyzer import settings
-from neuron_analyzer.classify.preprocess import get_threshold, LabelAnnotator
-from neuron_analyzer.load_util import StepPathProcessor
+from neuron_analyzer.classify.analyses import NeuronHypothesisTester
+from neuron_analyzer.classify.classifier import NeuronClassifier
+from neuron_analyzer.classify.preprocess import LabelAnnotator, get_threshold
+from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -50,26 +50,39 @@ def configure_path(args):
     return save_path, abl_path
 
 
-def preprocess(
-    args, device: str, abl_path: Path, out_dir: Path, save_path: Path, stat_results: dict, step_dirs: list
-) -> dict:
+def run_pipeline(args, data_dir: Path, step_dirs: list, output_dir: Path) -> dict:
     """Extract optimal threshold across multiple steps."""
     # load threshold
     threshold = get_threshold(data_path, args.threshold_mode)
+    results_all = {}
     for step in step_dirs:
-        # Initialize the extractor
-        data_loader = LabelAnnotator(
-            resume: bool, class_mode: str, threshold: float, threshold_mode: str, data_dir:
-        )
-        data = extractor.run_pipeline()
-        calculator = SingleThresholdCalculator(args=args, data=data, step_num=str(step[1]), out_dir=out_dir)
-        threshold_result = calculator.run_pipeline()
-        stat_results[step[1]] = threshold_result
-    logger.info(f"Loaded threhsold stats of {len(stat_results)} steps.")
-    optimize_global = GlobalThresholdOptimizer(
-        args=args, out_dir=out_dir, stat_results=stat_results, save_path=save_path
-    )
-    optimize_global.run_pipeline()
+        # Load data preprocessor
+        try:
+            data_loader = LabelAnnotator(
+                resume=args.resume, threshold=threshold, threshold_mode=args.threshold_mode, data_dir=data_dir
+            )
+            X, y, neuron_indices, metadata = data_loader.run_pipeline()
+            # train and evlauate the classifiers
+            classifier = NeuronClassifier(
+                X=X,
+                y=y,
+                neuron_indices=neuron_indices,
+                metadata=metadata,
+                classification_mode=args.classification_mode,
+            )
+            classifier_results = classifier.run_all_analyses(test_size=0.2)
+            classifier.save_results(output_dir / "classifier_results.json")
+            # initial analyses on the results
+            hypthesis_summary = NeuronHypothesisTester(
+                classifier_results=classifier_results, out_path=output_dir / "seperation_results.json"
+            )
+            summary = hypthesis_summary.run_pipeline()
+            results_all[step[1]] = summary
+        except:
+            logger.info(f"Something wrong with step {step[1]}")
+
+    JsonProcessor.save_json(results_all, output_dir / "results_summary.json")
+    return results_all
 
 
 #######################################################################################################
@@ -80,7 +93,6 @@ def preprocess(
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
     # loop over different steps
     out_dir, abl_path = configure_path(args)
     # initilize with the step dir
@@ -88,7 +100,7 @@ def main() -> None:
     save_path = out_dir / args.filename
     stat_results, step_dirs = step_processor.resume_results(args.resume, save_path)
     # Process multiple steps
-    select_threshold(args, device, abl_path, out_dir, save_path, stat_results, step_dirs)
+    run_pipeline(args, data_dir, step_dirs, output_dir)
 
 
 if __name__ == "__main__":
