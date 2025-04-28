@@ -273,8 +273,8 @@ class GlobalThresholdOptimizer:
         stat_results: dict,
         out_dir: Path = None,
         save_path: Path | None = None,
-        binary_min_percent: float = 10.0,
-        triclass_min_percent: float = 5.0,
+        binary_min_percent: float = 5.0,
+        triclass_min_percent: float = 10.0,
     ):
         """Initialize the GlobalThresholdOptimizer."""
         self.stat_results = stat_results

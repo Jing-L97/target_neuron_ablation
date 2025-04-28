@@ -6,11 +6,7 @@ from pathlib import Path
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.classify.sel_threshold import (
-    GlobalThresholdOptimizer,
-    NeuronFeatureExtractor,
-    SingleThresholdCalculator,
-)
+from neuron_analyzer.classify.preprocess import get_threshold, LabelAnnotator
 from neuron_analyzer.load_util import StepPathProcessor
 
 # Setup logging
@@ -20,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Select thresholds for neuron classifications.")
+    parser = argparse.ArgumentParser(description="Train classifier to seperate different neurons.")
 
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
@@ -54,14 +50,16 @@ def configure_path(args):
     return save_path, abl_path
 
 
-def select_threshold(
+def preprocess(
     args, device: str, abl_path: Path, out_dir: Path, save_path: Path, stat_results: dict, step_dirs: list
 ) -> dict:
     """Extract optimal threshold across multiple steps."""
+    # load threshold
+    threshold = get_threshold(data_path, args.threshold_mode)
     for step in step_dirs:
         # Initialize the extractor
-        extractor = NeuronFeatureExtractor(
-            args=args, abl_path=abl_path, step_path=step[0], step_num=str(step[1]), device=device, out_dir=out_dir
+        data_loader = LabelAnnotator(
+            resume: bool, class_mode: str, threshold: float, threshold_mode: str, data_dir:
         )
         data = extractor.run_pipeline()
         calculator = SingleThresholdCalculator(args=args, data=data, step_num=str(step[1]), out_dir=out_dir)
