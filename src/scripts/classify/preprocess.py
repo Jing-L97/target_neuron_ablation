@@ -3,8 +3,6 @@ import argparse
 import logging
 
 from neuron_analyzer import settings
-from neuron_analyzer.classify.analyses import NeuronHypothesisTester
-from neuron_analyzer.classify.classifier import NeuronClassifier
 from neuron_analyzer.classify.preprocess import LabelAnnotator, get_threshold
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
 
@@ -89,26 +87,7 @@ def classify_neuron(args, data_path, model_path, eval_path, step, threshold):
         resume=args.resume,
         threshold=threshold,
     )
-    X, y, neuron_indices, metadata = data_loader.run_pipeline()
-    # train and evlauate the classifiers
-    classifier = NeuronClassifier(
-        X=X,
-        y=y,
-        model_path=model_path / str(step[1]) / str(args.data_range_end),
-        eval_path=eval_path / str(step[1]) / str(args.data_range_end),
-        neuron_indices=neuron_indices,
-        metadata=metadata,
-        class_num=args.class_num,
-        test_size=0.2,
-    )
-    classifier_results = classifier.run_pipeline()
-    # initial analyses on the results
-    hypthesis_summary = NeuronHypothesisTester(
-        classifier_results=classifier_results,
-        out_path=eval_path / str(step[1]) / str(args.data_range_end) / "seperation_analysis.json",
-    )
-    summary = hypthesis_summary.run_pipeline()
-    return summary
+    data_loader.run_pipeline()
 
 
 #######################################################################################################

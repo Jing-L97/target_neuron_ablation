@@ -57,7 +57,7 @@ class NeuronClassifier:
         model_path: Path,
         eval_path: Path,
         metadata: dict | None = None,
-        classification_mode: str = "three_class",
+        class_num: int = 2,
         test_size: float = 0.2,
         random_state: int = 42,
     ):
@@ -66,7 +66,7 @@ class NeuronClassifier:
         self.y_original = y
         self.neuron_indices = neuron_indices
         self.metadata = metadata or {}
-        self.classification_mode = classification_mode
+        self.class_num = class_num
         self.random_state = random_state
         self.test_size = test_size
         self.model_path = model_path
@@ -74,7 +74,7 @@ class NeuronClassifier:
         self.model_path.mkdir(parents=True, exist_ok=True)
         self.eval_path.mkdir(parents=True, exist_ok=True)
         # Transform labels if using two-class mode
-        if classification_mode == "binary":
+        if class_num == 2:
             # Convert to binary classification: 0 for common, 1 for special (boost or suppress)
             self.y = np.array([0 if label == 0 else 1 for label in y])
         else:
@@ -105,14 +105,13 @@ class NeuronClassifier:
         # Initialize and train the SVM classifier
         clf = SVC(kernel=kernel, C=C, gamma=gamma, probability=True, random_state=self.random_state)
         clf.fit(self.X_train, self.y_train)
-
         # Make predictions
         y_pred = clf.predict(self.X_test)
 
         # Calculate evaluation metrics
         accuracy = accuracy_score(self.y_test, y_pred)
-        f1 = f1_score(self.y_test, y_pred, average="weighted")
-        report = classification_report(self.y_test, y_pred, output_dict=True)
+        f1 = f1_score(self.y_test, y_pred, average="weighted", zero_division=0)
+        report = classification_report(self.y_test, y_pred, output_dict=True, zero_division=0)
 
         # Calculate silhouette score if there are enough samples
         silhouette = None
@@ -133,7 +132,6 @@ class NeuronClassifier:
                 "b": clf.intercept_[0] if len(clf.intercept_) == 1 else clf.intercept_,
                 "support_vectors": clf.support_vectors_,
             }
-
         # Store results
         results = {
             "accuracy": accuracy,
@@ -143,7 +141,6 @@ class NeuronClassifier:
             "silhouette_score": silhouette,
             "model_params": {"kernel": kernel, "C": C, "gamma": gamma},
         }
-
         self.results[model_name] = results
         return results
 
@@ -173,8 +170,8 @@ class NeuronClassifier:
 
         # Calculate evaluation metrics
         accuracy = accuracy_score(self.y_test, y_pred)
-        f1 = f1_score(self.y_test, y_pred, average="weighted")
-        report = classification_report(self.y_test, y_pred, output_dict=True)
+        f1 = f1_score(self.y_test, y_pred, average="weighted", zero_division=0)
+        report = classification_report(self.y_test, y_pred, output_dict=True, zero_division=0)
 
         # Calculate silhouette score if possible
         silhouette = None
@@ -227,8 +224,8 @@ class NeuronClassifier:
 
             # Calculate metrics
             accuracy = accuracy_score(self.y_test, y_pred)
-            f1 = f1_score(self.y_test, y_pred, average="weighted")
-            report = classification_report(self.y_test, y_pred, output_dict=True)
+            f1 = f1_score(self.y_test, y_pred, average="weighted", zero_division=0)
+            report = classification_report(self.y_test, y_pred, output_dict=True, zero_division=0)
 
             # Calculate silhouette score if possible
             silhouette = None
@@ -295,7 +292,7 @@ class NeuronClassifier:
 
             # Calculate metrics
             accuracies.append(accuracy_score(self.y_test, y_pred))
-            f1_scores.append(f1_score(self.y_test, y_pred, average="weighted"))
+            f1_scores.append(f1_score(self.y_test, y_pred, average="weighted", zero_division=0))
 
             # Calculate per-class F1 scores
             if len(np.unique(self.y)) <= 2:
@@ -340,7 +337,7 @@ class NeuronClassifier:
 
         return cv_results
 
-    def perform_permutation_test(self, classifier_type: str = "linear_svc", n_permutations: int = 1000) -> dict:
+    def perform_permutation_test(self, classifier_type: str = "linear_svc", n_permutations: int = 100) -> dict:
         """Perform permutation test to validate statistical significance of hyperplanes."""
         # Initialize the classifier
         if classifier_type == "linear_svc":
@@ -723,7 +720,7 @@ class NeuronClassifier:
 
         # Compile summary of key results
         summary = {
-            "classification_mode": self.classification_mode,
+            "class_num": self.class_num,
             "sample_counts": {
                 "total": len(self.y),
                 "class_distribution": {str(c): int(np.sum(self.y == c)) for c in np.unique(self.y)},
@@ -768,7 +765,7 @@ class NeuronClassifier:
 
         # Add metadata
         results_copy["metadata"] = {
-            "classification_mode": self.classification_mode,
+            "class_num": self.class_num,
             "feature_dim": self.X.shape[1],
             "num_samples": self.X.shape[0],
             "timestamp": datetime.now().isoformat(),

@@ -72,22 +72,14 @@ class LabelAnnotator:
 
     def load_fea(self) -> list:
         """Load feature vectors."""
-        """
-        for index, fea in self.data["neuron_features"].items():
-            logger.info(f"{index}:{len(fea)}")
-        """
-        values = list(self.data["neuron_features"].values())
-        logger.info(set(values))
-        # return np.array(list(self.data["neuron_features"].values()))
-        return list(self.data["neuron_features"].values())
+        return np.array(list(self.data["neuron_features"].values()))
 
     def annotate_label(self) -> list:
         """Annotate labels for each neuron."""
         self.labels = []
         for delta_loss in self.data["delta_losses"].values():
             self.labels.append(self._generate_labels(delta_loss))
-        # return np.array(self.labels)
-        return self.labels
+        return np.array(self.labels)
 
     def _generate_labels(self, delta_loss: float) -> dict[str, int]:
         """Generate class labels based on delta loss values and threshold."""
