@@ -1,19 +1,30 @@
+import logging
 from pathlib import Path
 
 from neuron_analyzer.load_util import JsonProcessor
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 class NeuronHypothesisTester:
     """Class for testing the hyperplane separability hypothesis on neuron data."""
 
-    def __init__(self, classifier_results, out_path: Path):
+    def __init__(self, classifier_results, out_path: Path, resume: bool):
         """Initialize the hypothesis tester."""
         self.results = classifier_results
         self.out_path = out_path
+        self.resume = resume
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
 
     def run_pipeline(self) -> dict:
         """Summarize the evidence for hyperplane separation of neuron groups."""
+        if self.resume and self.out_path.is_file():
+            # load and return the file
+            logger.info(f"Resume existing file from {self.out_path}")
+            return JsonProcessor.load_json(self.out_path)
+
         # Check if we have all the necessary results
         required_keys = [
             "linear_svc",
@@ -90,6 +101,7 @@ class NeuronHypothesisTester:
 
         # Save to file
         JsonProcessor.save_json(summary, self.out_path)
+        logger.info(f"Save file to {self.out_path}")
         return summary
 
     def _generate_conclusion(self, evidence_level, accuracy, pvalue, margin):

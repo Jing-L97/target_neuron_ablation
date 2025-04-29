@@ -1,4 +1,6 @@
+import logging
 import typing as t
+from collections import Counter
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +9,10 @@ from sklearn.preprocessing import StandardScaler
 from neuron_analyzer.load_util import JsonProcessor
 
 T = t.TypeVar("T")
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 
 def get_threshold(data_path: Path, threshold_mode: str) -> float:
@@ -26,19 +32,62 @@ class LabelAnnotator:
         self.threshold = threshold
         self.resume = resume
         self.normalize = normalize
-        # Load step data
-        self.data = JsonProcessor.load_json(self.data_dir / "features.json")
+        self.data = self.filter_data()
 
-    def load_feal(self) -> list:
+    def filter_data(self) -> dict:
+        """Filter dictionary to keep only features with the most common length."""
+        # Load step data
+        data = JsonProcessor.load_json(self.data_dir / "features.json")
+
+        # Extract lengths and indices
+        len_lst = []
+        index_lst = []
+
+        for index, fea in data["neuron_features"].items():
+            len_lst.append(len(fea))
+            index_lst.append(index)
+
+        # Count occurrences of each length
+        length_counts = Counter(len_lst)
+        logger.info(f"Feature length distribution: {dict(length_counts)}")
+
+        # Find the most common length
+        most_common_length = length_counts.most_common(1)[0][0]
+        logger.info(f"Most common feature length: {most_common_length}")
+
+        # Filter the data to include only features with the most common length
+        self.data = {"neuron_features": {}, "delta_losses": {}}
+
+        for index, fea in data["neuron_features"].items():
+            if len(fea) == most_common_length:
+                self.data["neuron_features"][index] = fea
+                # Also get the corresponding delta loss if it exists
+                if index in data["delta_losses"]:
+                    self.data["delta_losses"][index] = data["delta_losses"][index]
+
+        logger.info(f"Original data had {len(data['neuron_features'])} features")
+        logger.info(f"Filtered data has {len(self.data['neuron_features'])} features")
+
+        return self.data
+
+    def load_fea(self) -> list:
         """Load feature vectors."""
-        return np.array(self.data["neuron_features"].values())
+        """
+        for index, fea in self.data["neuron_features"].items():
+            logger.info(f"{index}:{len(fea)}")
+        """
+        values = list(self.data["neuron_features"].values())
+        logger.info(set(values))
+        # return np.array(list(self.data["neuron_features"].values()))
+        return list(self.data["neuron_features"].values())
 
     def annotate_label(self) -> list:
         """Annotate labels for each neuron."""
         self.labels = []
-        for _, delta_loss in self.data.items():
+        for delta_loss in self.data["delta_losses"].values():
             self.labels.append(self._generate_labels(delta_loss))
-        return np.array(self.labels)
+        # return np.array(self.labels)
+        return self.labels
 
     def _generate_labels(self, delta_loss: float) -> dict[str, int]:
         """Generate class labels based on delta loss values and threshold."""
@@ -55,6 +104,7 @@ class LabelAnnotator:
         # Load data if path provided
         out_path = self.data_dir / f"{self.threshold_mode}.json"
         if self.resume and out_path.is_file():
+            logger.info(f"Resume existing dataset from {out_path}")
             return JsonProcessor.load_json(out_path)
         # load features and labels
         X = self.load_fea()
@@ -73,4 +123,5 @@ class LabelAnnotator:
         neuron_indices = list(self.data["neuron_features"].keys())
         data = {"X": X, "y": y, "neuron_indices": neuron_indices, "metadata": metadata}
         JsonProcessor.save_json(data, out_path)
+        logger.info(f"Save labeled dataset to {out_path}")
         return X, y, neuron_indices, metadata

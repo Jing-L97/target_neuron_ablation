@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 import argparse
 import logging
-from pathlib import Path
 
 from neuron_analyzer import settings
 from neuron_analyzer.classify.analyses import NeuronHypothesisTester
@@ -18,21 +17,22 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train classifier to seperate different neurons.")
 
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
+    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-410m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
     )
-    parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
+    parser.add_argument(
+        "--threshold_mode",
+        type=str,
+        default="unified",
+        choices=["binary", "unified", "triclass"],
+        help="which optimal threhosld to choose from",
+    )
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
-    parser.add_argument("--filename", type=str, default="global_threshold_results.json", help="Target stat filename")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
-    parser.add_argument("--top_n", type=int, default=10, help="palceholder to intilize the class")
-    parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
-    parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
-    parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
     return parser.parse_args()
 
 
@@ -44,45 +44,65 @@ def parse_args() -> argparse.Namespace:
 def configure_path(args):
     """Configure save path based on the setting."""
     save_heuristic = f"{args.heuristic}_med" if args.sel_by_med else args.heuristic
-    save_path = settings.PATH.classify_dir / "data" / args.vector / args.model / save_heuristic
-    abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
-    save_path.mkdir(parents=True, exist_ok=True)
-    return save_path, abl_path
+    data_path = settings.PATH.classify_dir / "data" / args.vector / args.model / save_heuristic
+    model_path = settings.PATH.classify_dir / "model" / args.vector / args.model / save_heuristic
+    eval_path = settings.PATH.classify_dir / "eval" / args.vector / args.model / save_heuristic
+    model_path.mkdir(parents=True, exist_ok=True)
+    eval_path.mkdir(parents=True, exist_ok=True)
+    return (
+        data_path,
+        model_path,
+        eval_path,
+    )
 
 
-def run_pipeline(args, data_dir: Path, step_dirs: list, output_dir: Path) -> dict:
+def run_pipeline(args, data_path, model_path, eval_path, step_dirs: list, results_all: dict) -> dict:
     """Extract optimal threshold across multiple steps."""
     # load threshold
-    threshold = get_threshold(data_path, args.threshold_mode)
+    threshold = get_threshold(
+        data_path=data_path / "global_threshold_results.json", threshold_mode=f"{args.threshold_mode}_recommendation"
+    )
+    logger.info(f"{args.threshold_mode} threshold has been loaded: {threshold}")
     results_all = {}
     for step in step_dirs:
         # Load data preprocessor
-        try:
-            data_loader = LabelAnnotator(
-                resume=args.resume, threshold=threshold, threshold_mode=args.threshold_mode, data_dir=data_dir
-            )
-            X, y, neuron_indices, metadata = data_loader.run_pipeline()
-            # train and evlauate the classifiers
-            classifier = NeuronClassifier(
-                X=X,
-                y=y,
-                neuron_indices=neuron_indices,
-                metadata=metadata,
-                classification_mode=args.classification_mode,
-            )
-            classifier_results = classifier.run_all_analyses(test_size=0.2)
-            classifier.save_results(output_dir / "classifier_results.json")
-            # initial analyses on the results
-            hypthesis_summary = NeuronHypothesisTester(
-                classifier_results=classifier_results, out_path=output_dir / "seperation_results.json"
-            )
-            summary = hypthesis_summary.run_pipeline()
-            results_all[step[1]] = summary
-        except:
-            logger.info(f"Something wrong with step {step[1]}")
-
-    JsonProcessor.save_json(results_all, output_dir / "results_summary.json")
+        # try:
+        summary = classify_neuron(args, data_path, model_path, eval_path, step, threshold)
+        results_all[step[1]] = summary
+    # except:
+    # logger.info(f"Something wrong with step {step[1]}")
+    JsonProcessor.save_json(results_all, eval_path / "results_summary.json")
     return results_all
+
+
+def classify_neuron(args, data_path, model_path, eval_path, step, threshold):
+    """Train and evaluate classifier from single step."""
+    data_loader = LabelAnnotator(
+        threshold_mode=args.threshold_mode,
+        data_dir=data_path / str(step[1]) / str(args.data_range_end),
+        resume=args.resume,
+        threshold=threshold,
+    )
+    X, y, neuron_indices, metadata = data_loader.run_pipeline()
+    # train and evlauate the classifiers
+    classifier = NeuronClassifier(
+        X=X,
+        y=y,
+        model_path=model_path / str(step[1]) / str(args.data_range_end),
+        eval_path=eval_path / str(step[1]) / str(args.data_range_end),
+        neuron_indices=neuron_indices,
+        metadata=metadata,
+        classification_mode=args.classification_mode,
+        test_size=0.2,
+    )
+    classifier_results = classifier.run_pipeline()
+    # initial analyses on the results
+    hypthesis_summary = NeuronHypothesisTester(
+        classifier_results=classifier_results,
+        out_path=eval_path / str(step[1]) / str(args.data_range_end) / "seperation_analysis.json",
+    )
+    summary = hypthesis_summary.run_pipeline()
+    return summary
 
 
 #######################################################################################################
@@ -94,13 +114,11 @@ def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
     # loop over different steps
-    out_dir, abl_path = configure_path(args)
+    data_path, model_path, eval_path = configure_path(args)
     # initilize with the step dir
-    step_processor = StepPathProcessor(abl_path)
-    save_path = out_dir / args.filename
-    stat_results, step_dirs = step_processor.resume_results(args.resume, save_path)
-    # Process multiple steps
-    run_pipeline(args, data_dir, step_dirs, output_dir)
+    step_processor = StepPathProcessor(data_path)
+    results_all, step_dirs = step_processor.resume_results(args.resume, eval_path / "global_threshold_results.json")
+    run_pipeline(args, data_path, model_path, eval_path, step_dirs, results_all)
 
 
 if __name__ == "__main__":

@@ -1,4 +1,3 @@
-import json
 import logging
 from datetime import datetime
 from pathlib import Path
@@ -12,6 +11,8 @@ from sklearn.metrics import accuracy_score, classification_report, confusion_mat
 from sklearn.model_selection import StratifiedKFold, permutation_test_score, train_test_split
 from sklearn.neural_network import MLPClassifier
 from sklearn.svm import SVC, LinearSVC
+
+from neuron_analyzer.load_util import JsonProcessor
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -53,8 +54,11 @@ class NeuronClassifier:
         X: np.ndarray,
         y: np.ndarray,
         neuron_indices: list[str],
+        model_path: Path,
+        eval_path: Path,
         metadata: dict | None = None,
         classification_mode: str = "three_class",
+        test_size: float = 0.2,
         random_state: int = 42,
     ):
         """Initialize the NeuronClassifier."""
@@ -64,7 +68,11 @@ class NeuronClassifier:
         self.metadata = metadata or {}
         self.classification_mode = classification_mode
         self.random_state = random_state
-
+        self.test_size = test_size
+        self.model_path = model_path
+        self.eval_path = eval_path
+        self.model_path.mkdir(parents=True, exist_ok=True)
+        self.eval_path.mkdir(parents=True, exist_ok=True)
         # Transform labels if using two-class mode
         if classification_mode == "binary":
             # Convert to binary classification: 0 for common, 1 for special (boost or suppress)
@@ -82,38 +90,35 @@ class NeuronClassifier:
         self.class_weights = {
             str(c): len(self.y) / (len(np.unique(self.y)) * np.sum(self.y == c)) for c in np.unique(self.y)
         }
+        # initialize data split
+        self.X_train, self.X_test, self.y_train, self.y_test = self.prepare_data()
 
-    def prepare_data(self, test_size: float = 0.2) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+    def prepare_data(self) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
         """Split data into training and testing sets."""
-        X_train, X_test, y_train, y_test = train_test_split(
-            self.X, self.y, test_size=test_size, random_state=self.random_state, stratify=self.y
+        self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
+            self.X, self.y, test_size=self.test_size, random_state=self.random_state, stratify=self.y
         )
+        return self.X_train, self.X_test, self.y_train, self.y_test
 
-        return X_train, X_test, y_train, y_test
-
-    def train_svm(self, kernel: str = "linear", C: float = 1.0, gamma: str = "scale", test_size: float = 0.2) -> dict:
+    def train_svm(self, kernel: str = "linear", C: float = 1.0, gamma: str = "scale") -> dict:
         """Train an SVM classifier and evaluate its performance."""
-        # TODO: check parameter setting
-        # Prepare data
-        X_train, X_test, y_train, y_test = self.prepare_data(test_size)
-
         # Initialize and train the SVM classifier
         clf = SVC(kernel=kernel, C=C, gamma=gamma, probability=True, random_state=self.random_state)
-        clf.fit(X_train, y_train)
+        clf.fit(self.X_train, self.y_train)
 
         # Make predictions
-        y_pred = clf.predict(X_test)
+        y_pred = clf.predict(self.X_test)
 
         # Calculate evaluation metrics
-        accuracy = accuracy_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred, average="weighted")
-        report = classification_report(y_test, y_pred, output_dict=True)
+        accuracy = accuracy_score(self.y_test, y_pred)
+        f1 = f1_score(self.y_test, y_pred, average="weighted")
+        report = classification_report(self.y_test, y_pred, output_dict=True)
 
         # Calculate silhouette score if there are enough samples
         silhouette = None
-        if len(np.unique(y_test)) > 1:
+        if len(np.unique(self.y_test)) > 1:
             try:
-                silhouette = silhouette_score(X_test, y_pred)
+                silhouette = silhouette_score(self.X_test, y_pred)
             except Exception:
                 silhouette = None
 
@@ -134,7 +139,7 @@ class NeuronClassifier:
             "accuracy": accuracy,
             "f1_score": f1,
             "classification_report": report,
-            "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
+            "confusion_matrix": confusion_matrix(self.y_test, y_pred).tolist(),
             "silhouette_score": silhouette,
             "model_params": {"kernel": kernel, "C": C, "gamma": gamma},
         }
@@ -149,12 +154,8 @@ class NeuronClassifier:
         loss: str = "squared_hinge",
         dual: bool = True,
         class_weight: str = "balanced",  # use weighted loss for class imbalance
-        test_size: float = 0.2,
     ) -> dict:
         """Train a LinearSVC classifier (optimized for linear kernel)."""
-        # Prepare data
-        X_train, X_test, y_train, y_test = self.prepare_data(test_size)
-
         # Initialize and train the LinearSVC classifier
         clf = LinearSVC(
             C=C,
@@ -165,21 +166,21 @@ class NeuronClassifier:
             random_state=self.random_state,
             max_iter=10000,  # Increased to ensure convergence
         )
-        clf.fit(X_train, y_train)
+        clf.fit(self.X_train, self.y_train)
 
         # Make predictions
-        y_pred = clf.predict(X_test)
+        y_pred = clf.predict(self.X_test)
 
         # Calculate evaluation metrics
-        accuracy = accuracy_score(y_test, y_pred)
-        f1 = f1_score(y_test, y_pred, average="weighted")
-        report = classification_report(y_test, y_pred, output_dict=True)
+        accuracy = accuracy_score(self.y_test, y_pred)
+        f1 = f1_score(self.y_test, y_pred, average="weighted")
+        report = classification_report(self.y_test, y_pred, output_dict=True)
 
         # Calculate silhouette score if possible
         silhouette = None
-        if len(np.unique(y_test)) > 1:
+        if len(np.unique(self.y_test)) > 1:
             try:
-                silhouette = silhouette_score(X_test, y_pred)
+                silhouette = silhouette_score(self.X_test, y_pred)
             except Exception:
                 silhouette = None
 
@@ -198,7 +199,7 @@ class NeuronClassifier:
             "accuracy": accuracy,
             "f1_score": f1,
             "classification_report": report,
-            "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
+            "confusion_matrix": confusion_matrix(self.y_test, y_pred).tolist(),
             "silhouette_score": silhouette,
             "model_params": {"C": C, "penalty": penalty, "loss": loss, "dual": dual},
         }
@@ -206,11 +207,8 @@ class NeuronClassifier:
         self.results[model_name] = results
         return results
 
-    def train_comparison_classifiers(self, test_size: float = 0.2) -> dict:
+    def train_comparison_classifiers(self) -> dict:
         """Train additional classifiers to verify the hyperplane."""
-        # Prepare data
-        X_train, X_test, y_train, y_test = self.prepare_data(test_size)
-
         # Initialize classifiers
         classifiers = {
             "random_forest": RandomForestClassifier(n_estimators=100, random_state=self.random_state),
@@ -221,22 +219,22 @@ class NeuronClassifier:
 
         # Train and evaluate each classifier
         for name, clf in classifiers.items():
-            clf.fit(X_train, y_train)
-            y_pred = clf.predict(X_test)
+            clf.fit(self.X_train, self.y_train)
+            y_pred = clf.predict(self.X_test)
 
             # Store the model
             self.classifiers[name] = clf
 
             # Calculate metrics
-            accuracy = accuracy_score(y_test, y_pred)
-            f1 = f1_score(y_test, y_pred, average="weighted")
-            report = classification_report(y_test, y_pred, output_dict=True)
+            accuracy = accuracy_score(self.y_test, y_pred)
+            f1 = f1_score(self.y_test, y_pred, average="weighted")
+            report = classification_report(self.y_test, y_pred, output_dict=True)
 
             # Calculate silhouette score if possible
             silhouette = None
-            if len(np.unique(y_test)) > 1:
+            if len(np.unique(self.y_test)) > 1:
                 try:
-                    silhouette = silhouette_score(X_test, y_pred)
+                    silhouette = silhouette_score(self.X_test, y_pred)
                 except Exception:
                     silhouette = None
 
@@ -249,7 +247,7 @@ class NeuronClassifier:
                 "accuracy": accuracy,
                 "f1_score": f1,
                 "classification_report": report,
-                "confusion_matrix": confusion_matrix(y_test, y_pred).tolist(),
+                "confusion_matrix": confusion_matrix(self.y_test, y_pred).tolist(),
                 "silhouette_score": silhouette,
             }
 
@@ -286,31 +284,31 @@ class NeuronClassifier:
 
         # Perform cross-validation
         for train_idx, test_idx in kfold.split(self.X, self.y):
-            X_train, X_test = self.X[train_idx], self.X[test_idx]
-            y_train, y_test = self.y[train_idx], self.y[test_idx]
+            self.X_train, self.X_test = self.X[train_idx], self.X[test_idx]
+            self.y_train, self.y_test = self.y[train_idx], self.y[test_idx]
 
             # Train the model
-            clf.fit(X_train, y_train)
+            clf.fit(self.X_train, self.y_train)
 
             # Make predictions
-            y_pred = clf.predict(X_test)
+            y_pred = clf.predict(self.X_test)
 
             # Calculate metrics
-            accuracies.append(accuracy_score(y_test, y_pred))
-            f1_scores.append(f1_score(y_test, y_pred, average="weighted"))
+            accuracies.append(accuracy_score(self.y_test, y_pred))
+            f1_scores.append(f1_score(self.y_test, y_pred, average="weighted"))
 
             # Calculate per-class F1 scores
             if len(np.unique(self.y)) <= 2:
                 # Binary classification
                 for i, cls in enumerate(np.unique(self.y)):
-                    cls_f1 = f1_score(y_test, y_pred, average="binary") if i == 1 else None
+                    cls_f1 = f1_score(self.y_test, y_pred, average="binary") if i == 1 else None
 
                     if cls_f1 is not None:
                         class_f1_scores[str(cls)].append(cls_f1)
             else:
                 # Multi-class classification
-                f1s = f1_score(y_test, y_pred, average=None)
-                for i, cls in enumerate(np.unique(y_test)):
+                f1s = f1_score(self.y_test, y_pred, average=None)
+                for i, cls in enumerate(np.unique(self.y_test)):
                     class_f1_scores[str(cls)].append(f1s[i])
 
         # Calculate mean and std of metrics
@@ -342,13 +340,8 @@ class NeuronClassifier:
 
         return cv_results
 
-    def perform_permutation_test(
-        self, classifier_type: str = "linear_svc", n_permutations: int = 1000, test_size: float = 0.2
-    ) -> dict:
+    def perform_permutation_test(self, classifier_type: str = "linear_svc", n_permutations: int = 1000) -> dict:
         """Perform permutation test to validate statistical significance of hyperplanes."""
-        # Prepare data
-        X_train, X_test, y_train, y_test = self.prepare_data(test_size)
-
         # Initialize the classifier
         if classifier_type == "linear_svc":
             clf = LinearSVC(random_state=self.random_state, max_iter=10000)
@@ -358,8 +351,8 @@ class NeuronClassifier:
         # Perform permutation test
         score, perm_scores, pvalue = permutation_test_score(
             clf,
-            X_train,
-            y_train,
+            self.X_train,
+            self.y_train,
             scoring="accuracy",
             cv=5,
             n_permutations=n_permutations,
@@ -380,7 +373,7 @@ class NeuronClassifier:
 
         return perm_test_results
 
-    def calculate_margin_statistics(self, clf_name: str = "linear_svc") -> Dict:
+    def calculate_margin_statistics(self, clf_name: str = "linear_svc") -> dict:
         """Calculate statistics about the margin distribution."""
         if clf_name not in self.classifiers:
             raise ValueError(f"Classifier '{clf_name}' not found. Train it first.")
@@ -584,10 +577,10 @@ class NeuronClassifier:
             y_bootstrap = self.y[bootstrap_indices]
 
             # Split into train and test sets
-            X_train, X_test, y_train, y_test = train_test_split(
+            self.X_train, self.X_test, self.y_train, self.y_test = train_test_split(
                 X_bootstrap,
                 y_bootstrap,
-                test_size=0.2,
+                test_size=self.test_size,
                 random_state=np.random.randint(1000),
                 stratify=y_bootstrap,  # Ensure stratified split
             )
@@ -599,26 +592,26 @@ class NeuronClassifier:
             if hasattr(clf_bootstrap, "class_weight"):
                 clf_bootstrap.class_weight = "balanced"
 
-            clf_bootstrap.fit(X_train, y_train)
+            clf_bootstrap.fit(self.X_train, self.y_train)
 
             # Make predictions
-            y_pred = clf_bootstrap.predict(X_test)
+            y_pred = clf_bootstrap.predict(self.X_test)
 
             # Calculate metrics
-            accuracies.append(accuracy_score(y_test, y_pred))
-            f1_scores.append(f1_score(y_test, y_pred, average="weighted"))
+            accuracies.append(accuracy_score(self.y_test, y_pred))
+            f1_scores.append(f1_score(self.y_test, y_pred, average="weighted"))
 
             # Calculate per-class F1 scores
-            if len(np.unique(y_test)) <= 2:
+            if len(np.unique(self.y_test)) <= 2:
                 # Binary classification
-                for cls in np.unique(y_test):
+                for cls in np.unique(self.y_test):
                     if cls == 1:  # positive class
-                        cls_f1 = f1_score(y_test, y_pred, average="binary")
+                        cls_f1 = f1_score(self.y_test, y_pred, average="binary")
                         class_f1_scores[str(cls)].append(cls_f1)
             else:
                 # Multi-class classification
-                f1s = f1_score(y_test, y_pred, average=None)
-                for i, cls in enumerate(np.unique(y_test)):
+                f1s = f1_score(self.y_test, y_pred, average=None)
+                for i, cls in enumerate(np.unique(self.y_test)):
                     class_f1_scores[str(cls)].append(f1s[i])
 
         # Calculate confidence intervals
@@ -659,25 +652,22 @@ class NeuronClassifier:
 
         return bootstrap_results
 
-    def analyze_misclassifications(self, clf_name: str = "linear_svc", test_size: float = 0.2) -> dict:
+    def analyze_misclassifications(self, clf_name: str = "linear_svc") -> dict:
         """Analyze misclassified samples to identify potential subclusters or outliers."""
         if clf_name not in self.classifiers:
             raise ValueError(f"Classifier '{clf_name}' not found. Train it first.")
 
         clf = self.classifiers[clf_name]
 
-        # Prepare data
-        X_train, X_test, y_train, y_test = self.prepare_data(test_size)
-
         # Make predictions
-        y_pred = clf.predict(X_test)
+        y_pred = clf.predict(self.X_test)
 
         # Find misclassified samples
-        misclassified_indices = np.where(y_test != y_pred)[0]
-        correctly_classified_indices = np.where(y_test == y_pred)[0]
+        misclassified_indices = np.where(self.y_test != y_pred)[0]
+        correctly_classified_indices = np.where(self.y_test == y_pred)[0]
 
         # Get the original indices
-        indices_in_test = np.arange(len(self.X))[len(X_train) :]
+        indices_in_test = np.arange(len(self.X))[len(self.X_train) :]
         misclassified_original_indices = indices_in_test[misclassified_indices]
 
         # Get the corresponding neuron indices
@@ -686,7 +676,7 @@ class NeuronClassifier:
         # Analyze misclassifications by class
         true_vs_pred = {}
         for i in misclassified_indices:
-            true_class = int(y_test[i])
+            true_class = int(self.y_test[i])
             pred_class = int(y_pred[i])
             key = f"{true_class}_{pred_class}"
             if key not in true_vs_pred:
@@ -695,9 +685,9 @@ class NeuronClassifier:
 
         # Create misclassification summary
         misclass_analysis = {
-            "total_test_samples": len(y_test),
+            "total_test_samples": len(self.y_test),
             "misclassified_count": len(misclassified_indices),
-            "misclassification_rate": len(misclassified_indices) / len(y_test),
+            "misclassification_rate": len(misclassified_indices) / len(self.y_test),
             "class_confusion": true_vs_pred,
             "misclassified_neuron_indices": misclassified_neuron_indices,
         }
@@ -707,17 +697,17 @@ class NeuronClassifier:
 
         return misclass_analysis
 
-    def run_all_analyses(self, test_size: float = 0.2) -> dict:
+    def run_pipeline(self) -> dict:
         """Run all classification and analysis methods."""
         # Train classifiers
         logger.info("Training Linear SVC...")
-        self.train_linear_svc(test_size=test_size)
+        self.train_linear_svc()
 
         logger.info("Training SVM with linear kernel...")
-        self.train_svm(kernel="linear", test_size=test_size)
+        self.train_svm(kernel="linear")
 
         logger.info("Training comparison classifiers...")
-        self.train_comparison_classifiers(test_size=test_size)
+        self.train_comparison_classifiers()
 
         logger.info("Performing cross-validation...")
         self.cross_validate_svm(kernel="linear", n_splits=5)
@@ -729,7 +719,7 @@ class NeuronClassifier:
         self.calculate_margin_statistics(clf_name="linear_svc")
 
         logger.info("Analyzing misclassifications...")
-        self.analyze_misclassifications(clf_name="linear_svc", test_size=test_size)
+        self.analyze_misclassifications(clf_name="linear_svc")
 
         # Compile summary of key results
         summary = {
@@ -762,14 +752,11 @@ class NeuronClassifier:
         }
 
         self.results["summary"] = summary
+        self._save_results()
         return summary
 
-    def save_results(self, output_path: Path) -> None:
+    def _save_results(self) -> None:
         """Save all results and models to disk."""
-        # Create output directory
-        output_path = Path(output_path)
-        output_path.mkdir(parents=True, exist_ok=True)
-
         # Save results JSON
         results_copy = {k: v for k, v in self.results.items()}
 
@@ -788,12 +775,11 @@ class NeuronClassifier:
             "original_metadata": self.metadata,
         }
 
-        # Save results as JSON
-        with open(output_path / "classification_results.json", "w") as f:
-            json.dump(results_copy, f, indent=2)
-
         # Save models
         for name, clf in self.classifiers.items():
-            joblib.dump(clf, output_path / f"{name}_model.joblib")
+            joblib.dump(clf, self.model_path / f"{name}.joblib")
+        logger.info(f"Models saved to {self.model_path}")
 
-        logger.info(f"Results and models saved to {output_path}")
+        # Save results as JSON
+        JsonProcessor.save_json(results_copy, self.eval_path / "classification_results.json")
+        logger.info(f"Results saved to {self.eval_path}")
