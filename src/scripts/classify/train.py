@@ -3,9 +3,10 @@ import argparse
 import logging
 
 from neuron_analyzer import settings
+from neuron_analyzer.analysis.geometry_util import NeuronGroupAnalyzer
 from neuron_analyzer.classify.analyses import NeuronHypothesisTester
 from neuron_analyzer.classify.classifier import NeuronClassifier
-from neuron_analyzer.classify.preprocess import LabelAnnotator, get_threshold
+from neuron_analyzer.classify.preprocess import DataLoader, FeatureLoader, FixedLabeler, ThresholdLabeler, get_threshold
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
 
 # Setup logging
@@ -23,6 +24,9 @@ def parse_args() -> argparse.Namespace:
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
     )
     parser.add_argument(
+        "--group_type", type=str, choices=["individual", "group"], default="individual", help="different neuron groups"
+    )
+    parser.add_argument(
         "--threshold_mode",
         type=str,
         default="unified",
@@ -30,12 +34,24 @@ def parse_args() -> argparse.Namespace:
         help="which optimal threshold to choose from",
     )
     parser.add_argument(
+        "--label_type",
+        type=str,
+        default="fixed",
+        choices=["fixed", "threshold"],
+        help="selected label type",
+    )
+    parser.add_argument(
         "--class_num",
         type=int,
         default=2,
         help="how many classes to classify",
     )
+    parser.add_argument("--load_stat", type=bool, default=True, help="Whether to load from existing index")
+    parser.add_argument(
+        "--exclude_random", type=bool, default=True, help="Whether to include the random neuron indices"
+    )
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
+    parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
@@ -64,32 +80,43 @@ def configure_path(args):
 
 def run_pipeline(args, data_path, model_path, eval_path, step_dirs: list, results_all: dict) -> dict:
     """Extract optimal threshold across multiple steps."""
-    # load threshold
-    threshold = get_threshold(
-        data_path=data_path / "global_threshold_results.json", threshold_mode=f"{args.threshold_mode}_recommendation"
-    )
-    logger.info(f"{args.threshold_mode} threshold has been loaded: {threshold}")
+    threshold = load_threshold(args, data_path)
     results_all = {}
     for step in step_dirs:
-        # Load data preprocessor
-        # try:
-        summary = classify_neuron(args, data_path, model_path, eval_path, step, threshold)
+        # load data
+        X, y, neuron_indices = load_data(args, data_path, step, threshold)
+        # train classifier
+        summary = classify_neuron(args, X, y, neuron_indices, model_path, eval_path, step)
         results_all[step[1]] = summary
-    # except:
-    # logger.info(f"Something wrong with step {step[1]}")
     JsonProcessor.save_json(results_all, eval_path / "results_summary.json")
     return results_all
 
 
-def classify_neuron(args, data_path, model_path, eval_path, step, threshold):
+def load_data(args, data_path, step, threshold=None):
     """Train and evaluate classifier from single step."""
-    data_loader = LabelAnnotator(
-        threshold_mode=args.threshold_mode,
-        data_dir=data_path / str(step[1]) / str(args.data_range_end),
+    # filter features with unequal length
+    feature_loader = FeatureLoader(data_dir=data_path / str(step[1]) / str(args.data_range_end))
+    data, fea = feature_loader.run_pipeline()
+    logger.info("Features have been loaded.")
+    # label data
+    if args.label_type == "threshold":
+        threshold_labeler = ThresholdLabeler(threshold=threshold, data=data)
+        labels = threshold_labeler.run_pipeline()
+    if args.label_type == "fixed":
+        fixed_labeler = FixedLabeler(data=data, class_indices=load_neuron_indices(args, step_path=step[0]))
+        fea, labels = fixed_labeler.run_pipeline()
+    # integrate features and labels
+    data_loader = DataLoader(
+        X=fea,
+        y=labels,
+        out_path=data_path / str(step[1]) / str(args.data_range_end),
         resume=args.resume,
-        threshold=threshold,
     )
-    X, y, neuron_indices, metadata = data_loader.run_pipeline()
+    return data_loader.run_pipeline()
+
+
+def classify_neuron(args, X, y, neuron_indices, model_path, eval_path, step):
+    """Train and evaluate classifier from single step."""
     # train and evlauate the classifiers
     classifier = NeuronClassifier(
         X=X,
@@ -97,8 +124,8 @@ def classify_neuron(args, data_path, model_path, eval_path, step, threshold):
         model_path=model_path / str(step[1]) / str(args.data_range_end),
         eval_path=eval_path / str(step[1]) / str(args.data_range_end),
         neuron_indices=neuron_indices,
-        metadata=metadata,
         class_num=args.class_num,
+        classification_condition=get_classification_condition(args),
         test_size=0.2,
     )
     classifier_results = classifier.run_pipeline()
@@ -109,6 +136,36 @@ def classify_neuron(args, data_path, model_path, eval_path, step, threshold):
     )
     summary = hypthesis_summary.run_pipeline()
     return summary
+
+
+def load_neuron_indices(args, step_path) -> dict:
+    """Load neuron indices from the existing file."""
+    neuron_analyzer = NeuronGroupAnalyzer(args=args, device="cpu", step_path=step_path)
+    boost_neuron_indices, suppress_neuron_indices, random_indices = neuron_analyzer.load_neurons()
+    return {
+        "boost": boost_neuron_indices,
+        "suppress": suppress_neuron_indices,
+        "random": random_indices,
+    }
+
+
+def load_threshold(args, data_path) -> float:
+    """Load threshold if needed."""
+    if args.label_type == "threshold":
+        return get_threshold(
+            data_path=data_path / "global_threshold_results.json",
+            threshold_mode=f"{args.threshold_mode}_recommendation",
+        )
+    return None
+
+
+def get_classification_condition(args) -> str:
+    """Get the notation for different conditions."""
+    if args.label_type == "threshold":
+        return args.threshold_mode
+    if args.label_type == "fixed":
+        return args.top_n
+    return "undefined"
 
 
 #######################################################################################################

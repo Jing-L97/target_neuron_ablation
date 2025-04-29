@@ -53,10 +53,11 @@ class NeuronClassifier:
         self,
         X: np.ndarray,
         y: np.ndarray,
+        classification_condition: str,
         neuron_indices: list[str],
         model_path: Path,
         eval_path: Path,
-        metadata: dict | None = None,
+        resume: bool = True,
         class_num: int = 2,
         test_size: float = 0.2,
         random_state: int = 42,
@@ -65,12 +66,13 @@ class NeuronClassifier:
         self.X = X
         self.y_original = y
         self.neuron_indices = neuron_indices
-        self.metadata = metadata or {}
         self.class_num = class_num
         self.random_state = random_state
         self.test_size = test_size
         self.model_path = model_path
         self.eval_path = eval_path
+        self.resume = resume
+        self.classification_condition = classification_condition
         self.model_path.mkdir(parents=True, exist_ok=True)
         self.eval_path.mkdir(parents=True, exist_ok=True)
         # Transform labels if using two-class mode
@@ -696,6 +698,7 @@ class NeuronClassifier:
 
     def run_pipeline(self) -> dict:
         """Run all classification and analysis methods."""
+        # TODO: set resume option to avoid multiple training
         # Train classifiers
         logger.info("Training Linear SVC...")
         self.train_linear_svc()
@@ -769,14 +772,13 @@ class NeuronClassifier:
             "feature_dim": self.X.shape[1],
             "num_samples": self.X.shape[0],
             "timestamp": datetime.now().isoformat(),
-            "original_metadata": self.metadata,
         }
 
         # Save models
         for name, clf in self.classifiers.items():
-            joblib.dump(clf, self.model_path / f"{name}.joblib")
+            joblib.dump(clf, self.model_path / f"{name}_{self.classification_condition}.joblib")
         logger.info(f"Models saved to {self.model_path}")
 
         # Save results as JSON
-        JsonProcessor.save_json(results_copy, self.eval_path / "classification_results.json")
+        JsonProcessor.save_json(results_copy, self.eval_path / f"classification_{self.classification_condition}.json")
         logger.info(f"Results saved to {self.eval_path}")
