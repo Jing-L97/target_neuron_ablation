@@ -1,4 +1,5 @@
 import logging
+from collections import Counter
 from datetime import datetime
 from pathlib import Path
 
@@ -53,7 +54,6 @@ class NeuronClassifier:
         self,
         X: np.ndarray,
         y: np.ndarray,
-        classification_condition: str,
         neuron_indices: list[str],
         model_path: Path,
         eval_path: Path,
@@ -72,15 +72,16 @@ class NeuronClassifier:
         self.model_path = model_path
         self.eval_path = eval_path
         self.resume = resume
-        self.classification_condition = classification_condition
         self.model_path.mkdir(parents=True, exist_ok=True)
         self.eval_path.mkdir(parents=True, exist_ok=True)
         # Transform labels if using two-class mode
         if class_num == 2:
             # Convert to binary classification: 0 for common, 1 for special (boost or suppress)
-            self.y = np.array([0 if label == 0 else 1 for label in y])
+            self.y = np.array([-1 if label == -1 else 1 for label in y])
         else:
             self.y = y
+
+        logger.info(f"class distr: {Counter(self.y)}")
 
         # Classifier containers
         self.classifiers = {}
@@ -151,7 +152,7 @@ class NeuronClassifier:
         C: float = 1.0,
         penalty: str = "l2",
         loss: str = "squared_hinge",
-        dual: bool = True,
+        dual: bool = "auto",
         class_weight: str = "balanced",  # use weighted loss for class imbalance
     ) -> dict:
         """Train a LinearSVC classifier (optimized for linear kernel)."""
@@ -343,7 +344,7 @@ class NeuronClassifier:
         """Perform permutation test to validate statistical significance of hyperplanes."""
         # Initialize the classifier
         if classifier_type == "linear_svc":
-            clf = LinearSVC(random_state=self.random_state, max_iter=10000)
+            clf = LinearSVC(random_state=self.random_state, max_iter=10000, dual="auto")
         else:
             clf = SVC(kernel="linear", random_state=self.random_state)
 
@@ -745,7 +746,7 @@ class NeuronClassifier:
             },
             "permutation_test": {"p_value": self.results["perm_test_linear_svc"]["p_value"]},
             "margin_statistics": {
-                "mean_distance": self.results["margin_stats_linear_svc"]["mean_distance"],
+                # "mean_distance": self.results["margin_stats_linear_svc"]["mean_distance"],
                 "class_margins": self.results["margin_stats_linear_svc"]["class_margins"],
             },
             "misclassification_rate": self.results["misclass_analysis_linear_svc"]["misclassification_rate"],
@@ -776,9 +777,9 @@ class NeuronClassifier:
 
         # Save models
         for name, clf in self.classifiers.items():
-            joblib.dump(clf, self.model_path / f"{name}_{self.classification_condition}.joblib")
+            joblib.dump(clf, self.model_path / f"{name}.joblib")
         logger.info(f"Models saved to {self.model_path}")
 
         # Save results as JSON
-        JsonProcessor.save_json(results_copy, self.eval_path / f"classification_{self.classification_condition}.json")
+        JsonProcessor.save_json(results_copy, self.eval_path / "classification.json")
         logger.info(f"Results saved to {self.eval_path}")

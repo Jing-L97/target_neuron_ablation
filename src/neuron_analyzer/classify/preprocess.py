@@ -39,11 +39,11 @@ class FeatureLoader:
 
         # Count occurrences of each length
         length_counts = Counter(len_lst)
-        logger.info(f"Feature length distribution: {dict(length_counts)}")
+        # logger.info(f"Feature length distribution: {dict(length_counts)}")
 
         # Find the most common length
         most_common_length = length_counts.most_common(1)[0][0]
-        logger.info(f"Most common feature length: {most_common_length}")
+        # logger.info(f"Most common feature length: {most_common_length}")
 
         # Filter the data to include only features with the most common length
         self.data = {"neuron_features": {}, "delta_losses": {}}
@@ -54,8 +54,8 @@ class FeatureLoader:
                 if index in data["delta_losses"]:
                     self.data["delta_losses"][index] = data["delta_losses"][index]
 
-        logger.info(f"Original data had {len(data['neuron_features'])} features")
-        logger.info(f"Filtered data has {len(self.data['neuron_features'])} features")
+        # logger.info(f"Original data had {len(data['neuron_features'])} features")
+        # logger.info(f"Filtered data has {len(self.data['neuron_features'])} features")
         return self.data
 
     def load_fea(self) -> list:
@@ -86,12 +86,12 @@ class ThresholdLabeler:
         self.labels = []
         for delta_loss in self.data["delta_losses"].values():
             self.labels.append(self._generate_labels(delta_loss))
-        return np.array(self.labels)
+        return np.array(self.labels), list(self.data["delta_losses"].keys())
 
     def _generate_labels(self, delta_loss: float) -> int:
         """Generate class labels based on delta loss values and threshold; maximize class info."""
         if abs(delta_loss) < self.threshold:
-            return 0  # Common neuron
+            return -1  # Common neuron
         if abs(delta_loss) > self.threshold and delta_loss > 0:
             return 1  # Boost neuron
         if abs(delta_loss) > self.threshold and delta_loss < 0:
@@ -114,26 +114,28 @@ class FixedLabeler:
 
     def __init__(self, data: dict, class_indices: dict):
         """Initialize the LabelAnnotator."""
-        self.data = data  # filtered data by indices and feature length
+        self.data = data
         self.class_indices = class_indices
 
     def run_pipeline(self) -> list:
         """Annotate labels for each neuron."""
         self.labels = []
         self.feas = []
+        self.indices = []
         for neuron_index, fea in self.data["neuron_features"].items():
             if self._generate_labels(neuron_index):
                 self.labels.append(self._generate_labels(neuron_index))
                 self.feas.append(fea)
-        return np.array(self.feas), np.array(self.labels)
+                self.indices.append(neuron_index)
+        return np.array(self.feas), np.array(self.labels), self.indices
 
     def _generate_labels(self, neuron_index: int) -> int:
         """Generate class labels based on predefined class dict."""
-        if neuron_index in self.class_indices["random"]:
-            return 0
-        if neuron_index in self.class_indices["boost"]:
+        if int(neuron_index) in self.class_indices["random"]:
+            return -1
+        if int(neuron_index) in self.class_indices["boost"]:
             return 1
-        if neuron_index in self.class_indices["suppress"]:
+        if int(neuron_index) in self.class_indices["suppress"]:
             return 2
         return None
 
@@ -145,11 +147,14 @@ class FixedLabeler:
 class DataLoader:
     """Class to load dataset."""
 
-    def __init__(self, X: np.array, y: np.array, resume: bool, out_path: Path, normalize: bool = True):
+    def __init__(
+        self, X: np.array, y: np.array, neuron_indices: list, resume: bool, out_path: Path, normalize: bool = True
+    ):
         """Initialize the LabelAnnotator."""
         self.out_path = out_path
         self.resume = resume
         self.normalize = normalize
+        self.indices = neuron_indices
         self.X = X
         self.y = y
 
@@ -164,13 +169,12 @@ class DataLoader:
             scaler = StandardScaler()
             self.X = scaler.fit_transform(self.X)
         # save the results
-        return self._save_dataset(self.X, self.y, self.out_path)
+        self._save_dataset()
+        return self.X, self.y, self.indices
 
     def _save_dataset(self) -> None:
         """Save ML dataset to disk."""
         self.out_path.parent.mkdir(parents=True, exist_ok=True)
-        neuron_indices = list(self.data["neuron_features"].keys())
-        data = {"X": self.X, "y": self.y, "neuron_indices": neuron_indices}
+        data = {"X": self.X, "y": self.y, "neuron_indices": self.indices}
         JsonProcessor.save_json(data, self.out_path)
         logger.info(f"Save labeled dataset to {self.out_path}")
-        return self.X, self.y, neuron_indices
