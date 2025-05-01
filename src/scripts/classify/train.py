@@ -121,7 +121,6 @@ def load_data(args, data_path, step, threshold, classification_condition):
         y=labels,
         neuron_indices=neuron_indices,
         out_path=data_path / str(step[1]) / str(args.data_range_end) / f"data_{classification_condition}.json",
-        resume=args.resume,
     )
     X, y, neuron_indices = data_loader.run_pipeline()
     return X, y, neuron_indices

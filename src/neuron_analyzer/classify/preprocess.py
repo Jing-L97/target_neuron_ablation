@@ -39,11 +39,11 @@ class FeatureLoader:
 
         # Count occurrences of each length
         length_counts = Counter(len_lst)
-        # logger.info(f"Feature length distribution: {dict(length_counts)}")
+        logger.info(f"Feature length distribution: {dict(length_counts)}")
 
         # Find the most common length
         most_common_length = length_counts.most_common(1)[0][0]
-        # logger.info(f"Most common feature length: {most_common_length}")
+        logger.info(f"Most common feature length: {most_common_length}")
 
         # Filter the data to include only features with the most common length
         self.data = {"neuron_features": {}, "delta_losses": {}}
@@ -54,8 +54,8 @@ class FeatureLoader:
                 if index in data["delta_losses"]:
                     self.data["delta_losses"][index] = data["delta_losses"][index]
 
-        # logger.info(f"Original data had {len(data['neuron_features'])} features")
-        # logger.info(f"Filtered data has {len(self.data['neuron_features'])} features")
+        logger.info(f"Original data had {len(data['neuron_features'])} features")
+        logger.info(f"Filtered data has {len(self.data['neuron_features'])} features")
         return self.data
 
     def load_fea(self) -> list:
@@ -147,12 +147,9 @@ class FixedLabeler:
 class DataLoader:
     """Class to load dataset."""
 
-    def __init__(
-        self, X: np.array, y: np.array, neuron_indices: list, resume: bool, out_path: Path, normalize: bool = True
-    ):
+    def __init__(self, X: np.array, y: np.array, neuron_indices: list, out_path: Path, normalize: bool = True):
         """Initialize the LabelAnnotator."""
         self.out_path = out_path
-        self.resume = resume
         self.normalize = normalize
         self.indices = neuron_indices
         self.X = X
@@ -160,10 +157,6 @@ class DataLoader:
 
     def run_pipeline(self) -> tuple[np.ndarray, np.ndarray, list[str]]:
         """Prepare data for machine learning from annotated step data."""
-        # Load data if path provided
-        if self.resume and self.out_path.is_file():
-            logger.info(f"Resume existing dataset from {self.out_path}")
-            return JsonProcessor.load_json(self.out_path)
         # Normalize if requested
         if self.normalize:
             scaler = StandardScaler()
