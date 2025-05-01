@@ -4,10 +4,7 @@ import logging
 
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.a_geometry import ActivationGeometricAnalyzer
-from neuron_analyzer.analysis.geometry_util import (
-    get_device,
-    load_activation_indices,
-)
+from neuron_analyzer.analysis.geometry_util import get_device, get_group_name, load_activation_indices
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
 
 # Setup logging
@@ -50,7 +47,7 @@ def configure_path(args):
     """Configure save path based on the setting."""
     save_heuristic = f"{args.heuristic}_med" if args.sel_by_med else args.heuristic
     filename_suffix = ".debug" if args.debug else ".json"
-    group_name = f"{args.group_type}_{args.group_size}" if args.group_type == "group" else args.group_type
+    group_name = get_group_name(args)
     filename = (
         f"{args.data_range_end}_{args.top_n}_check_random{filename_suffix}"
         if args.exclude_random

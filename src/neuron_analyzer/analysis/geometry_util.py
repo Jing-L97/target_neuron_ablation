@@ -186,6 +186,11 @@ def get_dir_name(args) -> tuple[Path, Path]:
     )
 
 
+def get_group_name(args) -> Path:
+    """Get group name in different conditions."""
+    return f"{args.group_type}_{args.group_size}" if args.group_type == "group" else args.group_type
+
+
 #######################################################
 # DEvice manager
 
