@@ -58,14 +58,13 @@ class StepSurprisalExtractor:
 
     def _validate_config(self) -> None:
         """Validate configuration."""
+        """
         if not self.config.steps:
             raise ValueError("No steps provided for analysis")
+        """
 
         if isinstance(self.model_cache_dir, str):
             self.model_cache_dir = Path(self.model_cache_dir)
-
-        if self.device not in ["cpu", "cuda"]:
-            raise ValueError(f"Invalid device: {self.device}. Use 'cpu' or 'cuda'")
 
         # Additional validation for scaled_activation mode
         if self.ablation_mode == "scaled" and self.token_frequencies is None:

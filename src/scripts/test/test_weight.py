@@ -6,9 +6,9 @@ import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.geometry_util import NeuronGroupAnalyzer, get_group_name, get_last_layer
-from neuron_analyzer.analysis.w_geometry import WeightGeometricAnalyzer
 from neuron_analyzer.eval.surprisal import StepSurprisalExtractor
-from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
+from neuron_analyzer.load_util import StepPathProcessor
+from neuron_analyzer.model_util import ModelHandler
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -82,9 +82,10 @@ def main() -> None:
     step_processor = StepPathProcessor(abl_path)
     final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)
 
-    # Initialize extractor
     layer_num = get_last_layer(args.model)
+    # Initialize extractor
     model_cache_dir = settings.PATH.model_dir / args.model
+
     extractor = StepSurprisalExtractor(
         config=[],
         model_name=args.model,
@@ -94,29 +95,27 @@ def main() -> None:
     )
 
     for step in step_dirs:
-        try:
-            neuron_analyzer = NeuronGroupAnalyzer(args=args, device=device, step_path=step[0])
-            boost_neuron_indices, suppress_neuron_indices, random_indices = neuron_analyzer.load_neurons()
+        # try:
+        neuron_analyzer = NeuronGroupAnalyzer(args=args, device=device, step_path=step[0])
+        boost_neuron_indices, suppress_neuron_indices, random_indices = neuron_analyzer.load_neurons()
+        # load model
+        model_handler = ModelHandler()
+        # Load model and tokenizer for specific step
+        model, _ = model_handler.load_model_and_tokenizer(
+            step=step[1],
+            model_name=args.model,
+            hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",
+            device=device,
+        )
 
-            # initilize the class
-            model, _ = extractor.load_model_for_step(step[1])
-            geometry_analyzer = WeightGeometricAnalyzer(
-                model=model,
-                boost_neuron_indices=boost_neuron_indices,
-                suppress_neuron_indices=suppress_neuron_indices,
-                excluded_neuron_indices=random_indices,
-                num_random_groups=2,
-                layer_num=get_last_layer(args.model),
-            )
-            results = geometry_analyzer.run_all_analyses()
+        model, _ = extractor.load_model_for_step(step[1])
+        layer_path = f"gpt_neox.layers.{layer_num}.mlp.dense_h_to_4h"
+        layer_dict = dict(model.named_modules())
+        # logger.info(layer_dict.keys())
+        layer = layer_dict[layer_path]
 
-            # save the results
-            final_results[str(step[1])] = results
-            JsonProcessor.save_json(final_results, save_path)
-            logger.info(f"Save file to {save_path}")
-
-        except:
-            logger.info(f"Something wrong with {step[1]}")
+    # except:
+    # logger.info(f"Something wrong with {step[1]}")
 
 
 if __name__ == "__main__":

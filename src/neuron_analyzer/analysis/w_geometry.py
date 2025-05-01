@@ -1,52 +1,100 @@
+#!/usr/bin/env python
+import logging
+
 import numpy as np
 import pandas as pd
 import torch
 from scipy.linalg import subspace_angles
+from scipy.stats import ttest_ind
+
+# Setup logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logger = logging.getLogger(__name__)
 
 #######################################################
 # Neuron group subspace direction analysis
 
 
 class WeightGeometricAnalyzer:
-    def __init__(self, model, layer_num: int, boost_neurons: list[int], suppress_neurons: list[int], device):
-        """Initialize the analyzer with model and previously identified neuron sets."""
+    def __init__(
+        self,
+        model,
+        layer_num: int,
+        boost_neuron_indices: list[int],
+        suppress_neuron_indices: list[int],
+        excluded_neuron_indices: list[int] = None,
+        num_random_groups: int = 2,
+    ):
+        """Initialize with model and neuron groups."""
+        self.boost_neuron_indices = boost_neuron_indices
+        self.suppress_neuron_indices = suppress_neuron_indices
         self.model = model
-        self.boost_neurons = boost_neurons
-        self.suppress_neurons = suppress_neurons
         self.layer_num = layer_num
-        self.device = device
-        self.results = {}
-        # Get common neurons (not boost or suppress)
-        self.common_neurons, self.sampled_common_neurons_1, self.sampled_common_neurons_2 = self._get_common_neurons()
+        self.num_random_groups = num_random_groups
+        self.excluded_neuron_indices = excluded_neuron_indices or []
 
-    def _get_common_neurons(self) -> tuple[list[int], list[int], list[int]]:
-        """Get neurons that are neither boosting nor suppressing and create two non-overlapping samples."""
+        # Get common neurons and create random groups
+        self.common_neurons, self.random_indices = self._get_common_neurons()
+
+        # Store neuron indices in a dictionary for easy access
+        self.neuron_indices = {
+            "boost": self.boost_neuron_indices,
+            "suppress": self.suppress_neuron_indices,
+        }
+
+        # Add random groups to the neuron indices dictionary
+        for i in range(len(self.random_indices)):
+            self.neuron_indices[f"random_{i + 1}"] = self.random_indices[i]
+
+    def _get_common_neurons(self) -> tuple[list[int], list[list[int]]]:
+        """Generate non-overlapping random neuron groups that don't overlap with boost or suppress neurons."""
         # Get layer to determine total neurons
         layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
         layer_dict = dict(self.model.named_modules())
         layer = layer_dict[layer_path]
         total_neurons = layer.weight.shape[0]
 
-        # Get neurons that are neither boosting nor suppressing
-        all_special = set(self.boost_neurons + self.suppress_neurons)
-        common_neurons = [i for i in range(total_neurons) if i not in all_special]
+        # Get all neuron indices
+        all_neuron_indices = list(range(total_neurons))
 
-        # Sample two non-overlapping subsets of similar size
-        reference_size = max(len(self.boost_neurons), len(self.suppress_neurons))
-        # Ensure we can create two non-overlapping samples
-        if len(common_neurons) >= 2 * reference_size:
-            # Shuffle the common neurons
-            np.random.shuffle(common_neurons)
-            # Create two non-overlapping samples
-            sampled_common_neurons_1 = common_neurons[:reference_size]
-            sampled_common_neurons_2 = common_neurons[reference_size : 2 * reference_size]
+        # Set parameters
+        group_size = max(len(self.boost_neuron_indices), len(self.suppress_neuron_indices))
+
+        # Define special indices to exclude (boost and suppress)
+        special_indices = set(self.boost_neuron_indices + self.suppress_neuron_indices)
+
+        # Get non-special neurons (those that are neither boost nor suppress)
+        non_special_indices = [idx for idx in all_neuron_indices if idx not in special_indices]
+
+        # Initialize list to store random groups
+        random_indices = []
+
+        # Check if we have enough neurons for the desired number of random groups
+        if len(non_special_indices) < self.num_random_groups * group_size:
+            logger.warning(
+                f"Not enough neurons for {self.num_random_groups} non-overlapping random groups of size {group_size}."
+            )
+            # Not enough neurons - split them evenly into the required number of groups
+            np.random.shuffle(non_special_indices)
+            split_points = [
+                len(non_special_indices) * i // self.num_random_groups for i in range(self.num_random_groups + 1)
+            ]
+
+            for i in range(self.num_random_groups):
+                random_indices.append(non_special_indices[split_points[i] : split_points[i + 1]])
         else:
-            # If we don't have enough neurons, split evenly
-            split_point = len(common_neurons) // 2
-            sampled_common_neurons_1 = common_neurons[:split_point]
-            sampled_common_neurons_2 = common_neurons[split_point:]
+            # We have enough neurons - create proper random groups
+            np.random.shuffle(non_special_indices)
+            for i in range(self.num_random_groups):
+                start_idx = i * group_size
+                end_idx = (i + 1) * group_size
+                if end_idx <= len(non_special_indices):
+                    random_indices.append(non_special_indices[start_idx:end_idx])
+                else:
+                    # If we don't have enough neurons, just use what's left
+                    random_indices.append(non_special_indices[start_idx:])
 
-        return common_neurons, sampled_common_neurons_1, sampled_common_neurons_2
+        return non_special_indices, random_indices
 
     def extract_neuron_weights(self, neuron_indices: list[int]) -> np.ndarray:
         """Extract weight vectors for specified neurons in a layer."""
@@ -64,40 +112,131 @@ class WeightGeometricAnalyzer:
 
         return W_neurons
 
-    def subspace_dimensionality(self, group_indices: list[int]) -> dict:
-        """Analyze the dimensionality of neuron subspaces."""
-        # Extract weights
-        W_group = self.extract_neuron_weights(group_indices)
+    def _safe_ttest(self, value: float, comparison_values: list[float]) -> tuple[float, float, bool, str]:
+        """Safely perform a t-test handling edge cases and potential errors."""
+        if not comparison_values:
+            return 0.0, 1.0, False, "unknown"
 
-        # Perform SVD on both neuron groups
-        U, S, Vh = np.linalg.svd(W_group, full_matrices=False)
-        # Calculate normalized singular values
-        S_norm = S / S.sum() if S.sum() > 0 else S
+        # If all values are identical, no statistical test is needed
+        if all(v == comparison_values[0] for v in comparison_values) and value == comparison_values[0]:
+            return 0.0, 1.0, False, "equal"
 
-        # Calculate cumulative explained variance
-        cum_var = np.cumsum(S_norm)
+        try:
+            # Use one-sample t-test against the mean
+            mean_comparison = np.mean(comparison_values)
+            std_comparison = np.std(comparison_values)
 
-        # Estimate effective dimensionality (number of dimensions for 95% variance)
-        dim = np.argmax(cum_var >= 0.95) + 1 if np.any(cum_var >= 0.95) else len(S)
+            # If standard deviation is zero, we can't perform t-test
+            if std_comparison == 0:
+                return 0.0, 1.0, False, "higher" if value > mean_comparison else "lower"
 
-        # Store metrics
-        result = {
-            "effective_dim": dim,
-            "total_dim": len(S),
-            "dim_prop": dim / len(S),
-            "right_singular_vectors": Vh,
-        }
+            # Use independent t-test with proper handling
+            tstat, pvalue = ttest_ind([value], comparison_values, equal_var=False)
 
-        # Calculate decay rates if we have at least 2 singular values
-        if len(S) >= 2:
-            result["sv_decay_rate_2"] = S[0] / S[1]
+            # Determine the direction of the difference
+            comparison = "higher" if value > mean_comparison else "lower"
 
-        return result
+            return float(tstat), float(pvalue), bool(pvalue < 0.05), comparison
 
-    def self_orthogonality_measurement(self, Vh: np.ndarray, dim: int) -> dict | None:
-        """Measure internal orthogonality within a single subspace."""
+        except Exception as e:
+            print(f"Error performing t-test: {e}")
+            return 0.0, 1.0, False, "unknown"
+
+    def analyze_dimensionality(self, variance_threshold: float = 0.95) -> dict:
+        """Analyze the dimensionality of each neuron group's weight space."""
+        results = {}
+
+        # Analyze each neuron group
+        for group_name, neuron_indices in self.neuron_indices.items():
+            W_group = self.extract_neuron_weights(neuron_indices)
+
+            # Perform SVD on the neuron group
+            U, S, Vh = np.linalg.svd(W_group, full_matrices=False)
+
+            # Calculate normalized singular values
+            S_norm = S / S.sum() if S.sum() > 0 else S
+
+            # Calculate cumulative explained variance
+            cum_var = np.cumsum(S_norm)
+
+            # Estimate effective dimensionality (number of dimensions for variance_threshold variance)
+            effective_dim = (
+                np.argmax(cum_var >= variance_threshold) + 1 if np.any(cum_var >= variance_threshold) else len(S)
+            )
+
+            # Store metrics
+            result = {
+                "effective_dim": int(effective_dim),
+                "total_dim": len(neuron_indices),
+                "dim_prop": float(effective_dim / len(neuron_indices)),
+                "explained_variance_ratio": S_norm,
+                "cumulative_variance": cum_var,
+                "right_singular_vectors": Vh,
+            }
+
+            results[group_name] = result
+
+        # Compare boost vs random_1 and suppress vs random_1
+        if "boost" in results and "random_1" in results:
+            tstat, pvalue, is_significant, comparison = self._safe_ttest(
+                results["boost"]["effective_dim"], [results["random_1"]["effective_dim"]]
+            )
+            results["boost_vs_random_1"] = {
+                "ttest_stat": float(tstat),
+                "ttest_p": float(pvalue),
+                "is_significantly_different": bool(is_significant),
+                "comparison": comparison,
+            }
+
+        if "suppress" in results and "random_1" in results:
+            tstat, pvalue, is_significant, comparison = self._safe_ttest(
+                results["suppress"]["effective_dim"], [results["random_1"]["effective_dim"]]
+            )
+            results["suppress_vs_random_1"] = {
+                "ttest_stat": float(tstat),
+                "ttest_p": float(pvalue),
+                "is_significantly_different": bool(is_significant),
+                "comparison": comparison,
+            }
+
+        # Compare random_1 vs random_2
+        if "random_1" in results and "random_2" in results:
+            tstat, pvalue, is_significant, comparison = self._safe_ttest(
+                results["random_1"]["effective_dim"], [results["random_2"]["effective_dim"]]
+            )
+            results["random_1_vs_random_2"] = {
+                "ttest_stat": float(tstat),
+                "ttest_p": float(pvalue),
+                "is_significantly_different": bool(is_significant),
+                "comparison": comparison,
+            }
+
+        # Compare boost vs suppress
+        if "boost" in results and "suppress" in results:
+            tstat, pvalue, is_significant, comparison = self._safe_ttest(
+                results["boost"]["effective_dim"], [results["suppress"]["effective_dim"]]
+            )
+            results["boost_vs_suppress"] = {
+                "ttest_stat": float(tstat),
+                "ttest_p": float(pvalue),
+                "is_significantly_different": bool(is_significant),
+                "comparison": comparison,
+            }
+
+        self.dimensionality_results = results
+        return results
+
+    def _calculate_orthogonality_metrics(self, Vh: np.ndarray, dim: int) -> dict:
+        """Calculate orthogonality metrics within a single group's subspace."""
         if Vh is None or dim <= 1:
-            return None  # Need at least 2 dimensions to calculate angles
+            return {
+                "mean_angle_degrees": 0.0,
+                "median_angle_degrees": 0.0,
+                "min_angle_degrees": 0.0,
+                "max_angle_degrees": 0.0,
+                "pct_near_orthogonal": 0.0,
+                "is_self_pair": True,
+            }
 
         # Make sure we don't exceed available dimensions
         dim = min(dim, Vh.shape[0])
@@ -106,7 +245,6 @@ class WeightGeometricAnalyzer:
         V = Vh[:dim].T  # Column vectors spanning the subspace
 
         # Calculate angles between all pairs of basis vectors within the subspace
-        full_angles = []
         full_angles_degrees = []
 
         for i in range(V.shape[1]):
@@ -123,47 +261,48 @@ class WeightGeometricAnalyzer:
                     dot_product = np.dot(v1, v2) / (v1_norm * v2_norm)
                     # Clamp to avoid numerical errors
                     dot_product = max(min(dot_product, 1.0), -1.0)
-                    # Calculate angle in radians
-                    angle = np.arccos(dot_product)
-                    full_angles.append(angle)
-                    # Convert to degrees
-                    angle_degrees = np.degrees(angle)
+                    # Calculate angle in degrees
+                    angle_degrees = np.degrees(np.arccos(dot_product))
                     full_angles_degrees.append(angle_degrees)
 
-        if not full_angles:
-            return None  # No valid angles calculated
+        if not full_angles_degrees:
+            return {
+                "mean_angle_degrees": 0.0,
+                "median_angle_degrees": 0.0,
+                "min_angle_degrees": 0.0,
+                "max_angle_degrees": 0.0,
+                "pct_near_orthogonal": 0.0,
+                "is_self_pair": True,
+            }
 
-        full_angles = np.array(full_angles)
         full_angles_degrees = np.array(full_angles_degrees)
 
-        # Calculate metrics - use the same column names as orthogonality_measurement
-        # but with NaN values for principal angle related metrics
+        # Calculate metrics
         result = {
-            # Principal angles (≤ 90°) - set to NaN for self-pairs
-            "principal_mean_angle_degrees": np.nan,
-            "principal_median_angle_degrees": np.nan,
-            "principal_min_angle_degrees": np.nan,
-            "principal_max_angle_degrees": np.nan,
-            "principal_angle_degrees": np.nan,
-            # Full directional angles
-            "full_mean_angle_degrees": np.mean(full_angles_degrees),
-            "full_median_angle_degrees": np.median(full_angles_degrees),
-            "full_min_angle_degrees": np.min(full_angles_degrees),
-            "full_max_angle_degrees": np.max(full_angles_degrees),
-            # Percentage of angles in different ranges
-            "pct_near_orthogonal": (((full_angles_degrees >= 80) & (full_angles_degrees <= 100)).mean() * 100),
-            "pct_obtuse_angles": ((full_angles_degrees > 90).mean() * 100),
-            "pct_acute_angles": ((full_angles_degrees < 90).mean() * 100),
-            # Flag to identify self-pairs
+            "mean_angle_degrees": float(np.mean(full_angles_degrees)),
+            "median_angle_degrees": float(np.median(full_angles_degrees)),
+            "min_angle_degrees": float(np.min(full_angles_degrees)),
+            "max_angle_degrees": float(np.max(full_angles_degrees)),
+            "pct_near_orthogonal": float(((full_angles_degrees >= 80) & (full_angles_degrees <= 100)).mean() * 100),
+            "pct_obtuse_angles": float((full_angles_degrees > 90).mean() * 100),
+            "pct_acute_angles": float((full_angles_degrees < 90).mean() * 100),
             "is_self_pair": True,
         }
 
         return result
 
-    def orthogonality_measurement(self, Vh_1: np.ndarray, Vh_2: np.ndarray, dim_1: int, dim_2: int) -> dict | None:
-        """Measure orthogonality between two subspaces with full angle information."""
+    def _calculate_between_orthogonality_metrics(
+        self, Vh_1: np.ndarray, Vh_2: np.ndarray, dim_1: int, dim_2: int
+    ) -> dict:
+        """Calculate orthogonality metrics between two different groups of neurons."""
         if Vh_1 is None or Vh_2 is None:
-            return None
+            return {
+                "mean_cross_angle_degrees": 0.0,
+                "median_cross_angle_degrees": 0.0,
+                "min_cross_angle_degrees": 0.0,
+                "max_cross_angle_degrees": 0.0,
+                "pct_cross_near_orthogonal": 0.0,
+            }
 
         # Make sure we don't exceed available dimensions
         dim_1 = min(dim_1, Vh_1.shape[0])
@@ -176,16 +315,12 @@ class WeightGeometricAnalyzer:
         # Compute principal angles between subspaces (these are always ≤ 90°)
         try:
             principal_angles = subspace_angles(V_1, V_2)
+            principal_angles_degrees = np.degrees(principal_angles)
         except Exception as e:
             print(f"Error calculating subspace angles: {e}")
-            return None
-
-        # Convert to degrees
-        principal_angles_degrees = np.degrees(principal_angles)
+            principal_angles_degrees = np.array([])
 
         # Calculate full directional angles between all pairs of basis vectors
-        # This will capture angles > 90° by calculating the actual angle between vectors
-        full_angles = []
         full_angles_degrees = []
 
         for i in range(V_1.shape[1]):
@@ -202,128 +337,237 @@ class WeightGeometricAnalyzer:
                     dot_product = np.dot(v1, v2) / (v1_norm * v2_norm)
                     # Clamp to avoid numerical errors
                     dot_product = max(min(dot_product, 1.0), -1.0)
-                    # Calculate angle in radians
-                    angle = np.arccos(dot_product)
-                    full_angles.append(angle)
-                    # Convert to degrees
-                    angle_degrees = np.degrees(angle)
+                    # Calculate angle in degrees
+                    angle_degrees = np.degrees(np.arccos(dot_product))
                     full_angles_degrees.append(angle_degrees)
 
-        full_angles = np.array(full_angles)
+        if not full_angles_degrees:
+            return {
+                "mean_cross_angle_degrees": 0.0,
+                "median_cross_angle_degrees": 0.0,
+                "min_cross_angle_degrees": 0.0,
+                "max_cross_angle_degrees": 0.0,
+                "pct_cross_near_orthogonal": 0.0,
+            }
+
         full_angles_degrees = np.array(full_angles_degrees)
 
         # Calculate metrics
         result = {
-            # Principal angles (≤ 90°)
-            "principal_mean_angle_degrees": np.mean(principal_angles_degrees),
-            "principal_median_angle_degrees": np.median(principal_angles_degrees),
-            "principal_min_angle_degrees": np.min(principal_angles_degrees),
-            "principal_max_angle_degrees": np.max(principal_angles_degrees),
-            "principal_angle_degrees": principal_angles_degrees.tolist(),
-            # Full directional angles (can be > 90°)
-            "full_mean_angle_degrees": np.mean(full_angles_degrees),
-            "full_median_angle_degrees": np.median(full_angles_degrees),
-            "full_min_angle_degrees": np.min(full_angles_degrees),
-            "full_max_angle_degrees": np.max(full_angles_degrees),
+            # Principal angles metrics (if available)
+            "principal_mean_angle_degrees": float(np.mean(principal_angles_degrees))
+            if len(principal_angles_degrees) > 0
+            else 0.0,
+            "principal_median_angle_degrees": float(np.median(principal_angles_degrees))
+            if len(principal_angles_degrees) > 0
+            else 0.0,
+            "principal_min_angle_degrees": float(np.min(principal_angles_degrees))
+            if len(principal_angles_degrees) > 0
+            else 0.0,
+            "principal_max_angle_degrees": float(np.max(principal_angles_degrees))
+            if len(principal_angles_degrees) > 0
+            else 0.0,
+            # Full directional angles
+            "mean_cross_angle_degrees": float(np.mean(full_angles_degrees)),
+            "median_cross_angle_degrees": float(np.median(full_angles_degrees)),
+            "min_cross_angle_degrees": float(np.min(full_angles_degrees)),
+            "max_cross_angle_degrees": float(np.max(full_angles_degrees)),
             # Percentage of angles in different ranges
-            "pct_near_orthogonal": (((full_angles_degrees >= 80) & (full_angles_degrees <= 100)).mean() * 100),
-            "pct_obtuse_angles": ((full_angles_degrees > 90).mean() * 100),
-            "pct_acute_angles": ((full_angles_degrees < 90).mean() * 100),
-            # Flag to identify self-pairs
+            "pct_cross_near_orthogonal": float(
+                ((full_angles_degrees >= 80) & (full_angles_degrees <= 100)).mean() * 100
+            ),
+            "pct_cross_obtuse_angles": float((full_angles_degrees > 90).mean() * 100),
+            "pct_cross_acute_angles": float((full_angles_degrees < 90).mean() * 100),
+            # Flag for pair type
             "is_self_pair": False,
         }
 
         return result
 
-    def get_neuron_pairs(self, dictionary: dict) -> dict[str, list]:
-        """Generate all possible pairs of keys from a dictionary, including self-pairs."""
-        keys = list(dictionary.keys())
-        pair_dict: dict[str, list] = {}
+    def analyze_orthogonality(self) -> dict:
+        """Analyze orthogonality within and between neuron groups."""
+        results = {"within": {}, "between": {}}
 
-        # Include all possible pairs, including self-pairs
-        for i in range(len(keys)):
-            # Add self-pair for measuring internal orthogonality
-            self_key = f"{keys[i]}-{keys[i]}"
-            pair_dict[self_key] = [dictionary[keys[i]], dictionary[keys[i]]]
+        # Within-group orthogonality
+        for group_name, result in self.dimensionality_results.items():
+            if group_name in self.neuron_indices:  # Skip comparison results like "boost_vs_random_1"
+                Vh = result.get("right_singular_vectors")
+                effective_dim = result.get("effective_dim")
 
-            # Add cross-pairs
-            for j in range(i + 1, len(keys)):
-                pair_key = f"{keys[i]}-{keys[j]}"
-                pair_dict[pair_key] = [dictionary[keys[i]], dictionary[keys[j]]]
+                if Vh is not None and effective_dim is not None:
+                    results["within"][group_name] = self._calculate_orthogonality_metrics(Vh, effective_dim)
 
-        return pair_dict
+        # Between-group orthogonality
+        # Define the pairs to analyze
+        pairs = [("boost", "random_1"), ("suppress", "random_1"), ("boost", "suppress"), ("random_1", "random_2")]
 
-    def run_analyses(self) -> tuple[pd.DataFrame, pd.DataFrame, dict]:
-        """Run analyses on subspace dimensionality and orthogonality."""
-        # load neuron subspaces
-        neuron_dict = {
-            "all": self.common_neurons,
-            "random_1": self.sampled_common_neurons_1,
-            "random_2": self.sampled_common_neurons_2,
-            "suppress": self.suppress_neurons,
-            "boost": self.boost_neurons,
-        }
+        for group1, group2 in pairs:
+            if (
+                group1 in self.dimensionality_results
+                and group2 in self.dimensionality_results
+                and "right_singular_vectors" in self.dimensionality_results[group1]
+                and "right_singular_vectors" in self.dimensionality_results[group2]
+            ):
+                Vh_1 = self.dimensionality_results[group1]["right_singular_vectors"]
+                Vh_2 = self.dimensionality_results[group2]["right_singular_vectors"]
+                dim_1 = self.dimensionality_results[group1]["effective_dim"]
+                dim_2 = self.dimensionality_results[group2]["effective_dim"]
 
-        # First, compute subspace dimensionality for each neuron group
-        subspace_results = {}
-        subspace_lst = []
-
-        for neuron_type, neurons in neuron_dict.items():
-            result = self.subspace_dimensionality(neurons)
-            subspace_results[neuron_type] = result  # Store the result for later use
-            result_copy = result.copy()
-            # Remove the large array before adding to the DataFrame
-            if "right_singular_vectors" in result_copy:
-                del result_copy["right_singular_vectors"]
-            result_copy["neuron"] = neuron_type
-            subspace_lst.append(result_copy)
-
-        subspace_df = pd.DataFrame(subspace_lst)
-
-        # Now compute orthogonality metrics using the subspace results
-        orthogonality_lst = []
-
-        # Generate all pairs of neuron types, including self-pairs
-        neuron_types = list(subspace_results.keys())
-        for i in range(len(neuron_types)):
-            # Measure self-orthogonality
-            type_self = neuron_types[i]
-            self_key = f"{type_self}-{type_self}"
-
-            # Use self-orthogonality measurement for self-pairs
-            self_result = self.self_orthogonality_measurement(
-                subspace_results[type_self]["right_singular_vectors"], subspace_results[type_self]["effective_dim"]
-            )
-
-            if self_result:
-                # We already include NaN values for principal angle metrics in the self_result
-                self_result["pair"] = self_key
-                orthogonality_lst.append(self_result)
-
-            # Now handle cross-comparisons
-            for j in range(i + 1, len(neuron_types)):
-                type1 = neuron_types[i]
-                type2 = neuron_types[j]
-                pair_key = f"{type1}-{type2}"
-
-                # Use the subspace results for orthogonality measurement
-                result = self.orthogonality_measurement(
-                    subspace_results[type1]["right_singular_vectors"],
-                    subspace_results[type2]["right_singular_vectors"],
-                    subspace_results[type1]["effective_dim"],
-                    subspace_results[type2]["effective_dim"],
+                results["between"][f"{group1}_vs_{group2}"] = self._calculate_between_orthogonality_metrics(
+                    Vh_1, Vh_2, dim_1, dim_2
                 )
 
-                if result:
-                    result["pair"] = pair_key
-                    orthogonality_lst.append(result)
+        # Statistical comparisons
+        # Compare within-group metrics
+        comparisons = [("boost", "random_1"), ("suppress", "random_1"), ("boost", "suppress"), ("random_1", "random_2")]
 
-        # Create DataFrame with consistent columns
-        orthogonality_df = pd.DataFrame(orthogonality_lst)
+        statistical_results = {}
+        for group1, group2 in comparisons:
+            if group1 in results["within"] and group2 in results["within"]:
+                # Compare mean angle degrees
+                tstat, pvalue, is_significant, comparison = self._safe_ttest(
+                    results["within"][group1]["mean_angle_degrees"],
+                    [results["within"][group2]["mean_angle_degrees"]],
+                )
 
-        # Process the angle distributions columns - these contain lists which may cause issues
-        # Fix the error by correctly checking types instead of using pd.isna()
-        return subspace_df, orthogonality_df
+                statistical_results[f"{group1}_vs_{group2}_angle"] = {
+                    "ttest_stat": float(tstat),
+                    "ttest_p": float(pvalue),
+                    "is_significantly_different": bool(is_significant),
+                    "comparison": comparison,
+                }
+
+                # Compare percentage of near-orthogonal angles
+                tstat, pvalue, is_significant, comparison = self._safe_ttest(
+                    results["within"][group1]["pct_near_orthogonal"], [results["within"][group2]["pct_near_orthogonal"]]
+                )
+
+                statistical_results[f"{group1}_vs_{group2}_orthogonal"] = {
+                    "ttest_stat": float(tstat),
+                    "ttest_p": float(pvalue),
+                    "is_significantly_different": bool(is_significant),
+                    "comparison": comparison,
+                }
+
+        results["statistical_tests"] = statistical_results
+        self.orthogonality_results = results
+
+        return results
+
+    def _filter_large_arrays(self, results: dict) -> dict:
+        """Filter out large arrays from results dict to make it more manageable."""
+        if isinstance(results, dict):
+            filtered = {}
+            for k, v in results.items():
+                if isinstance(v, np.ndarray) and v.size > 1000:
+                    # Skip large arrays
+                    continue
+                if isinstance(v, dict):
+                    # Recursively filter nested dictionaries
+                    filtered[k] = self._filter_large_arrays(v)
+                else:
+                    filtered[k] = v
+            return filtered
+        return results
+
+    def run_all_analyses(self) -> dict:
+        """Run all geometric analyses and compile comprehensive results."""
+        dimensionality_results = self.analyze_dimensionality()
+        orthogonality_results = self.analyze_orthogonality()
+
+        # Compile summary findings
+        summary = {}
+
+        # Dimensionality findings
+        if (
+            "boost_vs_random_1" in dimensionality_results
+            and dimensionality_results["boost_vs_random_1"]["is_significantly_different"]
+        ):
+            if dimensionality_results["boost_vs_random_1"]["comparison"] == "lower":
+                summary["boost_dimensionality"] = (
+                    "The boost neuron group has significantly lower dimensionality than random groups, "
+                    "suggesting coordinated/synergistic weight patterns."
+                )
+            else:
+                summary["boost_dimensionality"] = (
+                    "The boost neuron group has significantly higher dimensionality than random groups, "
+                    "suggesting diverse and independent weight patterns."
+                )
+        else:
+            summary["boost_dimensionality"] = (
+                "The boost neuron group's dimensionality is not significantly different from random groups."
+            )
+
+        if (
+            "suppress_vs_random_1" in dimensionality_results
+            and dimensionality_results["suppress_vs_random_1"]["is_significantly_different"]
+        ):
+            if dimensionality_results["suppress_vs_random_1"]["comparison"] == "lower":
+                summary["suppress_dimensionality"] = (
+                    "The suppress neuron group has significantly lower dimensionality than random groups, "
+                    "suggesting coordinated/synergistic weight patterns."
+                )
+            else:
+                summary["suppress_dimensionality"] = (
+                    "The suppress neuron group has significantly higher dimensionality than random groups, "
+                    "suggesting diverse and independent weight patterns."
+                )
+        else:
+            summary["suppress_dimensionality"] = (
+                "The suppress neuron group's dimensionality is not significantly different from random groups."
+            )
+
+        # Orthogonality findings
+        for group in ["boost", "suppress"]:
+            if (
+                f"{group}_vs_random_1_angle" in orthogonality_results["statistical_tests"]
+                and orthogonality_results["statistical_tests"][f"{group}_vs_random_1_angle"][
+                    "is_significantly_different"
+                ]
+            ):
+                if orthogonality_results["statistical_tests"][f"{group}_vs_random_1_angle"]["comparison"] == "higher":
+                    summary[f"{group}_orthogonality"] = (
+                        f"The {group} neuron group shows significantly higher angles between weight vectors than random groups, "
+                        "suggesting more orthogonal functionality."
+                    )
+                else:
+                    summary[f"{group}_orthogonality"] = (
+                        f"The {group} neuron group shows significantly lower angles between weight vectors than random groups, "
+                        "suggesting more aligned/coordinated patterns."
+                    )
+            else:
+                summary[f"{group}_orthogonality"] = (
+                    f"The {group} neuron group's weight vector alignments are not significantly different from random groups."
+                )
+
+        # Between boost and suppress
+        if (
+            "boost_vs_suppress" in dimensionality_results
+            and dimensionality_results["boost_vs_suppress"]["is_significantly_different"]
+        ):
+            if dimensionality_results["boost_vs_suppress"]["comparison"] == "higher":
+                summary["boost_vs_suppress_dimensionality"] = (
+                    "Boost neurons show significantly higher weight space dimensionality than suppress neurons."
+                )
+            else:
+                summary["boost_vs_suppress_dimensionality"] = (
+                    "Boost neurons show significantly lower weight space dimensionality than suppress neurons."
+                )
+        else:
+            summary["boost_vs_suppress_dimensionality"] = (
+                "Boost and suppress neurons have similar weight space dimensionality."
+            )
+
+        # Create combined results
+        combined_results = {
+            "dimensionality": self._filter_large_arrays(dimensionality_results),
+            "orthogonality": self._filter_large_arrays(orthogonality_results),
+            "summary": summary,
+            "neuron_indices": self.neuron_indices,
+        }
+
+        self.comparative_results = combined_results
+        return combined_results
 
 
 #######################################################

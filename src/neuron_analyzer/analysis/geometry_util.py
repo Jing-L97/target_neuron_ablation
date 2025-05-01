@@ -15,6 +15,15 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 #######################################################
+# Load last layer
+
+
+def get_last_layer(model_name) -> int:
+    """Get the last layer of the model name."""
+    return 5 if "70m" in model_name else 23
+
+
+#######################################################
 # Neuron group Selector class
 
 
@@ -192,7 +201,7 @@ def get_group_name(args) -> Path:
 
 
 #######################################################
-# DEvice manager
+# Device manager
 
 
 def get_device():
