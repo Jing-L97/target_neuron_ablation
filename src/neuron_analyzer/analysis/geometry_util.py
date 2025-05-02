@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def get_last_layer(model_name) -> int:
     """Get the last layer of the model name."""
-    return 5 if "70m" in model_name else 23
+    return 5 if "70" in model_name else 23
 
 
 #######################################################

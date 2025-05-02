@@ -356,8 +356,8 @@ class BaseHeavyTailedAnalyzer(ABC):
 
     def __init__(self, boost_neurons: list[int], suppress_neurons: list[int], device=None):
         """Initialize the analyzer with neuron groups."""
-        self.boost_neurons = boost_neurons
-        self.suppress_neurons = suppress_neurons
+        self.boost_neuron_indices = boost_neurons
+        self.suppress_neuron_indices = suppress_neurons
         self.device = device
         self.results = {}
 
@@ -369,7 +369,7 @@ class BaseHeavyTailedAnalyzer(ABC):
         """Compute correlation matrix for the specified neurons."""
 
     @abstractmethod
-    def run_analyses(self) -> dict[str, Any]:
+    def run_all_analyses(self) -> dict[str, Any]:
         """Run all HTSR analyses and return results."""
 
     def esd_shape_analysis(self, neuron_indices: list[int]) -> dict[str, Any]:
@@ -394,113 +394,191 @@ class BaseHeavyTailedAnalyzer(ABC):
 
 
 class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
-    """Analyzer for Heavy-Tailed Self-Regularization properties in weight space."""
+    """Analyzer for Heavy-Tailed Self-Regularization properties in weight space.
+    This class analyzes weight matrices directly with no activation matrices.
+    """
 
     def __init__(
         self,
         model,
         layer_num: int,
-        all_neuron_indices: list[int],
-        boost_neurons: list[int],
-        suppress_neurons: list[int],
-        use_mixed_precision=False,
-        device=None,
+        boost_neuron_indices: list[int],
+        suppress_neuron_indices: list[int],
+        excluded_neuron_indices: list[int] = None,
+        num_random_groups: int = 2,
+        use_mixed_precision: bool = False,
+        device: str = None,
     ):
-        """Initialize the analyzer with model and neuron groups."""
-        super().__init__(boost_neurons, suppress_neurons, device)
+        """Initialize the analyzer with model and neuron groups.
+
+        Args:
+            model: The neural network model to analyze
+            layer_num: The layer number to analyze
+            boost_neurons: List of neuron indices that boost specific tokens
+            suppress_neurons: List of neuron indices that suppress specific tokens
+            excluded_neuron_indices: List of neuron indices to exclude from analysis
+            num_random_groups: Number of random neuron groups to create for comparison
+            use_mixed_precision: Whether to use mixed precision calculations
+            device: The device to perform calculations on (CPU or GPU)
+
+        """
+        super().__init__(boost_neuron_indices, suppress_neuron_indices, device)
         self.model = model
         self.layer_num = layer_num
-        self.all_neuron_indices = all_neuron_indices
+        self.excluded_neuron_indices = excluded_neuron_indices or []
+        self.num_random_groups = num_random_groups
         self.use_mixed_precision = use_mixed_precision
-        # Get common neurons and create random samples
-        random_sample_size = min(len(boost_neurons), len(suppress_neurons))
-        self.common_neurons, self.sampled_common_neurons = self._get_common_neurons(random_sample_size)
+
+        # Get common neurons and create random groups
+        self.common_neurons, self.random_indices = self._get_common_neurons()
 
         # Create neuron group dictionary
         self.neuron_groups = {
-            "boost": self.boost_neurons,
-            "suppress": self.suppress_neurons,
+            "boost": self.boost_neuron_indices,
+            "suppress": self.suppress_neuron_indices,
             "rare_token": self.rare_token_neurons,
-            "common": self.sampled_common_neurons,
         }
+
+        # Add random groups to the neuron groups dictionary
+        for i in range(len(self.random_indices)):
+            self.neuron_groups[f"random_{i + 1}"] = self.random_indices[i]
+
+        # Include a "common" sample of similar size to rare token neurons
+        sample_size = max(len(boost_neuron_indices), len(suppress_neuron_indices))
+        if self.common_neurons and len(self.common_neurons) > sample_size:
+            np.random.shuffle(self.common_neurons)
+            self.neuron_groups["common"] = self.common_neurons[:sample_size]
+        else:
+            self.neuron_groups["common"] = self.common_neurons
 
         # Set up PyTorch dtype
         self.dtype = torch.float16 if self.use_mixed_precision else torch.float32
         logger.info(f"Using device: {self.device}, Mixed precision: {self.use_mixed_precision}")
 
-        # Initialize activation matrices cache
-        self.activation_matrices = {}
+        # Initialize weight matrices cache
+        self.weight_matrices = {}
 
-    def _get_common_neurons(self, sample_size: int | None = None) -> tuple[list[int], list[int]]:
-        """Get neurons that are neither boosting nor suppressing and create a sample."""
-        # Get neurons that are neither boosting nor suppressing
-        all_special = set(self.boost_neurons + self.suppress_neurons)
-        common_neurons = [idx for idx in self.all_neuron_indices if idx not in all_special]
+    def _get_common_neurons(self) -> tuple[list[int], list[list[int]]]:
+        """Generate non-overlapping random neuron groups that don't overlap with boost or suppress neurons.
 
-        # Sample a subset of similar size to the rare token neurons if requested
-        if sample_size is None:
-            sample_size = len(self.rare_token_neurons)
+        Returns:
+            Tuple containing:
+            - List of all common neurons (not boost or suppress)
+            - List of lists, where each inner list is a group of random neurons
 
-        if len(common_neurons) > sample_size:
-            # Shuffle the common neurons
-            np.random.shuffle(common_neurons)
-            sampled_common_neurons = common_neurons[:sample_size]
+        """
+        # Get layer to determine total neurons
+        layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
+        layer_dict = dict(self.model.named_modules())
+        layer = layer_dict[layer_path]
+        total_neurons = layer.weight.shape[0]
+
+        # Get all neuron indices
+        all_neuron_indices = list(range(total_neurons))
+
+        # Set parameters
+        group_size = max(len(self.boost_neuron_indices), len(self.suppress_neuron_indices))
+
+        # Define special indices to exclude (boost and suppress)
+        special_indices = set(self.boost_neuron_indices + self.suppress_neuron_indices + self.excluded_neuron_indices)
+
+        # Get non-special neurons (those that are neither boost nor suppress)
+        non_special_indices = [idx for idx in all_neuron_indices if idx not in special_indices]
+
+        # Initialize list to store random groups
+        random_indices = []
+
+        # Check if we have enough neurons for the desired number of random groups
+        if len(non_special_indices) < self.num_random_groups * group_size:
+            logger.warning(
+                f"Not enough neurons for {self.num_random_groups} non-overlapping random groups of size {group_size}."
+            )
+            # Not enough neurons - split them evenly into the required number of groups
+            np.random.shuffle(non_special_indices)
+            split_points = [
+                len(non_special_indices) * i // self.num_random_groups for i in range(self.num_random_groups + 1)
+            ]
+
+            for i in range(self.num_random_groups):
+                random_indices.append(non_special_indices[split_points[i] : split_points[i + 1]])
         else:
-            sampled_common_neurons = common_neurons
+            # We have enough neurons - create proper random groups
+            np.random.shuffle(non_special_indices)
+            for i in range(self.num_random_groups):
+                start_idx = i * group_size
+                end_idx = (i + 1) * group_size
+                if end_idx <= len(non_special_indices):
+                    random_indices.append(non_special_indices[start_idx:end_idx])
+                else:
+                    # If we don't have enough neurons, just use what's left
+                    random_indices.append(non_special_indices[start_idx:])
 
-        return common_neurons, sampled_common_neurons
+        return non_special_indices, random_indices
 
     def _to_numpy(self, tensor: torch.Tensor) -> np.ndarray:
         """Convert a PyTorch tensor to NumPy array."""
         return tensor.detach().cpu().numpy()
 
-    def _create_activation_matrix(self, neuron_indices: list[int]) -> np.ndarray:
-        """Create an activation matrix where rows are token-context pairs and columns are neurons."""
+    def extract_neuron_weights(self, neuron_indices: list[int]) -> np.ndarray:
+        """Extract weight vectors for specified neurons in a layer.
+
+        Args:
+            neuron_indices: List of neuron indices to extract weights for
+
+        Returns:
+            NumPy array of shape (len(neuron_indices), input_dim) containing weights
+
+        """
         # Cache key for the neuron group
         cache_key = tuple(sorted(neuron_indices))
 
         # Return cached result if available
-        if cache_key in self.activation_matrices:
-            return self.activation_matrices[cache_key]
+        if cache_key in self.weight_matrices:
+            return self.weight_matrices[cache_key]
 
-        # Filter data to only include specified neurons
-        filtered_data = self.data[self.data[self.component_column].isin(neuron_indices)]
+        # Get layer weights
+        layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
+        layer_dict = dict(self.model.named_modules())
+        layer = layer_dict[layer_path]
 
-        # Pivot to create matrix with token-context pairs as rows and neurons as columns
-        pivot_table = filtered_data.pivot_table(
-            index="token_context_id",
-            columns=self.component_column,
-            values=self.activation_column,
-            aggfunc="first",  # In case of duplicates, take the first value
-        )
+        # Get weight matrix
+        W = layer.weight.detach().cpu().numpy()
 
-        # Handle missing values if any
-        pivot_table = pivot_table.fillna(0)
+        # Extract weights for specific neurons
+        W_neurons = W[neuron_indices]
+
+        # Ensure we return a 2D array
+        if len(W_neurons.shape) == 1:
+            W_neurons = W_neurons.reshape(1, -1)
 
         # Store in cache
-        matrix = pivot_table.values
-        self.activation_matrices[cache_key] = matrix
+        self.weight_matrices[cache_key] = W_neurons
 
-        return matrix
+        return W_neurons
 
     def compute_correlation_matrix(self, neuron_indices: list[int]) -> np.ndarray:
-        """Compute the correlation matrix for the specified neurons using activations."""
-        # Get activation matrix (neurons as columns, token-contexts as rows)
-        activation_matrix = self._create_activation_matrix(neuron_indices)
+        """Compute the correlation matrix for the specified neurons using weights.
 
-        # Transpose to get neurons as rows
-        neuron_activations = activation_matrix.T
+        Args:
+            neuron_indices: List of neuron indices to compute correlations for
 
-        # Skip calculation if not enough neurons or contexts
-        if neuron_activations.shape[0] <= 1 or neuron_activations.shape[1] == 0:
+        Returns:
+            NumPy array of shape (len(neuron_indices), len(neuron_indices)) with correlation coefficients
+
+        """
+        # Extract weight vectors for the specified neurons
+        weight_matrix = self.extract_neuron_weights(neuron_indices)
+
+        # Skip calculation if not enough neurons
+        if weight_matrix.shape[0] <= 1:
             # Return identity matrix as a fallback
-            return np.eye(max(1, neuron_activations.shape[0]))
+            return np.eye(max(1, weight_matrix.shape[0]))
 
-        # Center each neuron's activations
-        centered = neuron_activations - np.mean(neuron_activations, axis=1, keepdims=True)
+        # Center each neuron's weights
+        centered = weight_matrix - np.mean(weight_matrix, axis=1, keepdims=True)
 
         # Check for zero variance
-        std_values = np.std(neuron_activations, axis=1, keepdims=True)
+        std_values = np.std(weight_matrix, axis=1, keepdims=True)
         # Avoid division by zero
         std_values[std_values < 1e-8] = 1.0
 
@@ -508,61 +586,24 @@ class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
         normalized = centered / std_values
 
         # Compute correlation matrix
-        n_samples = normalized.shape[1]
-        correlation_matrix = np.dot(normalized, normalized.T) / n_samples
+        n_features = normalized.shape[1]
+        correlation_matrix = np.dot(normalized, normalized.T) / n_features
 
         # Fix potential numerical issues
         correlation_matrix = np.clip(correlation_matrix, -1.0, 1.0)
 
+        # Ensure the diagonal is exactly 1.0
+        np.fill_diagonal(correlation_matrix, 1.0)
+
         return correlation_matrix
 
-    def compute_enhanced_correlation_matrix(self, neuron_indices: list[int], use_gpu: bool = True) -> np.ndarray:
-        """Compute correlation matrix with enhanced efficiency using GPU if available.
-        This method is an alternative to compute_correlation_matrix for larger datasets.
+    def run_all_analyses(self) -> dict[str, Any]:
+        """Run all HTSR analyses for weight space and return results as a dictionary.
+
+        Returns:
+            Dictionary containing analysis results for each neuron group
+
         """
-        # Get activation matrix
-        activation_matrix = self._create_activation_matrix(neuron_indices)
-
-        # If GPU is available and requested, use it
-        if use_gpu and torch.cuda.is_available() and self.device:
-            # Convert to PyTorch tensor
-            tensor = torch.tensor(activation_matrix, dtype=self.dtype).to(self.device)
-
-            # Transpose to get neurons as rows
-            neuron_tensor = tensor.t()
-
-            # Center each neuron's activations
-            centered = neuron_tensor - torch.mean(neuron_tensor, dim=1, keepdim=True)
-
-            # Compute standard deviation
-            std_values = torch.std(neuron_tensor, dim=1, keepdim=True)
-            # Avoid division by zero
-            std_values[std_values < 1e-8] = 1.0
-
-            # Normalize
-            normalized = centered / std_values
-
-            # Compute correlation matrix
-            n_samples = normalized.shape[1]
-            correlation_tensor = torch.mm(normalized, normalized.t()) / n_samples
-
-            # Move to CPU and convert to numpy
-            correlation_matrix = self._to_numpy(correlation_tensor)
-
-            # Clean up GPU memory
-            del tensor, neuron_tensor, centered, normalized, correlation_tensor
-            cleanup()
-        else:
-            # Fall back to NumPy implementation
-            correlation_matrix = self.compute_correlation_matrix(neuron_indices)
-
-        # Fix potential numerical issues
-        correlation_matrix = np.clip(correlation_matrix, -1.0, 1.0)
-
-        return correlation_matrix
-
-    def run_analyses(self, use_gpu: bool = True) -> dict[str, Any]:
-        """Run all HTSR analyses for activation space and return results as a dictionary."""
         results = {}
 
         # For each neuron group
@@ -575,7 +616,7 @@ class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
 
             # Compute correlation matrix once for this group
             try:
-                correlation_matrix = self.compute_enhanced_correlation_matrix(neuron_indices, use_gpu)
+                correlation_matrix = self.compute_correlation_matrix(neuron_indices)
             except Exception as e:
                 logger.error(f"Error computing correlation matrix for {group_name}: {e}")
                 results[group_name] = {"error": f"Failed to compute correlation matrix: {e!s}"}
@@ -611,14 +652,18 @@ class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
         # Add comparisons
         results["comparisons"] = self._get_comparisons(results)
 
-        # Cleanup memory
-        cleanup()
-
         return results
 
     def _get_comparisons(self, group_results: dict[str, Any]) -> dict[str, Any]:
-        """Generate comparison metrics between neuron groups."""
-        # Implementation similar to WeightSpaceHeavyTailedAnalyzer._get_comparisons
+        """Generate comparison metrics between neuron groups.
+
+        Args:
+            group_results: Dictionary with results for each neuron group
+
+        Returns:
+            Dictionary with comparison metrics
+
+        """
         comparisons = {}
 
         # Skip if there are errors or missing results

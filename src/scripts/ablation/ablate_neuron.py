@@ -37,6 +37,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments for step range."""
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
     parser.add_argument("--interval", type=int, default=10, help="Checkpoint interval sampling")
+    parser.add_argument("--layer_num", type=int, default=1, help="Last n MLP layer")
     parser.add_argument(
         "--config_name",
         type=str,
@@ -59,7 +60,7 @@ def parse_args() -> argparse.Namespace:
 class NeuronAblationProcessor:
     """Class to handle neural network ablation processing."""
 
-    def __init__(self, args: DictConfig, device, logger: logging.Logger | None = None):
+    def __init__(self, args: DictConfig, layer_num: int, device: str, logger: logging.Logger | None = None):
         """Initialize the ablation processor with configuration."""
         # Set up logger
         self.logger = logger or logging.getLogger(__name__)
@@ -68,7 +69,7 @@ class NeuronAblationProcessor:
         self.args = args
         self.seed: int = args.seed
         self.device: str = device
-
+        self.layer_num = layer_num
         # Initialize random seeds
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
@@ -93,6 +94,22 @@ class NeuronAblationProcessor:
             return longtail_threshold
         # Not in longtail mode, use default threshold
         return None
+
+    def get_entropy_df():
+        # initilize the eval
+        entropy_df = pd.read_csv(
+            settings.PATH.ablation_dir
+            / self.args.vector
+            / self.args.model
+            / str(step)
+            / str(self.args.data_range_end)
+            / "entropy_df.csv"
+        )
+        if self.args.debug:
+            row_num = 1_000_000
+            entropy_df = entropy_df.head(row_num)
+            logger.info(f"Enter debugging mode. Apply {row_num} rows.")
+        return entropy_df
 
     def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
         """Process a single step with the given configuration."""
