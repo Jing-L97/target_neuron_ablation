@@ -52,9 +52,7 @@ def configure_path(args):
         else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
     )
 
-    save_path = (
-        settings.PATH.direction_dir / group_name / "weight" / args.vector / args.model / save_heuristic / filename
-    )
+    save_path = settings.PATH.direction_dir / group_name / "htsr" / args.vector / args.model / save_heuristic / filename
     save_path.parent.mkdir(parents=True, exist_ok=True)
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     # only set the path when loading the group neurons
@@ -92,31 +90,31 @@ def main() -> None:
     )
 
     for step in step_dirs:
-        # try:
-        neuron_analyzer = NeuronGroupAnalyzer(args=args, device=device, step_path=step[0])
-        boost_neuron_indices, suppress_neuron_indices, random_indices = neuron_analyzer.load_neurons()
+        try:
+            neuron_analyzer = NeuronGroupAnalyzer(args=args, device=device, step_path=step[0])
+            boost_neuron_indices, suppress_neuron_indices, random_indices = neuron_analyzer.load_neurons()
 
-        # initilize the class
-        model, _ = extractor.load_model_for_step(step[1])
-        geometry_analyzer = WeightSpaceHeavyTailedAnalyzer(
-            model=model,
-            boost_neuron_indices=boost_neuron_indices,
-            suppress_neuron_indices=suppress_neuron_indices,
-            excluded_neuron_indices=random_indices,
-            num_random_groups=2,
-            layer_num=get_last_layer(args.model),
-            use_mixed_precision=use_mixed_precision,
-            device=device,
-        )
-        results = geometry_analyzer.run_all_analyses()
+            # initilize the class
+            model, _ = extractor.load_model_for_step(step[1])
+            geometry_analyzer = WeightSpaceHeavyTailedAnalyzer(
+                model=model,
+                boost_neuron_indices=boost_neuron_indices,
+                suppress_neuron_indices=suppress_neuron_indices,
+                excluded_neuron_indices=random_indices,
+                num_random_groups=2,
+                layer_num=get_last_layer(args.model),
+                use_mixed_precision=use_mixed_precision,
+                device=device,
+            )
+            results = geometry_analyzer.run_all_analyses()
 
-        # save the results
-        final_results[str(step[1])] = results
-        JsonProcessor.save_json(final_results, save_path)
-        logger.info(f"Save file to {save_path}")
+            # save the results
+            final_results[str(step[1])] = results
+            JsonProcessor.save_json(final_results, save_path)
+            logger.info(f"Save file to {save_path}")
 
-    # except:
-    # logger.info(f"Something wrong with {step[1]}")
+        except:
+            logger.info(f"Something wrong with {step[1]}")
 
 
 if __name__ == "__main__":
