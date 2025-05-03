@@ -6,7 +6,7 @@
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/classify/hyper_group_%a.log
-#SBATCH --array=0-5 # Total combinations 
+#SBATCH --array=0-3 # Total combinations 
 
 # Script root path
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/classify"
@@ -26,7 +26,6 @@ GROUP_SIZES=(
 
 CLASS_NUMS=(
     2
-    3
 )
 
 # Calculate total combinations
@@ -64,6 +63,6 @@ python "$SCRIPT_ROOT/train.py" \
     --label_type "$LABEL_TYPE" \
     --class_num "$CLASS_NUM" \
     --group_size "$GROUP_SIZE" \
-    --resume
+    --run_baseline
 
 echo "Analysis complete for configuration: Model=$MODEL, Group_Size=$GROUP_SIZE, Class_Num=$CLASS_NUM"

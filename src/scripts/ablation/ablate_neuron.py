@@ -95,9 +95,9 @@ class NeuronAblationProcessor:
         # Not in longtail mode, use default threshold
         return None
 
-    def get_entropy_df():
-        # initilize the eval
-        entropy_df = pd.read_csv(
+    def load_entropy_df(self, step) -> pd.DataFrame:
+        """Load entropy df if needed."""
+        h_path = (
             settings.PATH.ablation_dir
             / self.args.vector
             / self.args.model
@@ -105,11 +105,21 @@ class NeuronAblationProcessor:
             / str(self.args.data_range_end)
             / "entropy_df.csv"
         )
-        if self.args.debug:
-            row_num = 1_000_000
-            entropy_df = entropy_df.head(row_num)
-            logger.info(f"Enter debugging mode. Apply {row_num} rows.")
-        return entropy_df
+        if h_path.is_file():
+            return pd.read_csv(h_path)
+        return get_entropy_activation_df(
+            self.all_neurons,
+            self.tokenized_data,
+            self.token_df,
+            self.model,
+            batch_size=self.args.batch_size,
+            device=self.device,
+            cache_residuals=False,
+            cache_pre_activations=False,
+            compute_kl_from_bu=False,
+            residuals_layer=self.entropy_dim_layer,
+            residuals_dict={},
+        )
 
     def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
         """Process a single step with the given configuration."""
@@ -119,7 +129,7 @@ class NeuronAblationProcessor:
         model_handler = ModelHandler()
 
         # Load model and tokenizer for specific step
-        model, tokenizer = model_handler.load_model_and_tokenizer(
+        self.model, self.tokenizer = model_handler.load_model_and_tokenizer(
             step=step,
             model_name=self.args.model,
             hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",
@@ -127,7 +137,7 @@ class NeuronAblationProcessor:
         )
 
         # Load and process dataset
-        tokenized_data, token_df = model_handler.tokenize_data(
+        self.tokenized_data, self.token_df = model_handler.tokenize_data(
             dataset=self.args.dataset,
             data_range_start=self.args.data_range_start,
             data_range_end=self.args.data_range_end,
@@ -139,47 +149,39 @@ class NeuronAblationProcessor:
         self.logger.info("Finished tokenizing data")
 
         # Setup neuron indices
-        entropy_neuron_layer = model.cfg.n_layers - 1
+        entropy_neuron_layer = self.model.cfg.n_layers - 1
         if self.args.neuron_range is not None:
             start, end = map(int, self.args.neuron_range.split("-"))
             all_neuron_indices = list(range(start, end))
         else:
-            all_neuron_indices = list(range(model.cfg.d_mlp))
+            all_neuron_indices = list(range(self.model.cfg.d_mlp))
 
-        all_neurons = [f"{entropy_neuron_layer}.{i}" for i in all_neuron_indices]
+        self.all_neurons = [f"{entropy_neuron_layer}.{i}" for i in all_neuron_indices]
         self.logger.info("Loaded all the neurons")
 
         if self.args.dry_run:
-            all_neurons = all_neurons[:10]
+            self.all_neurons = self.all_neurons[:10]
 
         # Compute entropy and activation for each neuron
-        entropy_dim_layer = model.cfg.n_layers - 1
+        self.entropy_dim_layer = self.model.cfg.n_layers - 1
 
-        entropy_df = get_entropy_activation_df(
-            all_neurons,
-            tokenized_data,
-            token_df,
-            model,
-            batch_size=self.args.batch_size,
-            device=self.device,
-            cache_residuals=False,
-            cache_pre_activations=False,
-            compute_kl_from_bu=False,
-            residuals_layer=entropy_dim_layer,
-            residuals_dict={},
-        )
+        self.entropy_df = self.load_entropy_df(step)
         self.logger.info("Finished computing all the entropy")
+        if self.args.debug:
+            row_num = 1_000_000
+            self.entropy_df = self.entropy_df.head(row_num)
+            logger.info(f"Enter debugging mode. Apply {row_num} rows.")
 
         # Ablate the dimensions
-        model.set_use_attn_result(False)
+        self.model.set_use_attn_result(False)
 
         analyzer = ModelAblationAnalyzer(
-            components_to_ablate=all_neurons,
-            model=model,
+            components_to_ablate=self.all_neurons,
+            model=self.model,
             device=self.device,
             unigram_distrib=unigram_distrib,
-            tokenized_data=tokenized_data,
-            entropy_df=entropy_df,
+            tokenized_data=self.tokenized_data,
+            entropy_df=self.entropy_df,
             k=self.args.k,
             ablation_mode=self.args.ablation_mode,
             longtail_threshold=longtail_threshold,
@@ -188,7 +190,7 @@ class NeuronAblationProcessor:
         results = analyzer.mean_ablate_components()
         self.logger.info("Finished ablations!")
         # Process and save results
-        self._save_results(results, tokenizer, step, save_path)
+        self._save_results(results, self.tokenizer, step, save_path)
 
     def _save_results(
         self,

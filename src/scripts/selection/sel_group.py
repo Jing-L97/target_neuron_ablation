@@ -106,7 +106,7 @@ class NeuronGroupSelector:
         # initlize the model handler class
         model_handler = ModelHandler()
         # Load model and tokenizer for specific step
-        model, tokenizer = model_handler.load_model_and_tokenizer(
+        model, _ = model_handler.load_model_and_tokenizer(
             step=step,
             model_name=self.args.model,
             hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",

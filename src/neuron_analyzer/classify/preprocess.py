@@ -112,10 +112,11 @@ def get_threshold(data_path: Path, threshold_mode: str) -> float:
 class FixedLabeler:
     """Class for annotating neuron data with predefined labels; maximize class info."""
 
-    def __init__(self, data: dict, class_indices: dict):
+    def __init__(self, data: dict, class_indices: dict, run_baseline: bool):
         """Initialize the LabelAnnotator."""
         self.data = data
         self.class_indices = class_indices
+        self.run_baseline = run_baseline
 
     def run_pipeline(self) -> list:
         """Annotate labels for each neuron."""
@@ -123,11 +124,17 @@ class FixedLabeler:
         self.feas = []
         self.indices = []
         for neuron_index, fea in self.data["neuron_features"].items():
-            if self._generate_labels(neuron_index):
-                self.labels.append(self._generate_labels(neuron_index))
+            if self._annotate_labels(neuron_index):
+                self.labels.append(self._annotate_labels(neuron_index))
                 self.feas.append(fea)
                 self.indices.append(neuron_index)
         return np.array(self.feas), np.array(self.labels), self.indices
+
+    def _annotate_labels(self, neuron_index: int):
+        """Generate class labels based on differnet conditions."""
+        if self.run_baseline:
+            return self._generate_baseline_labels(neuron_index)
+        return self._generate_labels(neuron_index)
 
     def _generate_labels(self, neuron_index: int) -> int:
         """Generate class labels based on predefined class dict."""
@@ -137,6 +144,14 @@ class FixedLabeler:
             return 1
         if int(neuron_index) in self.class_indices["suppress"]:
             return 2
+        return None
+
+    def _generate_baseline_labels(self, neuron_index: int) -> int:
+        """Generate class labels based on predefined class dict for baseline condition."""
+        if int(neuron_index) in self.class_indices["random"]:
+            return -1
+        if str(neuron_index) in self.class_indices["baseline"]:
+            return 1
         return None
 
 

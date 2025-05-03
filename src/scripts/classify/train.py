@@ -17,7 +17,8 @@ from neuron_analyzer.classify.preprocess import (
     ThresholdLabeler,
     get_threshold,
 )
-from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
+from neuron_analyzer.load_util import StepPathProcessor
+from neuron_analyzer.selection.neuron import generate_random_indices
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -28,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train classifier to seperate different neurons.")
 
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
+    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-410m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
@@ -60,11 +61,10 @@ def parse_args() -> argparse.Namespace:
         help="how many classes to classify",
     )
     parser.add_argument("--load_stat", type=bool, default=True, help="Whether to load from existing index")
-    parser.add_argument(
-        "--exclude_random", type=bool, default=True, help="Whether to include the random neuron indices"
-    )
+    parser.add_argument("--exclude_random", type=bool, default=True, help="Include all neuron indices if set True")
+    parser.add_argument("--run_baseline", action="store_true", help="Whether to run baseline models")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
-    parser.add_argument("--top_n", type=int, default=100, help="The top n neurons to be selected")
+    parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
@@ -106,7 +106,6 @@ class Trainer:
         """Extract optimal threshold across multiple steps and run classification."""
         threshold = self._load_threshold()
         classification_condition = self._get_classification_condition()
-        results_all = {}
 
         for step in self.step_dirs:
             try:
@@ -115,15 +114,10 @@ class Trainer:
                 # configure the save path
                 step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
                 # Train classifier
-                summary = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
-                results_all[step[1]] = summary
+                _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
+
             except Exception as e:
                 logger.info(f"Error processing step {step[1]}: {e!s}")
-                logger.debug("Exception details:", exc_info=True)
-
-        # Save all results
-        JsonProcessor.save_json(results_all, self.eval_path / "results_summary.json")
-        return results_all
 
     def _load_data(
         self, step: tuple[str, str], threshold: float | None, classification_condition: str
@@ -139,20 +133,26 @@ class Trainer:
             threshold_labeler = ThresholdLabeler(threshold=threshold, data=data)
             labels, neuron_indices = threshold_labeler.run_pipeline()
         elif self.args.label_type == "fixed":
-            fixed_labeler = FixedLabeler(data=data, class_indices=self._load_neuron_indices(step_path=step[0]))
+            fixed_labeler = FixedLabeler(
+                data=data,
+                run_baseline=self.args.run_baseline,
+                class_indices=self._load_neuron_indices(data=data, step_path=step[0]),
+            )
             fea, labels, neuron_indices = fixed_labeler.run_pipeline()
         else:
             raise ValueError(f"Unsupported label_type: {self.args.label_type}")
 
         # Integrate features and labels
+        filename = (
+            f"data_{classification_condition}_baseline.json"
+            if self.args.run_baseline
+            else f"data_{classification_condition}.json"
+        )
         data_loader = DataLoader(
             X=fea,
             y=labels,
             neuron_indices=neuron_indices,
-            out_path=self.data_path
-            / str(step[1])
-            / str(self.args.data_range_end)
-            / f"data_{classification_condition}.json",
+            out_path=self.data_path / str(step[1]) / str(self.args.data_range_end) / filename,
         )
         X, y, neuron_indices = data_loader.run_pipeline()
 
@@ -167,6 +167,8 @@ class Trainer:
         step_eval_path: Path,
     ) -> dict[str, Any]:
         """Train and evaluate classifier from single step."""
+        # configure save path
+        filename = "separation_analysis_baseline.json" if self.args.run_baseline else "separation_analysis.json"
         # Train and evaluate the classifiers
         classifier = NeuronClassifier(
             X=X,
@@ -182,18 +184,30 @@ class Trainer:
         # Initial analyses on the results
         hypothesis_tester = NeuronHypothesisTester(
             classifier_results=classifier_results,
-            out_path=step_eval_path / "separation_analysis.json",
+            out_path=step_eval_path / filename,
             resume=self.args.resume,
         )
         summary = hypothesis_tester.run_pipeline()
 
         return summary
 
-    def _load_neuron_indices(self, step_path: str) -> dict[str, list[int]]:
+    def _load_neuron_indices(self, data: dict, step_path: str) -> dict[str, list[int]]:
         """Load neuron indices from the existing file."""
         neuron_analyzer = NeuronGroupAnalyzer(args=self.args, device="cpu", step_path=step_path)
         boost_neuron_indices, suppress_neuron_indices, random_indices = neuron_analyzer.load_neurons()
+        group_size = max(len(boost_neuron_indices), len(suppress_neuron_indices))
+        special_indices = set(boost_neuron_indices + suppress_neuron_indices + random_indices)
 
+        if self.args.run_baseline:
+            baseline_indices = generate_random_indices(
+                all_neuron_indices=data["neuron_features"].keys(),
+                special_indices=special_indices,
+                group_size=group_size,
+                num_random_groups=1,
+            )
+            # merge mulitple indices
+            baseline_indices = [item for sublist in baseline_indices for item in sublist]
+            return {"baseline": baseline_indices, "random": random_indices}
         return {
             "boost": boost_neuron_indices,
             "suppress": suppress_neuron_indices,

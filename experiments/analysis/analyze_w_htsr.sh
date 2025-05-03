@@ -72,7 +72,6 @@ python "$SCRIPT_ROOT/analyze_weight_htsr.py" \
   --group_size "$GROUP_SIZE" \
   --top_n "$TOP_N" \
   --heuristic "$HEURISTIC" \
-  --load_stat \
-  --resume
+  --load_stat 
 
 echo "Analysis complete for combination $SLURM_ARRAY_TASK_ID"

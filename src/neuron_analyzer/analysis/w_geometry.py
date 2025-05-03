@@ -7,6 +7,8 @@ import torch
 from scipy.linalg import subspace_angles
 from scipy.stats import ttest_ind
 
+from neuron_analyzer.selection.neuron import generate_random_indices
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -34,7 +36,7 @@ class WeightGeometricAnalyzer:
         self.excluded_neuron_indices = excluded_neuron_indices or []
 
         # Get common neurons and create random groups
-        self.common_neurons, self.random_indices = self._get_common_neurons()
+        self.random_indices = self._get_common_neurons()
 
         # Store neuron indices in a dictionary for easy access
         self.neuron_indices = {
@@ -64,37 +66,10 @@ class WeightGeometricAnalyzer:
         special_indices = set(self.boost_neuron_indices + self.suppress_neuron_indices)
 
         # Get non-special neurons (those that are neither boost nor suppress)
-        non_special_indices = [idx for idx in all_neuron_indices if idx not in special_indices]
-
-        # Initialize list to store random groups
-        random_indices = []
-
-        # Check if we have enough neurons for the desired number of random groups
-        if len(non_special_indices) < self.num_random_groups * group_size:
-            logger.warning(
-                f"Not enough neurons for {self.num_random_groups} non-overlapping random groups of size {group_size}."
-            )
-            # Not enough neurons - split them evenly into the required number of groups
-            np.random.shuffle(non_special_indices)
-            split_points = [
-                len(non_special_indices) * i // self.num_random_groups for i in range(self.num_random_groups + 1)
-            ]
-
-            for i in range(self.num_random_groups):
-                random_indices.append(non_special_indices[split_points[i] : split_points[i + 1]])
-        else:
-            # We have enough neurons - create proper random groups
-            np.random.shuffle(non_special_indices)
-            for i in range(self.num_random_groups):
-                start_idx = i * group_size
-                end_idx = (i + 1) * group_size
-                if end_idx <= len(non_special_indices):
-                    random_indices.append(non_special_indices[start_idx:end_idx])
-                else:
-                    # If we don't have enough neurons, just use what's left
-                    random_indices.append(non_special_indices[start_idx:])
-
-        return non_special_indices, random_indices
+        random_indices = generate_random_indices(
+            all_neuron_indices, special_indices, group_size, self.num_random_groups
+        )
+        return random_indices
 
     def extract_neuron_weights(self, neuron_indices: list[int]) -> np.ndarray:
         """Extract weight vectors for specified neurons in a layer."""

@@ -11,6 +11,7 @@ from scipy.stats import ttest_ind
 from sklearn.decomposition import PCA
 
 from neuron_analyzer.load_util import cleanup
+from neuron_analyzer.selection.neuron import generate_random_indices
 
 logger = logging.getLogger(__name__)
 
@@ -157,32 +158,10 @@ class ActivationGeometricAnalyzer:
         """Generate non-overlapping random neuron groups that don't overlap with boost or suppress neurons."""
         group_size = max(len(self.boost_neuron_indices), len(self.suppress_neuron_indices))
         special_indices = set(self.boost_neuron_indices + self.suppress_neuron_indices + self.excluded_neuron_indices)
-        non_special_indices = [idx for idx in self.all_neuron_indices if idx not in special_indices]
 
-        random_indices = []
-
-        # Ensure we have enough neurons for random groups
-        if len(non_special_indices) < 2 * group_size:
-            logger.warning(
-                f"Not enough neurons for {self.num_random_groups} non-overlapping random groups of size {group_size}."
-            )
-            # Split available neurons into two groups
-            np.random.shuffle(non_special_indices)
-            split_point = len(non_special_indices) // 2
-            random_indices.append(non_special_indices[:split_point])
-            random_indices.append(non_special_indices[split_point:])
-        else:
-            # Create non-overlapping random groups
-            np.random.shuffle(non_special_indices)
-            for i in range(self.num_random_groups):
-                start_idx = i * group_size
-                end_idx = (i + 1) * group_size
-                if end_idx <= len(non_special_indices):
-                    random_indices.append(non_special_indices[start_idx:end_idx])
-                else:
-                    # If we don't have enough neurons, just use what's left
-                    random_indices.append(non_special_indices[start_idx:])
-
+        random_indices = generate_random_indices(
+            self.all_neuron_indices, special_indices, group_size, self.num_random_groups
+        )
         # Create activation matrices for the random groups
         random_groups = [self._create_activation_matrix(indices) for indices in random_indices]
 

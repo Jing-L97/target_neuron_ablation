@@ -6,7 +6,7 @@
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/classify/hyper_ind_%a.log
-#SBATCH --array=0-11 # Updated to match total combinations
+#SBATCH --array=0-5 # Updated to match total combinations
 
 # Script root path
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/classify"
@@ -22,7 +22,6 @@ LABEL_TYPE="fixed"
 
 CLASS_NUMS=(
     2
-    3
 )
 
 TOP_NS=(
@@ -66,6 +65,6 @@ python "$SCRIPT_ROOT/train.py" \
     --label_type "$LABEL_TYPE" \
     --class_num "$CLASS_NUM" \
     --top_n "$TOP_N" \
-    --resume
+    --run_baseline
 
 echo "Analysis complete for configuration: Model=$MODEL, Class_Num=$CLASS_NUM, Top_N=$TOP_N"

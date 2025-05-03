@@ -1,16 +1,16 @@
 #!/bin/bash
-#SBATCH --job-name=sel_neuron
+#SBATCH --job-name=sel_70
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=80G
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=60G
 #SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_neuron_%a.log
-#SBATCH --array=0-3
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_70_%a.log
+#SBATCH --array=0-7
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
-
+SEL_FREQ="common"
 # Define the input arrays
 EFFECTS=(
     "suppress"
@@ -22,12 +22,14 @@ VECTORS=(
 )
 
 TOP_NS=(
+    10
+    50
+    100
     -1
 )
 
 MODELS=(
     "EleutherAI/pythia-70m-deduped"
-    "EleutherAI/pythia-410m-deduped"
 )
 
 # Calculate total combinations for validation
@@ -63,4 +65,5 @@ python $SCRIPT_ROOT/sel_neuron.py \
     --effect "$EFFECT" \
     --top_n "$TOP_N" \
     --vector "$VECTOR" \
+    --sel_freq "$SEL_FREQ" \
     --heuristic "$HEURISTIC"

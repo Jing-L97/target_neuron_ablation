@@ -70,53 +70,27 @@ class HeavyTailedAnalysisCore:
         n = correlation_matrix.shape[0]  # Number of rows
         d = correlation_matrix.shape[1] if correlation_matrix.shape[0] != correlation_matrix.shape[1] else n
 
-        # Estimate Q if not provided (with safety check)
+        # Estimate Q if not provided
         if Q is None:
-            Q = n / max(d, 1)  # Avoid division by zero
+            Q = n / d
 
-        # Compute Marchenko-Pastur (MP) law parameters with numerical stability
-        sigma_squared = max(np.mean(eigenvalues), 1e-10)  # Ensure minimal value
+        # Compute Marchenko-Pastur (MP) law parameters
+        sigma_squared = np.mean(eigenvalues)  # Estimate of variance
+        lambda_plus = sigma_squared * (1 + np.sqrt(1 / Q)) ** 2
+        lambda_minus = sigma_squared * (1 - np.sqrt(1 / Q)) ** 2 if Q > 1 else 0
 
-        # Safe calculation of lambda bounds
-        safe_Q = max(Q, 1e-10)  # Ensure Q is not too small
-        lambda_plus = sigma_squared * (1 + np.sqrt(1 / safe_Q)) ** 2
-        lambda_minus = sigma_squared * (1 - np.sqrt(1 / safe_Q)) ** 2 if Q > 1 else 1e-10
-
-        # Ensure minimum value for lambda_minus
-        lambda_minus = max(lambda_minus, 1e-10)
-
-        # Generate MP law distribution (discretized) with numerical safety
-        # Ensure x range is positive and well-behaved
-        x = np.linspace(lambda_minus, lambda_plus * 1.01, 1000)  # Add small margin for numerical stability
+        # Generate MP law distribution (discretized)
+        x = np.linspace(lambda_minus, lambda_plus, 1000)
         mp_pdf = np.zeros_like(x)
-
-        # Define valid x range with safety checks
         valid_x = (x >= lambda_minus) & (x <= lambda_plus)
+        mp_pdf[valid_x] = (
+            (Q / (2 * np.pi * sigma_squared))
+            * np.sqrt((lambda_plus - x[valid_x]) * (x[valid_x] - lambda_minus))
+            / x[valid_x]
+        )
 
-        # Safely compute MP PDF
-        try:
-            safe_denom = 2 * np.pi * sigma_squared
-            if safe_denom > 0:
-                scale_factor = Q / safe_denom
-
-                # Compute sqrt term safely
-                sqrt_term = np.sqrt(np.maximum(0, (lambda_plus - x[valid_x]) * (x[valid_x] - lambda_minus)))
-
-                # Compute final PDF with safe division
-                mp_pdf[valid_x] = scale_factor * sqrt_term / np.maximum(x[valid_x], 1e-10)
-        except Exception as e:
-            logger.warning(f"Error in MP PDF calculation: {e}")
-            # Fallback to uniform distribution if calculation fails
-            mp_pdf[valid_x] = 1.0 / np.sum(valid_x) if np.sum(valid_x) > 0 else 0
-
-        # Normalize MP PDF safely
-        mp_pdf_sum = np.sum(mp_pdf)
-        if mp_pdf_sum > 0:
-            mp_pdf_norm = mp_pdf / mp_pdf_sum
-        else:
-            # Fallback to uniform distribution
-            mp_pdf_norm = np.zeros_like(mp_pdf)
-            mp_pdf_norm[valid_x] = 1.0 / np.sum(valid_x) if np.sum(valid_x) > 0 else 0
+        # Normalize MP PDF
+        mp_pdf_norm = mp_pdf / np.sum(mp_pdf)
 
         # Generate empirical CDF of eigenvalues
         eigenvalues_sorted = np.sort(eigenvalues)
@@ -125,15 +99,11 @@ class HeavyTailedAnalysisCore:
         # Generate theoretical CDF from MP law
         mp_cdf = np.cumsum(mp_pdf_norm)
 
-        # Compute KS statistic (approximation) with error handling
+        # Compute KS statistic (approximation)
         def mp_cdf_interpolated(x):
-            try:
-                # Find nearest index in x array
-                idx = np.abs(np.subtract.outer(x, np.linspace(lambda_minus, lambda_plus, 1000))).argmin(axis=1)
-                return mp_cdf[idx]
-            except Exception:
-                # Fallback to zeros if interpolation fails
-                return np.zeros_like(x)
+            # Find nearest index in x array
+            idx = np.abs(np.subtract.outer(x, np.linspace(lambda_minus, lambda_plus, 1000))).argmin(axis=1)
+            return mp_cdf[idx]
 
         mp_cdf_at_eigenvalues = mp_cdf_interpolated(eigenvalues_sorted)
         ks_statistic = np.max(np.abs(empirical_cdf - mp_cdf_at_eigenvalues))
@@ -143,13 +113,7 @@ class HeavyTailedAnalysisCore:
         if len(eigenvalues) >= 3:
             lambda1, lambda2 = eigenvalues[0], eigenvalues[1]
             lambda_bulk_mean = np.mean(eigenvalues[2:])
-            # Safe calculation of spike separation
-            denominator = lambda2 - lambda_bulk_mean
-            if abs(denominator) > 1e-10:
-                spike_separation = (lambda1 - lambda2) / denominator
-            else:
-                # If denominator is too small, use a large value to indicate separation
-                spike_separation = 1000.0 if lambda1 > lambda2 else 0.0
+            spike_separation = (lambda1 - lambda2) / (lambda2 - lambda_bulk_mean)
 
         # Store results
         result = {
