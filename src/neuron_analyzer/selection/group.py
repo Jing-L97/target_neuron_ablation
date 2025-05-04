@@ -46,7 +46,9 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
         model,
         unigram_distrib,
         tokenized_data,
-        entropy_df,
+        unigram_analyzer,
+        sel_freq,
+        entropy_df: pd.DataFrame,
         layer_idx: int,  # Layer index for neuron groups
         device: str = "cuda",
         k: int = 10,
@@ -68,7 +70,9 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
             ablation_mode=ablation_mode,
             longtail_threshold=longtail_threshold,
         )
+        self.unigram_analyzer = unigram_analyzer
 
+        self.sel_freq = sel_freq
         self.layer_idx = layer_idx
         self.results = pd.DataFrame()  # Override the dict with a DataFrame for this class
         # Add a model access lock for thread safety
@@ -193,7 +197,6 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
                 filtered_inp = original_tok_seq[positions].unsqueeze(0).to(self.device)
 
                 # Compute loss
-                # loss_post_ablation_batch = self.model.loss_fn(ablated_logits, filtered_inp, per_token=True).cpu()
                 loss_post_ablation_batch = (
                     self.model.loss_fn(ablated_logits, filtered_inp, per_token=True).detach().cpu()
                 )
@@ -326,8 +329,25 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
 
     def compute_heuristic(self, results) -> float:
         """Get heuristics from the results."""
+        # filter based on freq
+        results = self._filter_tokens(results)
         results["delta_loss"] = results["loss"] - results["loss_post_ablation"]
         return results["delta_loss"].mean()
+
+    def _filter_tokens(self, results) -> pd.DataFrame:
+        """Filter tokens by frequency."""
+        # annotate token id with freq
+        results["freq"] = results["freq"].apply(lambda token_id: self.unigram_analyzer.extract_freq(token_id)[1])
+        # filter based on different conditions
+        if "longtail" in self.sel_freq:
+            logger.info(f"Compute heuristics on rare tokens. Before filtering: {results.shape[0]}")
+            results = results[results["freq"] < self.longtail_threshold]
+            logger.info(f"After filtering: {results.shape[0]}")
+        if "common" in self.sel_freq:
+            logger.info(f"Compute heuristics on common tokens. Before filtering: {results.shape[0]}")
+            results = results[results["freq"] > self.longtail_threshold]
+            logger.info(f"After filtering: {results.shape[0]}")
+        return results
 
     def evaluate_neuron_group(self, neuron_group: list[int]) -> float:
         """Evaluate a neuron group and return a heuristic."""
@@ -415,15 +435,7 @@ class NeuronGroupSearch:
         return scores
 
     def _evaluate_group(self, group: list[int]) -> float:
-        """Evaluate a group of neurons with caching.
-
-        Args:
-            group: List of neurons to evaluate
-
-        Returns:
-            Evaluation score
-
-        """
+        """Evaluate a group of neurons with caching."""
         # Create a hashable key for the group
         group_key = tuple(sorted(group))
 

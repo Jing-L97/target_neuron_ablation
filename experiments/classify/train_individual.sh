@@ -64,7 +64,6 @@ python "$SCRIPT_ROOT/train.py" \
     --group_type "$GROUP_TYPE" \
     --label_type "$LABEL_TYPE" \
     --class_num "$CLASS_NUM" \
-    --top_n "$TOP_N" \
-    --run_baseline
+    --top_n "$TOP_N" 
 
 echo "Analysis complete for configuration: Model=$MODEL, Class_Num=$CLASS_NUM, Top_N=$TOP_N"

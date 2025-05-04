@@ -178,6 +178,7 @@ class Trainer:
             neuron_indices=neuron_indices,
             class_num=self.args.class_num,
             test_size=0.2,
+            run_baseline=self.args.run_baseline,
         )
         classifier_results = classifier.run_pipeline()
 

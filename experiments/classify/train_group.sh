@@ -62,7 +62,6 @@ python "$SCRIPT_ROOT/train.py" \
     --group_type "$GROUP_TYPE" \
     --label_type "$LABEL_TYPE" \
     --class_num "$CLASS_NUM" \
-    --group_size "$GROUP_SIZE" \
-    --run_baseline
+    --group_size "$GROUP_SIZE" 
 
 echo "Analysis complete for configuration: Model=$MODEL, Group_Size=$GROUP_SIZE, Class_Num=$CLASS_NUM"

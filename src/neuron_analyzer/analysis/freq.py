@@ -357,30 +357,24 @@ class ZipfThresholdAnalyzer:
 class UnigramAnalyzer:
     """Class for analyzing unigram frequencies of words based on model-specific unigram counts."""
 
-    def __init__(self, device: str, model_name: str = "pythia-410m"):
+    def __init__(self, device: str, unigram_distrib=None, unigram_count=None, model_name: str = "pythia-410m"):
         """Initialize the UnigramAnalyzer with model and tokenizer information."""
         self.model_name = model_name
         self.device = device
-        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
-        # Load and prepare unigram data
-        self.unigram_distrib, self.unigram_count = load_unigram(self.model_name, self.device)
+        if unigram_distrib is None:
+            self.unigram_distrib, self.unigram_count = unigram_distrib, unigram_count
+        else:
+            self.unigram_distrib, self.unigram_count = load_unigram(self.model_name, self.device)
 
     def get_unigram_freq(self, word: str) -> list[tuple[int, int, float]]:
         """Get the unigram count and frequency for a given word."""
-        # Encode the word to get token IDs
-        token_ids = self.tokenizer.encode(word, add_special_tokens=False)
+        # encode word
+        token_ids = self._encode_word(word)
         # Get counts and frequencies for each token in the word
         results = []
         for token_id in token_ids:
-            # Ensure token_id is within bounds
-            if 0 <= token_id < len(self.unigram_count):
-                count = int(self.unigram_count[token_id])
-                frequency = float(self.unigram_distrib[token_id].cpu().item())
-            else:
-                count = 0
-                frequency = 0.0
+            count, frequency = self._extract_freq(token_id)
             results.append((token_id, count, frequency))
-
         return results
 
     def get_word_unigram_stats(self, word: str) -> dict:
@@ -391,3 +385,15 @@ class UnigramAnalyzer:
         avg_frequency = sum(freq for _, _, freq in token_results) / len(token_results) if token_results else 0.0
 
         return {"total_tokens": len(token_results), "total_count": total_count, "avg_frequency": avg_frequency}
+
+    def _encode_word(self, word: str) -> int | list[int]:
+        """Encode the word to get token IDs."""
+        self.tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+        return self.tokenizer.encode(word, add_special_tokens=False)
+
+    def _extract_freq(self, token_id: int) -> tuple[int, float]:
+        """Extract frequency from token id."""
+        # Ensure token_id is within bounds
+        if 0 <= token_id < len(self.unigram_count):
+            return int(self.unigram_count[token_id]), float(self.unigram_distrib[token_id].cpu().item())
+        return 0, 0.0

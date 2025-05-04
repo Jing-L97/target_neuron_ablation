@@ -8,6 +8,7 @@ import pandas as pd
 import torch
 
 from neuron_analyzer import settings
+from neuron_analyzer.analysis.freq import UnigramAnalyzer
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor, cleanup, load_tail_threshold_stat, load_unigram
 from neuron_analyzer.model_util import ModelHandler, NeuronLoader
 from neuron_analyzer.selection.group import GroupModelAblationAnalyzer, NeuronGroupSearch, get_heuristics
@@ -24,12 +25,18 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", choices=["mean", "longtail", "longtail_50"], default="longtail_50")
     parser.add_argument(
+        "--sel_freq",
+        type=str,
+        choices=["longtail_50", "common"],
+        default="common",
+    )
+    parser.add_argument(
         "--effect", type=str, choices=["boost", "suppress"], default="suppress", help="boost or suppress long-tail prob"
     )
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
     )
-    parser.add_argument("--top_n", type=int, default=100, help="use_bos_only if enabled")
+    parser.add_argument("--top_n", type=int, default=10, help="use_bos_only if enabled")
     parser.add_argument("--data_range_start", type=int, default=0, help="the selected datarange")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="number of randomly selected chunks")
@@ -56,7 +63,7 @@ def load_neuron_index(args) -> list[int]:
     neuron_path = (
         settings.PATH.neuron_dir
         / "neuron"
-        / args.vector
+        / args.sel_freq
         / args.model
         / args.heuristic
         / args.effect
@@ -77,7 +84,7 @@ def load_neuron_index(args) -> list[int]:
 
 def set_path(args) -> Path:
     """Set save and cache path."""
-    save_path = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic / args.effect
+    save_path = settings.PATH.neuron_dir / "group" / args.sel_freq / args.model / args.heuristic / args.effect
     longtail_path = settings.PATH.ablation_dir / args.vector / args.model / "zipf_threshold_stats.json"
     save_path.mkdir(parents=True, exist_ok=True)
     return save_path, longtail_path
@@ -101,7 +108,7 @@ class NeuronGroupSelector:
         np.random.seed(self.args.seed)
         torch.set_grad_enabled(False)
 
-    def process_single_step(self, step: int, unigram_distrib, longtail_threshold) -> None:
+    def process_single_step(self, step: int, unigram_distrib, longtail_threshold, unigram_analyzer) -> None:
         """Process a single step with the given configuration."""
         # initlize the model handler class
         model_handler = ModelHandler()
@@ -142,6 +149,7 @@ class NeuronGroupSelector:
             device=self.device,
             tokenized_data=tokenized_data,
             unigram_distrib=unigram_distrib,
+            unigram_analyzer=unigram_analyzer,
             entropy_df=entropy_df,
             layer_idx=self.layer_num,
             k=self.args.k,
@@ -194,11 +202,18 @@ def main() -> None:
     save_path = save_dir / f"{args.data_range_end}_{args.top_n}.json"
     # load neuron
     layer_num, step_neuron, step_stat = load_neuron_index(args)
-    unigram_distrib, _ = load_unigram(model_name=args.model, device=device)
+    unigram_distrib, unigram_count = load_unigram(model_name=args.model, device=device)
     longtail_threshold = load_tail_threshold_stat(longtail_path)
+    # intialize the unigram analyzer
+    unigram_analyzer = UnigramAnalyzer(device=device, unigram_distrib=unigram_distrib, unigram_count=unigram_count)
     # initilize the selector class
     group_selector = NeuronGroupSelector(
-        args=args, device=device, layer_num=layer_num, step_neuron=step_neuron, step_stat=step_stat, save_dir=save_dir
+        args=args,
+        device=device,
+        layer_num=layer_num,
+        step_neuron=step_neuron,
+        step_stat=step_stat,
+        save_dir=save_dir,
     )
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
@@ -207,15 +222,15 @@ def main() -> None:
     final_results, step_dirs = step_processor.resume_results(args.resume, save_path)
     # Process steps deom the resumed and sorted order
     for _, step in step_dirs:
-        try:
-            results = group_selector.process_single_step(step, unigram_distrib, longtail_threshold)
-            final_results[step] = results
-            # save the intermediate checkpoints
-            JsonProcessor.save_json(final_results, save_path)
-            logger.info(f"Save the results to {save_path}")
-            cleanup()
-        except:
-            logger.info(f"Something wrong with {step}")
+        # try:
+        results = group_selector.process_single_step(step, unigram_distrib, longtail_threshold, unigram_analyzer)
+        final_results[step] = results
+        # save the intermediate checkpoints
+        JsonProcessor.save_json(final_results, save_path)
+        logger.info(f"Save the results to {save_path}")
+        cleanup()
+    # except:
+    # logger.info(f"Something wrong with {step}")
 
     cleanup()
 

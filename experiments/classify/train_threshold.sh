@@ -51,7 +51,6 @@ echo "- Label Type: $LABEL_TYPE"
 python "$SCRIPT_ROOT/train.py" \
     -m "$MODEL" \
     --label_type "$LABEL_TYPE" \
-    --class_num "$CLASS_NUM" \
-    --resume
+    --class_num "$CLASS_NUM" 
 
 echo "Analysis complete for configuration: Model=$MODEL, Class_Num=$CLASS_NUM"
