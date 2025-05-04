@@ -1,17 +1,19 @@
 #!/bin/bash
-#SBATCH --job-name=sel_70
+#SBATCH --job-name=group_common
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=6
-#SBATCH --mem=60G
+#SBATCH --cpus-per-task=8
+#SBATCH --mem=80G
 #SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_70_%a.log
-#SBATCH --array=0-5
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/group_common_%a.log
+#SBATCH --array=0-11%5
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
+SEL_FREQ="common"
 HEURISTIC="prob"
 MODELS=(
     "EleutherAI/pythia-70m-deduped"
+    "EleutherAI/pythia-410m-deduped"
 )
 # Define the input arrays
 EFFECTS=(
@@ -64,5 +66,6 @@ python $SCRIPT_ROOT/sel_group.py \
     --effect "$EFFECT" \
     --top_n "$TOP_N" \
     --vector "$VECTOR" \
+    --sel_freq  "$SEL_FREQ" \
     --heuristic "$HEURISTIC" \
     --resume

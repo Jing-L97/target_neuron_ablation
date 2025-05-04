@@ -46,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--parallel_methods", action="store_true", help="run parallel processing")
     parser.add_argument("--max_iterations", type=int, default=1000, help="max_iterations for each method")
     parser.add_argument("--batch_size", type=int, default=10240, help="maximum seconds for each method")
-    parser.add_argument("--timeout", type=int, default=3600, help="maximum seconds for each method")
+    parser.add_argument("--timeout", type=int, default=1800, help="maximum seconds for each method")
     parser.add_argument("--seed", type=int, default=42, help="random seed to select neurons")
     parser.add_argument("--dataset", type=str, default="stas/c4-en-10k", help="random seed to select neurons")
     return parser.parse_args()
@@ -156,6 +156,7 @@ class NeuronGroupSelector:
             chunk_size=self.args.chunk_size,
             ablation_mode=self.args.vector,
             longtail_threshold=longtail_threshold,
+            sel_freq=self.args.sel_freq,
         )
 
         self.cache_dir = self._get_save_path(step)
@@ -222,15 +223,15 @@ def main() -> None:
     final_results, step_dirs = step_processor.resume_results(args.resume, save_path)
     # Process steps deom the resumed and sorted order
     for _, step in step_dirs:
-        # try:
-        results = group_selector.process_single_step(step, unigram_distrib, longtail_threshold, unigram_analyzer)
-        final_results[step] = results
-        # save the intermediate checkpoints
-        JsonProcessor.save_json(final_results, save_path)
-        logger.info(f"Save the results to {save_path}")
-        cleanup()
-    # except:
-    # logger.info(f"Something wrong with {step}")
+        try:
+            results = group_selector.process_single_step(step, unigram_distrib, longtail_threshold, unigram_analyzer)
+            final_results[step] = results
+            # save the intermediate checkpoints
+            JsonProcessor.save_json(final_results, save_path)
+            logger.info(f"Save the results to {save_path}")
+            cleanup()
+        except:
+            logger.info(f"Something wrong with {step}")
 
     cleanup()
 

@@ -5,7 +5,6 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from neuron_analyzer.analysis.freq import UnigramAnalyzer
 from neuron_analyzer.load_util import load_tail_threshold_stat
 
 # Setup logging
@@ -22,13 +21,12 @@ class NeuronSelector:
     def __init__(
         self,
         feather_path: Path,
-        top_n: int,
-        step: int,
-        tokenizer_name: str,
-        threshold_path: Path,
-        device: str,
-        debug: bool,
+        top_n: int = None,
+        step: int = None,
+        threshold_path: Path = None,
+        debug: bool = None,
         sel_freq: str | bool = False,
+        unigram_analyzer=None,
         sel_by_med: bool = False,
     ):
         """Initialize the NeuronSelector."""
@@ -38,15 +36,35 @@ class NeuronSelector:
         self.debug = debug
         self.sel_freq = sel_freq
         self.sel_by_med = sel_by_med
+
         # only load the arguments when needing longtail
         if self.sel_freq:
-            self.unigram_analyzer = UnigramAnalyzer(model_name=tokenizer_name, device=device)
+            self.unigram_analyzer = unigram_analyzer
             self.threshold_path = threshold_path
 
     def load_and_filter_df(self):
         """Load and filter df by frequency if required."""
-        final_df = pd.read_feather(self.feather_path)
+        # load and filter by freq
+        final_df = self.filter_df_by_freq()
+        # Calculate delta loss metrics
+        final_df["delta_loss_post_ablation"] = final_df["loss_post_ablation"] - final_df["loss"]
+        final_df["delta_loss_post_ablation_with_frozen_unigram"] = (
+            final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
+        )
+        final_df["abs_delta_loss_post_ablation"] = np.abs(final_df["delta_loss_post_ablation"])
+        final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
+            final_df["delta_loss_post_ablation_with_frozen_unigram"]
+        )
+        return final_df
+
+    def filter_df_by_freq(self):
+        """Filter df by frequency if required."""
+        if self.feather_path.suffix == ".feather":
+            final_df = pd.read_feather(self.feather_path)
+        if self.feather_path.suffix == ".csv":
+            final_df = pd.read_csv(self.feather_path)
         logger.info(f"Analyzing file from {self.feather_path}")
+
         if self.debug:
             first_n_rows = 5000
             final_df = final_df.head(first_n_rows)
@@ -63,17 +81,6 @@ class NeuronSelector:
             else:
                 final_df = final_df[final_df["freq"] > prob_threshold]
             logger.info(f"{final_df.shape[0]} words after filtering.")
-
-        # Calculate delta loss metrics
-        final_df["delta_loss_post_ablation"] = final_df["loss_post_ablation"] - final_df["loss"]
-        final_df["delta_loss_post_ablation_with_frozen_unigram"] = (
-            final_df["loss_post_ablation_with_frozen_unigram"] - final_df["loss"]
-        )
-        final_df["abs_delta_loss_post_ablation"] = np.abs(final_df["delta_loss_post_ablation"])
-        final_df["abs_delta_loss_post_ablation_with_frozen_unigram"] = np.abs(
-            final_df["delta_loss_post_ablation_with_frozen_unigram"]
-        )
-
         return final_df
 
     def _extract_freq(self, word):

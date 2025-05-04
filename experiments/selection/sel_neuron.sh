@@ -1,11 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=sel_70
+#SBATCH --job-name=sel_410
 #SBATCH --export=ALL
-#SBATCH --partition=cpu
-#SBATCH --cpus-per-task=6
-#SBATCH --mem=60G
+#SBATCH --partition=gpu
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=10
+#SBATCH --mem=70G
 #SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_70_%a.log
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_410_%a.log
 #SBATCH --array=0-7
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
@@ -30,6 +31,7 @@ TOP_NS=(
 
 MODELS=(
     "EleutherAI/pythia-70m-deduped"
+    "EleutherAI/pythia-410m-deduped"
 )
 
 # Calculate total combinations for validation

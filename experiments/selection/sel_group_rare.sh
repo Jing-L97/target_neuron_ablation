@@ -1,16 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=sel_group
+#SBATCH --job-name=group_rare
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --mem=70G
 #SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_gorup_%a.log
-#SBATCH --array=0-7
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/gorup_rare_%a.log
+#SBATCH --array=0-11
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
+SEL_FREQ="longtail_50"
+
 MODELS=(
     "EleutherAI/pythia-70m-deduped"
     "EleutherAI/pythia-410m-deduped"
@@ -26,6 +28,7 @@ VECTORS=(
 )
 
 TOP_NS=(
+    10
     50
     100
 )
@@ -65,6 +68,7 @@ python $SCRIPT_ROOT/sel_group.py \
     --effect "$EFFECT" \
     --top_n "$TOP_N" \
     --vector "$VECTOR" \
+    --sel_freq  "$SEL_FREQ" \
     --heuristic "$HEURISTIC" \
     --parallel_methods \
     --resume 

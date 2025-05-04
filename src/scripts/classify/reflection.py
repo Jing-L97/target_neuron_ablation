@@ -7,7 +7,6 @@ from typing import Any
 import numpy as np
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.freq import UnigramAnalyzer
 from neuron_analyzer.analysis.geometry_util import NeuronGroupAnalyzer, get_group_name
 from neuron_analyzer.classify.analyses import NeuronHypothesisTester
 from neuron_analyzer.classify.classifier import NeuronClassifier
@@ -15,11 +14,10 @@ from neuron_analyzer.classify.preprocess import (
     DataLoader,
     FeatureLoader,
     FixedLabeler,
-    NeuronFeatureExtractor,
     ThresholdLabeler,
     get_threshold,
 )
-from neuron_analyzer.load_util import StepPathProcessor, load_unigram
+from neuron_analyzer.load_util import StepPathProcessor
 from neuron_analyzer.selection.neuron import generate_random_indices
 
 # Setup logging
@@ -62,24 +60,13 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="how many classes to classify",
     )
-    parser.add_argument(
-        "--sel_freq",
-        type=str,
-        choices=["longtail_50", "common"],
-        default="common",
-    )
     parser.add_argument("--load_stat", type=bool, default=True, help="Whether to load from existing index")
     parser.add_argument("--exclude_random", type=bool, default=True, help="Include all neuron indices if set True")
     parser.add_argument("--run_baseline", action="store_true", help="Whether to run baseline models")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
-    parser.add_argument("--fea_dim", type=int, default=50, help="Number of tokens as the activation feature")
     parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
-    parser.add_argument("--k", type=int, default=10, help="Number of chunks")
-    parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
-    parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
-    parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     return parser.parse_args()
 
@@ -95,31 +82,25 @@ def configure_path(args):
     data_path = settings.PATH.classify_dir / "data" / args.vector / args.model / save_heuristic
     model_path = settings.PATH.classify_dir / "model" / args.vector / args.model / save_heuristic
     eval_path = settings.PATH.classify_dir / "eval" / args.vector / args.model / save_heuristic
-    abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     model_path.mkdir(parents=True, exist_ok=True)
     eval_path.mkdir(parents=True, exist_ok=True)
-    return data_path, model_path, eval_path, abl_path
+    return (
+        data_path,
+        model_path,
+        eval_path,
+    )
 
 
 class Trainer:
     """Class for running the entire neuron classification pipeline."""
 
-    def __init__(
-        self,
-        args: Any,
-        abl_path: Path,
-        data_path: Path,
-        model_path: Path,
-        eval_path: Path,
-        step_dirs: list[tuple[str, str]],
-    ):
+    def __init__(self, args: Any, data_path: Path, model_path: Path, eval_path: Path, step_dirs: list[tuple[str, str]]):
         """Initialize the pipeline with all necessary parameters."""
         self.args = args
         self.data_path = data_path
         self.model_path = model_path
         self.eval_path = eval_path
         self.step_dirs = step_dirs
-        self.abl_path = abl_path
 
     def run_pipeline(self) -> dict[str, Any]:
         """Extract optimal threshold across multiple steps and run classification."""
@@ -127,39 +108,23 @@ class Trainer:
         classification_condition = self._get_classification_condition()
 
         for step in self.step_dirs:
-            # try:
-            # Load data
-            X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
-            # configure the save path
-            step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
-            # Train classifier
-            _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
+            try:
+                # Load data
+                X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
+                # configure the save path
+                step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
+                # Train classifier
+                _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
 
-        # except Exception as e:
-        # logger.info(f"Error processing step {step[1]}: {e!s}")
+            except Exception as e:
+                logger.info(f"Error processing step {step[1]}: {e!s}")
 
     def _load_data(
         self, step: tuple[str, str], threshold: float | None, classification_condition: str
     ) -> tuple[np.ndarray, np.ndarray, list[str]]:
         """Load and prepare data for classification from a single step."""
         # Filter features with unequal length
-        unigram_distrib, unigram_count = load_unigram(model_name=self.args.model, device="cpu")
-        # intialize the unigram analyzer
-        unigram_analyzer = UnigramAnalyzer(device="cpu", unigram_distrib=unigram_distrib, unigram_count=unigram_count)
-        # initilize the selector class
-        data_path = self.data_path / str(step[1]) / str(self.args.data_range_end) / "features.json"
-        if not data_path.is_file():
-            feature_extractor = NeuronFeatureExtractor(
-                args=self.args,
-                abl_path=self.abl_path,
-                step_path=step[0],
-                out_dir=self.data_path / str(step[1]) / str(self.args.data_range_end),
-                step_num=step[1],
-                device="cpu",
-            )
-            feature_extractor.run_pipeline()
-
-        feature_loader = FeatureLoader(data_path=data_path)
+        feature_loader = FeatureLoader(data_dir=self.data_path / str(step[1]) / str(self.args.data_range_end))
         data, fea = feature_loader.run_pipeline()
         logger.info("Features have been loaded.")
 
@@ -298,11 +263,12 @@ def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
     # loop over different steps
-    data_path, model_path, eval_path, abl_path = configure_path(args)
+    data_path, model_path, eval_path = configure_path(args)
     # initilize with the step dir
-    step_processor = StepPathProcessor(abl_path)
+    step_processor = StepPathProcessor(data_path)
     step_dirs = step_processor.sort_paths()
-    trainer = Trainer(args, abl_path, data_path, model_path, eval_path, step_dirs)
+    data_path, model_path, eval_path = configure_path(args)
+    trainer = Trainer(args, data_path, model_path, eval_path, step_dirs)
     trainer.run_pipeline()
 
 

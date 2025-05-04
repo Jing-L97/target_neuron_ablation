@@ -81,9 +81,8 @@ class NeuronGroupAnalyzer:
             step=self.step.name,
             tokenizer_name=self.args.tokenizer_name,
             threshold_path=Path(self.abl_path) / self.args.stat_file,
-            sel_longtail=self.args.sel_longtail,
-            device=self.device,
             sel_by_med=self.args.sel_by_med,
+            sel_freq=self.args.sel_freq,
         )
         # load feather dataframe
         activation_data = self.neuron_selector.load_and_filter_df()

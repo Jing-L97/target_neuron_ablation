@@ -334,10 +334,10 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
         results["delta_loss"] = results["loss"] - results["loss_post_ablation"]
         return results["delta_loss"].mean()
 
-    def _filter_tokens(self, results) -> pd.DataFrame:
+    def _filter_tokens1(self, results) -> pd.DataFrame:
         """Filter tokens by frequency."""
         # annotate token id with freq
-        results["freq"] = results["freq"].apply(lambda token_id: self.unigram_analyzer.extract_freq(token_id)[1])
+        results["freq"] = results["token_id"].apply(lambda token_id: self.unigram_analyzer._extract_freq(token_id)[1])
         # filter based on different conditions
         if "longtail" in self.sel_freq:
             logger.info(f"Compute heuristics on rare tokens. Before filtering: {results.shape[0]}")
@@ -348,6 +348,26 @@ class GroupModelAblationAnalyzer(ModelAblationAnalyzer):
             results = results[results["freq"] > self.longtail_threshold]
             logger.info(f"After filtering: {results.shape[0]}")
         return results
+
+    def _filter_tokens(self, results: pd.DataFrame) -> pd.DataFrame:
+        """Filter tokens by frequency using functional approach."""
+        # Add frequency column
+        results_with_freq = results.assign(
+            freq=lambda df: df["token_id"].apply(lambda token_id: self.unigram_analyzer._extract_freq(token_id)[1])
+        )
+
+        # Apply filters
+        if "longtail" in self.sel_freq:
+            logger.info(f"Compute heuristics on rare tokens. Before filtering: {len(results_with_freq)}")
+            results_with_freq = results_with_freq[results_with_freq["freq"] < self.longtail_threshold]
+            logger.info(f"After filtering: {len(results_with_freq)}")
+
+        if "common" in self.sel_freq:
+            logger.info(f"Compute heuristics on common tokens. Before filtering: {len(results_with_freq)}")
+            results_with_freq = results_with_freq[results_with_freq["freq"] > self.longtail_threshold]
+            logger.info(f"After filtering: {len(results_with_freq)}")
+
+        return results_with_freq
 
     def evaluate_neuron_group(self, neuron_group: list[int]) -> float:
         """Evaluate a neuron group and return a heuristic."""
@@ -1312,6 +1332,7 @@ class NeuronGroupSearch:
     def run_methods_sequentially(self) -> dict[str, tuple[SearchResult, SearchResult]]:
         """Run all search methods sequentially and return the results."""
         results = {}
+        """
         methods = [
             ("progressive_beam", self.progressive_beam_search),
             ("hierarchical_cluster", self.hierarchical_cluster_search),
@@ -1319,7 +1340,8 @@ class NeuronGroupSearch:
             ("importance_weighted", self.importance_weighted_sampling),
             ("hybrid", self.hybrid_search),
         ]
-
+        """
+        methods = [("progressive_beam", self.progressive_beam_search)]
         for method_name, method_func in methods:
             try:
                 logger.info(f"Starting {method_name}")
@@ -1339,6 +1361,7 @@ class NeuronGroupSearch:
     def run_methods_parallel(self) -> dict[str, tuple[SearchResult, SearchResult]]:
         """Run all search methods in parallel and return the results."""
         results = {}
+        """
         methods = [
             ("progressive_beam", self.progressive_beam_search),
             ("hierarchical_cluster", self.hierarchical_cluster_search),
@@ -1346,6 +1369,8 @@ class NeuronGroupSearch:
             ("importance_weighted", self.importance_weighted_sampling),
             ("hybrid", self.hybrid_search),
         ]
+        """
+        methods = [("progressive_beam", self.progressive_beam_search)]
         # Thread-based parallelization for running methods
         threads = []
         results_queue = Queue()

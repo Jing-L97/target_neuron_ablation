@@ -1,4 +1,6 @@
 import pickle
+import typing as t
+from pathlib import Path
 
 import numpy as np
 import torch
@@ -7,92 +9,75 @@ from tqdm import tqdm
 
 
 class OptimizedSVMHyperplaneReflection:
-    """Optimized implementation of the hyperplane reflection method for the last MLP layer.
-    This class performs reflection of neuron activations across the SVM decision boundary
-    and efficiently computes the effect on token probabilities using linear transformation.
+    """Optimized implementation of the hyperplane reflection for analyzing neural network layers.
+
+    This class performs reflection of neuron activations across an SVM decision boundary
+    and computes the effect on token probabilities using linear transformations.
     """
 
     def __init__(
         self,
         model: torch.nn.Module,
-        svm_checkpoint_path: str,
+        svm_checkpoint_path: str | Path,
         output_projection_weights: torch.Tensor,
         use_pca: bool = False,
         n_components: int = 10,
     ):
-        """Initialize the reflection analysis tool with an SVM model.
+        """Initialize the reflection analysis tool.
 
         Args:
             model: The language model to analyze
-            svm_checkpoint_path: Path to the saved SVM model checkpoint (.blob file)
-            output_projection_weights: Weight matrix that maps from last MLP layer to logits
-                                      (shape: hidden_size × vocab_size)
-            use_pca: Whether to use PCA for analysis and visualization
-            n_components: Number of PCA components to use if use_pca=True
+            svm_checkpoint_path: Path to the saved SVM model (.blob file)
+            output_projection_weights: Weight matrix mapping last MLP layer to logits
+                                     (shape: hidden_size × vocab_size)
+            use_pca: Whether to use PCA for dimensionality reduction
+            n_components: Number of PCA components if use_pca=True
 
         """
         self.model = model
-        self.svm_model = self._load_svm_model(svm_checkpoint_path)
+        self.svm_checkpoint_path = Path(svm_checkpoint_path)
         self.output_weights = output_projection_weights
         self.use_pca = use_pca
         self.n_components = n_components
         self.pca = None
 
-        # Extract hyperplane parameters from SVM
+        # Load SVM model and extract hyperplane parameters
+        self.svm_model = self._load_svm_model()
         self._extract_hyperplane_params()
 
         print(f"Output projection weight shape: {self.output_weights.shape}")
 
-    def _load_svm_model(self, checkpoint_path: str):
-        """Load the trained SVM model from checkpoint.
+    def _load_svm_model(self) -> dict[str, np.ndarray] | t.Any:
+        """Load the trained SVM model from checkpoint."""
+        with open(self.svm_checkpoint_path, "rb") as f:
+            return pickle.load(f)
 
-        Args:
-            checkpoint_path: Path to the saved model
-
-        Returns:
-            Loaded SVM model
-
-        """
-        with open(checkpoint_path, "rb") as f:
-            svm_model = pickle.load(f)
-        return svm_model
-
-    def _extract_hyperplane_params(self):
+    def _extract_hyperplane_params(self) -> None:
         """Extract hyperplane parameters (normal vector and intercept) from SVM model."""
-        # For binary classification, coef_ is a single row
+        # Handle different SVM model formats
         if hasattr(self.svm_model, "coef_"):
             self.normal_vector = self.svm_model.coef_[0]  # w
             self.intercept = self.svm_model.intercept_[0]  # b
         else:
-            # If we loaded from your custom format where hyperplane info is stored directly
+            # Custom format where hyperplane info is stored directly
             self.normal_vector = self.svm_model["w"]
             self.intercept = self.svm_model["b"]
 
-        # Normalize the normal vector
+        # Normalize the normal vector for stability
         self.normal_unit = self.normal_vector / np.linalg.norm(self.normal_vector)
 
-        # Calculate a point on the hyperplane
-        # We can use: p = -b * n̂ / ||n̂||² = -b * n̂ (since n̂ is unit vector)
+        # Find a point on the hyperplane (using -b/||w||² * w)
         self.hyperplane_point = -self.intercept * self.normal_unit
 
         print(f"Hyperplane normal vector shape: {self.normal_vector.shape}")
-        print(f"Hyperplane point shape: {self.hyperplane_point.shape}")
-
-    def fit_pca(self, activations: np.ndarray):
-        """Fit PCA on activation data.
-
-        Args:
-            activations: Array of shape (n_samples, n_dimensions) containing neuron activations
-
-        """
-        if self.use_pca:
-            self.pca = PCA(n_components=self.n_components)
-            self.pca.fit(activations)
-            print(f"Explained variance ratio: {self.pca.explained_variance_ratio_}")
-            print(f"Cumulative explained variance: {np.sum(self.pca.explained_variance_ratio_):.4f}")
+        print(f"Hyperplane intercept: {self.intercept}")
 
     def reflect_across_hyperplane(self, activation: np.ndarray) -> np.ndarray:
         """Reflect an activation vector across the hyperplane.
+
+        The reflection formula is: x' = x - 2 * ((x - p) · n̂) * n̂
+        where x is the point to reflect, p is a point on the hyperplane,
+        and n̂ is the unit normal vector.
 
         Args:
             activation: Vector to reflect
@@ -101,31 +86,36 @@ class OptimizedSVMHyperplaneReflection:
             Reflected vector on the opposite side of the hyperplane
 
         """
-        # Calculate signed distance to hyperplane (a - p) · n̂
+        # Compute signed distance to hyperplane
         dist_to_plane = np.dot(activation - self.hyperplane_point, self.normal_unit)
 
-        # Reflection formula: a' = a - 2 * (dist_to_plane) * n̂
+        # Apply reflection formula
         reflected = activation - 2 * dist_to_plane * self.normal_unit
+
+        # Verify the reflection is correct
+        self._verify_reflection(activation, reflected)
 
         return reflected
 
-    def classify_neuron(self, activation: np.ndarray) -> str:
-        """Classify a neuron as special or common based on SVM decision function.
-
-        Args:
-            activation: Neuron activation vector
-
-        Returns:
-            'special' or 'common' based on which side of the hyperplane the neuron is on
-
+    def _verify_reflection(self, original: np.ndarray, reflected: np.ndarray) -> None:
+        """Verify that the reflection is correct by checking:
+        1. The reflected point is on the opposite side of the hyperplane
+        2. The distance from both points to the hyperplane is equal
         """
-        # Apply SVM decision function: w·x + b
-        decision_value = np.dot(activation, self.normal_vector) + self.intercept
+        # Calculate distances
+        orig_dist = np.dot(original - self.hyperplane_point, self.normal_unit)
+        refl_dist = np.dot(reflected - self.hyperplane_point, self.normal_unit)
 
-        # Determine class based on sign of decision value
-        if decision_value > 0:
-            return "special"
-        return "common"
+        # Check if signs are opposite (on different sides)
+        assert np.sign(orig_dist) != np.sign(refl_dist), "Points are not on opposite sides"
+
+        # Check if distances are equal
+        assert np.isclose(abs(orig_dist), abs(refl_dist)), "Distances are not equal"
+
+    def classify_neuron(self, activation: np.ndarray) -> str:
+        """Classify a neuron based on SVM decision function."""
+        decision_value = np.dot(activation, self.normal_vector) + self.intercept
+        return "special" if decision_value > 0 else "common"
 
     def compute_token_probabilities_linear(
         self,
@@ -135,44 +125,50 @@ class OptimizedSVMHyperplaneReflection:
         token_ids: list[int],
         original_logits: torch.Tensor,
     ) -> tuple[dict[int, float], dict[int, float]]:
-        """Efficiently compute token probabilities before and after reflection"""
-        # Convert activations to tensors matching original_logits
-        orig_act_tensor = torch.tensor(original_activation, device=original_logits.device, dtype=original_logits.dtype)
+        """Efficiently compute token probabilities before and after reflection.
 
-        refl_act_tensor = torch.tensor(reflected_activation, device=original_logits.device, dtype=original_logits.dtype)
+        This method uses linear transformation properties to compute the change
+        in logits due to the activation change.
+        """
+        # Convert to tensors
+        orig_tensor = torch.tensor(original_activation, device=original_logits.device, dtype=original_logits.dtype)
+        refl_tensor = torch.tensor(reflected_activation, device=original_logits.device, dtype=original_logits.dtype)
 
-        # Extract weights connecting this neuron to each token
+        # Extract weights for this neuron
         neuron_weights = self.output_weights[neuron_idx, :].to(original_logits.device)
 
-        # Compute original and reflected logits
-        # Original logits are already provided, but we need to ensure
-        # they properly reflect the original activation
-        computed_logit_contribution = orig_act_tensor * neuron_weights
-
-        # Compute new logits with reflected activation
-        activation_change = refl_act_tensor - orig_act_tensor
+        # Compute logit change
+        activation_change = refl_tensor - orig_tensor
         logit_change = activation_change * neuron_weights
         reflected_logits = original_logits + logit_change
 
-        # Apply softmax to get probabilities
+        # Apply softmax
         original_probs = torch.nn.functional.softmax(original_logits, dim=-1)
         reflected_probs = torch.nn.functional.softmax(reflected_logits, dim=-1)
 
-        # Extract probabilities for tokens of interest
-        original_probs_dict = {token_id: original_probs[token_id].item() for token_id in token_ids}
-        reflected_probs_dict = {token_id: reflected_probs[token_id].item() for token_id in token_ids}
+        # Extract probabilities for specified tokens
+        orig_probs_dict = {token_id: original_probs[token_id].item() for token_id in token_ids}
+        refl_probs_dict = {token_id: reflected_probs[token_id].item() for token_id in token_ids}
 
-        return original_probs_dict, reflected_probs_dict
+        return orig_probs_dict, refl_probs_dict
+
+    def fit_pca(self, activations: np.ndarray) -> None:
+        """Fit PCA on activation data for dimensionality reduction."""
+        if self.use_pca:
+            self.pca = PCA(n_components=self.n_components)
+            self.pca.fit(activations)
+            variance_explained = np.sum(self.pca.explained_variance_ratio_)
+            print(f"Cumulative explained variance: {variance_explained:.4f}")
 
     def run_reflection_analysis(
         self,
-        neurons: list[int],  # List of neuron indices in the last MLP layer
-        token_ids: list[int],  # List of rare token IDs to track
-        context_inputs: list[torch.Tensor],  # List of context inputs to test with
-        neuron_vectors: np.ndarray | None = None,  # Pre-computed neuron activation vectors
-        neuron_types: list[str] | None = None,  # Optional pre-assigned neuron types
-    ) -> dict:
-        """Run the reflection analysis on specified neurons in the last MLP layer."""
+        neurons: list[int],
+        token_ids: list[int],
+        context_inputs: list[torch.Tensor],
+        neuron_vectors: np.ndarray,
+        neuron_types: list[str] | None = None,
+    ) -> dict[str, t.Any]:
+        """Run comprehensive reflection analysis."""
         results = {
             "original_probs": [],
             "reflected_probs": [],
@@ -182,163 +178,68 @@ class OptimizedSVMHyperplaneReflection:
             "distances_to_hyperplane": [],
             "neurons": neurons,
             "token_ids": token_ids,
-            "neuron_types": neuron_types if neuron_types else [],
+            "neuron_types": neuron_types or [],
         }
 
-        # If neuron types not provided, initialize empty list to fill
-        if neuron_types is None:
-            results["neuron_types"] = []
+        # Fit PCA if enabled
+        if self.use_pca:
+            self.fit_pca(neuron_vectors)
 
-        # If using pre-computed neuron vectors
-        if neuron_vectors is not None:
-            print("Using provided neuron activation vectors")
+        # Compute original logits
+        original_logits_list = []
+        for context in tqdm(context_inputs, desc="Computing original logits"):
+            with torch.no_grad():
+                logits = self.model(context)
+                original_logits_list.append(logits[0, -1, :].clone())
 
-            # If using PCA, fit it on the neuron vectors
+        # Process each neuron
+        for i, neuron_idx in enumerate(tqdm(neurons, desc="Processing neurons")):
+            activation = neuron_vectors[i]
+
+            # Classify neuron if types not provided
+            if neuron_types is None:
+                neuron_type = self.classify_neuron(activation)
+                results["neuron_types"].append(neuron_type)
+
+            # Reflect activation
+            reflected = self.reflect_across_hyperplane(activation)
+
+            # Calculate distance to hyperplane
+            dist = np.dot(activation - self.hyperplane_point, self.normal_unit)
+            results["distances_to_hyperplane"].append(dist)
+
+            # Store activations
             if self.use_pca:
-                self.fit_pca(neuron_vectors)
+                orig_pca = self.pca.transform(activation.reshape(1, -1))[0]
+                refl_pca = self.pca.transform(reflected.reshape(1, -1))[0]
+                results["original_activations"].append({"full": activation, "pca": orig_pca})
+                results["reflected_activations"].append({"full": reflected, "pca": refl_pca})
+            else:
+                results["original_activations"].append(activation)
+                results["reflected_activations"].append(reflected)
 
-            # Compute original logits for each context once
-            original_logits_by_context = []
-            for context in tqdm(context_inputs, desc="Computing original logits"):
-                with torch.no_grad():
-                    logits = self.model(context)
-                    original_logits_by_context.append(logits[0, -1, :].clone())
+            # Process each context
+            neuron_orig_probs = []
+            neuron_refl_probs = []
+            neuron_prob_changes = []
 
-            # Process each neuron
-            for i, neuron_idx in enumerate(tqdm(neurons, desc="Processing neurons")):
-                # Get neuron vector
-                activation_vector = neuron_vectors[i]
+            for j, context in enumerate(context_inputs):
+                orig_logits = original_logits_list[j]
 
-                # Determine neuron type if not provided
-                if neuron_types is None:
-                    neuron_type = self.classify_neuron(activation_vector)
-                    results["neuron_types"].append(neuron_type)
+                # Compute probabilities
+                orig_probs, refl_probs = self.compute_token_probabilities_linear(
+                    activation, reflected, neuron_idx, token_ids, orig_logits
+                )
 
-                # Calculate reflection of the activation vector
-                reflected_vector = self.reflect_across_hyperplane(activation_vector)
+                # Calculate changes
+                prob_changes = {t_id: refl_probs[t_id] - orig_probs[t_id] for t_id in token_ids}
 
-                # Calculate distance to hyperplane
-                dist_to_plane = np.dot(activation_vector - self.hyperplane_point, self.normal_unit)
+                neuron_orig_probs.append(orig_probs)
+                neuron_refl_probs.append(refl_probs)
+                neuron_prob_changes.append(prob_changes)
 
-                # Store activation vectors
-                if self.use_pca:
-                    original_pca = self.pca.transform(activation_vector.reshape(1, -1))[0]
-                    reflected_pca = self.pca.transform(reflected_vector.reshape(1, -1))[0]
-                    results["original_activations"].append({"full": activation_vector, "pca": original_pca})
-                    results["reflected_activations"].append({"full": reflected_vector, "pca": reflected_pca})
-                else:
-                    results["original_activations"].append(activation_vector)
-                    results["reflected_activations"].append(reflected_vector)
-
-                results["distances_to_hyperplane"].append(dist_to_plane)
-
-                # Process each context for this neuron
-                neuron_original_probs = []
-                neuron_reflected_probs = []
-                neuron_prob_changes = []
-
-                for context_idx, context in enumerate(context_inputs):
-                    # Get pre-computed original logits
-                    original_logits = original_logits_by_context[context_idx]
-
-                    # Compute token probabilities using linear transformation
-                    orig_probs, refl_probs = self.compute_token_probabilities_linear(
-                        activation_vector, reflected_vector, neuron_idx, token_ids, original_logits
-                    )
-
-                    # Compute probability changes
-                    prob_changes = {t_id: refl_probs[t_id] - orig_probs[t_id] for t_id in token_ids}
-
-                    neuron_original_probs.append(orig_probs)
-                    neuron_reflected_probs.append(refl_probs)
-                    neuron_prob_changes.append(prob_changes)
-
-                # Store results for this neuron
-                results["original_probs"].append(neuron_original_probs)
-                results["reflected_probs"].append(neuron_reflected_probs)
-                results["prob_changes"].append(neuron_prob_changes)
-
-        # If we need to compute activations dynamically
-        else:
-            print("Computing neuron activations dynamically")
-
-            # Collect activations for all neurons and contexts if using PCA
-            if self.use_pca:
-                print("Collecting activations for PCA...")
-                all_activations = []
-                for context in tqdm(context_inputs, desc="Collecting activations for PCA"):
-                    with torch.no_grad():
-                        _ = self.model(context)
-                        # This assumes you have a method to get activations for all neurons at once
-                        layer_activations = self.model.get_last_mlp_activations().cpu().numpy()
-                        for neuron_idx in neurons:
-                            all_activations.append(layer_activations[neuron_idx])
-
-                # Fit PCA on all collected activations
-                self.fit_pca(np.array(all_activations))
-
-            # Process each neuron
-            for i, neuron_idx in enumerate(tqdm(neurons, desc="Processing neurons")):
-                neuron_original_probs = []
-                neuron_reflected_probs = []
-                neuron_prob_changes = []
-                neuron_original_activations = []
-                neuron_reflected_activations = []
-                neuron_distances = []
-
-                # Process each context for this neuron
-                for context_idx, context in enumerate(context_inputs):
-                    # Run forward pass to get activations and logits
-                    with torch.no_grad():
-                        # Get original logits
-                        logits = self.model(context)
-                        original_logits = logits[0, -1, :].clone()
-
-                        # Get activation for this neuron
-                        # This assumes you have a method to get the activation for a specific neuron
-                        original_activation = self.model.get_last_mlp_activation(neuron_idx).cpu().numpy()
-
-                    # Determine neuron type if not provided and this is the first context
-                    if neuron_types is None and context_idx == 0:
-                        neuron_type = self.classify_neuron(original_activation)
-                        results["neuron_types"].append(neuron_type)
-
-                    # Compute reflection
-                    reflected_activation = self.reflect_across_hyperplane(original_activation)
-
-                    # Calculate distance to hyperplane
-                    dist_to_plane = np.dot(original_activation - self.hyperplane_point, self.normal_unit)
-
-                    # Store activation vectors and distance
-                    if self.use_pca:
-                        original_pca = self.pca.transform(original_activation.reshape(1, -1))[0]
-                        reflected_pca = self.pca.transform(reflected_activation.reshape(1, -1))[0]
-                        neuron_original_activations.append({"full": original_activation, "pca": original_pca})
-                        neuron_reflected_activations.append({"full": reflected_activation, "pca": reflected_pca})
-                    else:
-                        neuron_original_activations.append(original_activation)
-                        neuron_reflected_activations.append(reflected_activation)
-
-                    neuron_distances.append(dist_to_plane)
-
-                    # Compute token probabilities using linear transformation
-                    orig_probs, refl_probs = self.compute_token_probabilities_linear(
-                        original_activation, reflected_activation, neuron_idx, token_ids, original_logits
-                    )
-
-                    # Compute probability changes
-                    prob_changes = {t_id: refl_probs[t_id] - orig_probs[t_id] for t_id in token_ids}
-
-                    neuron_original_probs.append(orig_probs)
-                    neuron_reflected_probs.append(refl_probs)
-                    neuron_prob_changes.append(prob_changes)
-
-                # Store results for this neuron
-                results["original_probs"].append(neuron_original_probs)
-                results["reflected_probs"].append(neuron_reflected_probs)
-                results["prob_changes"].append(neuron_prob_changes)
-                results["original_activations"].append(neuron_original_activations)
-                results["reflected_activations"].append(neuron_reflected_activations)
-                results["distances_to_hyperplane"].append(neuron_distances)
+            results["original_probs"].append(neuron_orig_probs)
+            results["reflected_probs"].append(neuron_refl_probs)
+            results["prob_changes"].append(neuron_prob_changes)
 
         return results
