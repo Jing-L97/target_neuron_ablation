@@ -17,6 +17,7 @@ from neuron_analyzer.classify.preprocess import (
     ThresholdLabeler,
     get_threshold,
 )
+from neuron_analyzer.classify.reflection import SVMHyperplaneReflector
 from neuron_analyzer.load_util import StepPathProcessor
 from neuron_analyzer.selection.neuron import generate_random_indices
 
@@ -91,7 +92,7 @@ def configure_path(args):
     )
 
 
-class Trainer:
+class ReflectionAnalyzer:
     """Class for running the entire neuron classification pipeline."""
 
     def __init__(self, args: Any, data_path: Path, model_path: Path, eval_path: Path, step_dirs: list[tuple[str, str]]):
@@ -113,16 +114,16 @@ class Trainer:
                 X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
                 # configure the save path
                 step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
-                # Train classifier
+                # intialize the analyzer
                 _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
-
+                SVMHyperplaneReflector(svm_checkpoint_path=step_model_path, model_name=self.args.model_name)
             except Exception as e:
                 logger.info(f"Error processing step {step[1]}: {e!s}")
 
     def _load_data(
         self, step: tuple[str, str], threshold: float | None, classification_condition: str
     ) -> tuple[np.ndarray, np.ndarray, list[str]]:
-        """Load and prepare data for classification from a single step."""
+        """Load and prepare data for reflection test."""
         # Filter features with unequal length
         feature_loader = FeatureLoader(data_dir=self.data_path / str(step[1]) / str(self.args.data_range_end))
         data, fea = feature_loader.run_pipeline()

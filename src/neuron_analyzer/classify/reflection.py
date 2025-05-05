@@ -1,83 +1,163 @@
+import logging
 import pickle
 import typing as t
 from pathlib import Path
 
 import numpy as np
 import torch
-from sklearn.decomposition import PCA
 from tqdm import tqdm
 
+logger = logging.getLogger(__name__)
 
-class OptimizedSVMHyperplaneReflection:
-    """Optimized implementation of the hyperplane reflection for analyzing neural network layers.
 
-    This class performs reflection of neuron activations across an SVM decision boundary
-    and computes the effect on token probabilities using linear transformations.
+class SVMHyperplaneReflector:
+    """Performs reflection of neuron activations across an SVM decision boundary.
+
+    This class uses PyTorch hooks to modify activations during the forward pass,
+    allowing analysis of how crossing the SVM hyperplane affects model behavior.
     """
 
     def __init__(
         self,
-        model: torch.nn.Module,
         svm_checkpoint_path: str | Path,
-        output_projection_weights: torch.Tensor,
+        layer_name: str | None = None,
+        layer_num: int = -1,
+        model_name: str = "pythia-410m",
         use_pca: bool = False,
         n_components: int = 10,
     ):
-        """Initialize the reflection analysis tool.
+        """Initialize the reflector with model and configuration.
 
         Args:
-            model: The language model to analyze
-            svm_checkpoint_path: Path to the saved SVM model (.blob file)
-            output_projection_weights: Weight matrix mapping last MLP layer to logits
-                                     (shape: hidden_size × vocab_size)
+            model: The neural network model to analyze
+            svm_checkpoint_path: Path to the SVM model file
+            layer_name: Full name of the layer (overrides layer_num if provided)
+            layer_num: Layer number (used if layer_name not provided)
+            model_name: Name of the model architecture
             use_pca: Whether to use PCA for dimensionality reduction
             n_components: Number of PCA components if use_pca=True
 
         """
         self.model = model
+        self.device = next(model.parameters()).device
         self.svm_checkpoint_path = Path(svm_checkpoint_path)
-        self.output_weights = output_projection_weights
         self.use_pca = use_pca
         self.n_components = n_components
+        self.model_name = model_name
+
+        # Set layer name based on model architecture or use provided name
+        if layer_name is None:
+            # Default layer naming based on model architecture
+            if "pythia" in model_name.lower() or "gpt-neox" in model_name.lower():
+                self.layer_name = f"gpt_neox.layers.{layer_num}.mlp.dense_h_to_4h"
+            elif "llama" in model_name.lower():
+                self.layer_name = f"model.layers.{layer_num}.mlp.up_proj"
+            elif "gpt2" in model_name.lower():
+                self.layer_name = f"transformer.h.{layer_num}.mlp.c_fc"
+            else:
+                # Generic fallback
+                self.layer_name = f"model.layers.{layer_num}.mlp"
+        else:
+            self.layer_name = layer_name
+
+        # Setup hook and state variables
+        self.hook_handle = None
+        self.reflection_enabled = False
         self.pca = None
 
-        # Load SVM model and extract hyperplane parameters
-        self.svm_model = self._load_svm_model()
-        self._extract_hyperplane_params()
+        # Target neurons and their activations
+        self.target_neurons: list[int] = []
+        self.original_activations: dict[int, np.ndarray] = {}
+        self.reflected_activations: dict[int, np.ndarray] = {}
 
-        print(f"Output projection weight shape: {self.output_weights.shape}")
+        # Hyperplane parameters
+        self.normal_vector: np.ndarray | None = None
+        self.normal_unit: np.ndarray | None = None
+        self.intercept: float | None = None
+        self.hyperplane_point: np.ndarray | None = None
 
-    def _load_svm_model(self) -> dict[str, np.ndarray] | t.Any:
-        """Load the trained SVM model from checkpoint."""
+        # Load SVM model and set up hooks
+        self._load_svm_model()
+        self._setup_hooks()
+
+    def _load_svm_model(self) -> None:
+        """Load SVM model and extract hyperplane parameters."""
+        if not self.svm_checkpoint_path.exists():
+            raise FileNotFoundError(f"SVM model file not found: {self.svm_checkpoint_path}")
+
+        # Load the SVM model
         with open(self.svm_checkpoint_path, "rb") as f:
-            return pickle.load(f)
+            svm_model = pickle.load(f)
 
-    def _extract_hyperplane_params(self) -> None:
-        """Extract hyperplane parameters (normal vector and intercept) from SVM model."""
-        # Handle different SVM model formats
-        if hasattr(self.svm_model, "coef_"):
-            self.normal_vector = self.svm_model.coef_[0]  # w
-            self.intercept = self.svm_model.intercept_[0]  # b
+        # Extract hyperplane parameters
+        if hasattr(svm_model, "coef_"):
+            # scikit-learn SVM model
+            self.normal_vector = svm_model.coef_[0]  # w
+            self.intercept = svm_model.intercept_[0]  # b
         else:
             # Custom format where hyperplane info is stored directly
-            self.normal_vector = self.svm_model["w"]
-            self.intercept = self.svm_model["b"]
+            if "w" not in svm_model or "b" not in svm_model:
+                raise ValueError("SVM model does not contain expected hyperplane parameters (w and b)")
+            self.normal_vector = svm_model["w"]
+            self.intercept = svm_model["b"]
 
-        # Normalize the normal vector for stability
-        self.normal_unit = self.normal_vector / np.linalg.norm(self.normal_vector)
+        # Normalize the normal vector
+        norm = np.linalg.norm(self.normal_vector)
+        if norm < 1e-10:
+            raise ValueError("Normal vector norm is too small, suggesting an invalid hyperplane")
+        self.normal_unit = self.normal_vector / norm
 
-        # Find a point on the hyperplane (using -b/||w||² * w)
+        # Find a point on the hyperplane
         self.hyperplane_point = -self.intercept * self.normal_unit
 
-        print(f"Hyperplane normal vector shape: {self.normal_vector.shape}")
-        print(f"Hyperplane intercept: {self.intercept}")
+        logger.info(f"Loaded SVM model from {self.svm_checkpoint_path}")
+        logger.info(f"Hyperplane normal vector shape: {self.normal_vector.shape}")
+        logger.info(f"Hyperplane intercept: {self.intercept}")
+
+    def _setup_hooks(self) -> None:
+        """Set up forward hooks for neuron reflection."""
+        try:
+            target_layer = self._get_layer_module()
+
+            def reflection_hook(module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
+                """Forward hook to reflect specified neurons across the hyperplane."""
+                if not self.reflection_enabled or not self.target_neurons:
+                    return output
+
+                # Clone the output to avoid modifying the original tensor in-place
+                modified_output = output.clone()
+
+                # Apply reflection to each target neuron
+                for neuron_idx in self.target_neurons:
+                    if neuron_idx in self.reflected_activations:
+                        # Get the reflected activation for this neuron
+                        reflected_value = self.reflected_activations[neuron_idx]
+
+                        # Apply the reflected value based on output tensor shape
+                        if len(modified_output.shape) == 3:
+                            # [batch, seq_len, hidden_dim]
+                            # Modify only the last token's activation for the target neuron
+                            modified_output[:, -1, neuron_idx] = torch.tensor(
+                                reflected_value, device=modified_output.device, dtype=modified_output.dtype
+                            )
+                        elif len(modified_output.shape) == 2:
+                            # [batch, hidden_dim]
+                            modified_output[:, neuron_idx] = torch.tensor(
+                                reflected_value, device=modified_output.device, dtype=modified_output.dtype
+                            )
+
+                return modified_output
+
+            # Register the hook
+            self.hook_handle = target_layer.register_forward_hook(reflection_hook)
+            logger.info(f"Registered reflection hook on layer: {self.layer_name}")
+
+        except Exception as e:
+            logger.error(f"Error setting up reflection hook: {e}")
+            raise
 
     def reflect_across_hyperplane(self, activation: np.ndarray) -> np.ndarray:
-        """Reflect an activation vector across the hyperplane.
-
-        The reflection formula is: x' = x - 2 * ((x - p) · n̂) * n̂
-        where x is the point to reflect, p is a point on the hyperplane,
-        and n̂ is the unit normal vector.
+        """Reflect an activation vector across the SVM hyperplane.
 
         Args:
             activation: Vector to reflect
@@ -89,157 +169,435 @@ class OptimizedSVMHyperplaneReflection:
         # Compute signed distance to hyperplane
         dist_to_plane = np.dot(activation - self.hyperplane_point, self.normal_unit)
 
-        # Apply reflection formula
+        # Apply reflection formula: x' = x - 2 * ((x - p) · n̂) * n̂
         reflected = activation - 2 * dist_to_plane * self.normal_unit
-
-        # Verify the reflection is correct
-        self._verify_reflection(activation, reflected)
-
         return reflected
 
-    def _verify_reflection(self, original: np.ndarray, reflected: np.ndarray) -> None:
-        """Verify that the reflection is correct by checking:
-        1. The reflected point is on the opposite side of the hyperplane
-        2. The distance from both points to the hyperplane is equal
-        """
-        # Calculate distances
-        orig_dist = np.dot(original - self.hyperplane_point, self.normal_unit)
-        refl_dist = np.dot(reflected - self.hyperplane_point, self.normal_unit)
-
-        # Check if signs are opposite (on different sides)
-        assert np.sign(orig_dist) != np.sign(refl_dist), "Points are not on opposite sides"
-
-        # Check if distances are equal
-        assert np.isclose(abs(orig_dist), abs(refl_dist)), "Distances are not equal"
-
     def classify_neuron(self, activation: np.ndarray) -> str:
-        """Classify a neuron based on SVM decision function."""
+        """Classify a neuron based on SVM decision function.
+
+        Args:
+            activation: Neuron activation vector
+
+        Returns:
+            Classification string: "special" if on positive side of hyperplane, "common" otherwise
+
+        """
         decision_value = np.dot(activation, self.normal_vector) + self.intercept
         return "special" if decision_value > 0 else "common"
 
-    def compute_token_probabilities_linear(
-        self,
-        original_activation: np.ndarray,
-        reflected_activation: np.ndarray,
-        neuron_idx: int,
-        token_ids: list[int],
-        original_logits: torch.Tensor,
-    ) -> tuple[dict[int, float], dict[int, float]]:
-        """Efficiently compute token probabilities before and after reflection.
+    def setup_reflection(self, neuron_idx: int, activation: np.ndarray) -> None:
+        """Set up reflection for a specific neuron.
 
-        This method uses linear transformation properties to compute the change
-        in logits due to the activation change.
+        Args:
+            neuron_idx: Index of the neuron to reflect
+            activation: Original activation of the neuron
+
         """
-        # Convert to tensors
-        orig_tensor = torch.tensor(original_activation, device=original_logits.device, dtype=original_logits.dtype)
-        refl_tensor = torch.tensor(reflected_activation, device=original_logits.device, dtype=original_logits.dtype)
+        # Store original activation
+        self.original_activations[neuron_idx] = activation
 
-        # Extract weights for this neuron
-        neuron_weights = self.output_weights[neuron_idx, :].to(original_logits.device)
+        # Calculate reflected activation
+        reflected = self.reflect_across_hyperplane(activation)
 
-        # Compute logit change
-        activation_change = refl_tensor - orig_tensor
-        logit_change = activation_change * neuron_weights
-        reflected_logits = original_logits + logit_change
+        # Store reflected activation
+        self.reflected_activations[neuron_idx] = reflected
 
-        # Apply softmax
-        original_probs = torch.nn.functional.softmax(original_logits, dim=-1)
-        reflected_probs = torch.nn.functional.softmax(reflected_logits, dim=-1)
+        # Add to target neurons list if not already there
+        if neuron_idx not in self.target_neurons:
+            self.target_neurons.append(neuron_idx)
 
-        # Extract probabilities for specified tokens
-        orig_probs_dict = {token_id: original_probs[token_id].item() for token_id in token_ids}
-        refl_probs_dict = {token_id: reflected_probs[token_id].item() for token_id in token_ids}
+        logger.info(f"Set up reflection for neuron {neuron_idx}")
 
-        return orig_probs_dict, refl_probs_dict
+    def setup_batch_reflection(self, neurons: list[int], activations: np.ndarray) -> None:
+        """Set up reflection for multiple neurons.
 
-    def fit_pca(self, activations: np.ndarray) -> None:
-        """Fit PCA on activation data for dimensionality reduction."""
-        if self.use_pca:
-            self.pca = PCA(n_components=self.n_components)
-            self.pca.fit(activations)
-            variance_explained = np.sum(self.pca.explained_variance_ratio_)
-            print(f"Cumulative explained variance: {variance_explained:.4f}")
+        Args:
+            neurons: List of neuron indices to reflect
+            activations: Array of activation vectors for the neurons
 
-    def run_reflection_analysis(
+        """
+        if len(neurons) != len(activations):
+            raise ValueError(
+                f"Number of neurons ({len(neurons)}) must match number of activations ({len(activations)})"
+            )
+
+        # Reset current targets
+        self.target_neurons = []
+        self.original_activations = {}
+        self.reflected_activations = {}
+
+        # Set up reflection for each neuron
+        for i, neuron_idx in enumerate(neurons):
+            self.setup_reflection(neuron_idx, activations[i])
+
+    def enable_reflection(self) -> None:
+        """Enable neuron reflection."""
+        self.reflection_enabled = True
+        logger.info("Neuron reflection enabled")
+
+    def disable_reflection(self) -> None:
+        """Disable neuron reflection."""
+        self.reflection_enabled = False
+        logger.info("Neuron reflection disabled")
+
+    def cleanup(self) -> None:
+        """Remove hooks and clean up resources."""
+        if self.hook_handle is not None:
+            self.hook_handle.remove()
+            self.hook_handle = None
+
+        # Clear stored data
+        self.target_neurons = []
+        self.original_activations = {}
+        self.reflected_activations = {}
+        self.pca = None
+
+        logger.info("Reflector cleaned up")
+
+    def compute_token_loss(
         self,
+        input_ids: torch.Tensor,
+        target_ids: list[int],
         neurons: list[int],
-        token_ids: list[int],
-        context_inputs: list[torch.Tensor],
-        neuron_vectors: np.ndarray,
-        neuron_types: list[str] | None = None,
+        activations: np.ndarray,
+        original_losses: dict[int, float] = None,
     ) -> dict[str, t.Any]:
-        """Run comprehensive reflection analysis."""
+        """Compute token loss after reflection.
+
+        Args:
+            input_ids: Input token IDs
+            target_ids: List of target token IDs to compute loss for
+            neurons: List of neuron indices to reflect
+            activations: Activation vectors for the neurons
+            original_losses: Dictionary of original losses per target token (if already computed)
+
+        Returns:
+            Dictionary of loss results
+
+        """
         results = {
-            "original_probs": [],
-            "reflected_probs": [],
-            "prob_changes": [],
-            "original_activations": [],
-            "reflected_activations": [],
-            "distances_to_hyperplane": [],
             "neurons": neurons,
-            "token_ids": token_ids,
-            "neuron_types": neuron_types or [],
+            "target_ids": target_ids,
+            "original_loss": [],
+            "reflected_loss": [],
+            "loss_changes": [],
+            "neuron_types": [],
         }
 
-        # Fit PCA if enabled
-        if self.use_pca:
-            self.fit_pca(neuron_vectors)
+        # Classify neurons
+        for i, neuron_idx in enumerate(neurons):
+            neuron_type = self.classify_neuron(activations[i])
+            results["neuron_types"].append(neuron_type)
 
-        # Compute original logits
-        original_logits_list = []
-        for context in tqdm(context_inputs, desc="Computing original logits"):
+        # If original losses not provided, compute them
+        if original_losses is None:
+            self.disable_reflection()
             with torch.no_grad():
-                logits = self.model(context)
-                original_logits_list.append(logits[0, -1, :].clone())
+                outputs = self.model(input_ids)
+                # Get logits for the last token prediction
+                if hasattr(outputs, "logits"):
+                    original_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
+                else:
+                    original_logits = outputs[:, -1, :]  # [batch, vocab_size]
+
+                # Calculate loss using model's loss function if available
+                # Otherwise use CrossEntropyLoss
+                original_losses = {}
+                for target_id in target_ids:
+                    # Create target tensor [batch_size]
+                    target_tensor = torch.tensor([target_id] * input_ids.size(0), device=self.device)
+
+                    # Calculate loss
+                    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
+                    losses = loss_fn(original_logits, target_tensor)
+
+                    # Average across batch dimension if needed
+                    original_losses[target_id] = losses.mean().item()
 
         # Process each neuron
         for i, neuron_idx in enumerate(tqdm(neurons, desc="Processing neurons")):
-            activation = neuron_vectors[i]
+            # Store the original loss
+            results["original_loss"].append(original_losses)
 
-            # Classify neuron if types not provided
-            if neuron_types is None:
-                neuron_type = self.classify_neuron(activation)
-                results["neuron_types"].append(neuron_type)
+            # Set up reflection for this neuron
+            self.setup_reflection(neuron_idx, activations[i])
 
-            # Reflect activation
-            reflected = self.reflect_across_hyperplane(activation)
+            # Compute reflected loss
+            self.enable_reflection()
 
-            # Calculate distance to hyperplane
-            dist = np.dot(activation - self.hyperplane_point, self.normal_unit)
-            results["distances_to_hyperplane"].append(dist)
+            with torch.no_grad():
+                outputs = self.model(input_ids)
+                # Get logits for the last token prediction
+                if hasattr(outputs, "logits"):
+                    reflected_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
+                else:
+                    reflected_logits = outputs[:, -1, :]  # [batch, vocab_size]
 
-            # Store activations
-            if self.use_pca:
-                orig_pca = self.pca.transform(activation.reshape(1, -1))[0]
-                refl_pca = self.pca.transform(reflected.reshape(1, -1))[0]
-                results["original_activations"].append({"full": activation, "pca": orig_pca})
-                results["reflected_activations"].append({"full": reflected, "pca": refl_pca})
-            else:
-                results["original_activations"].append(activation)
-                results["reflected_activations"].append(reflected)
+                # Calculate loss for each target token
+                reflected_losses = {}
+                for target_id in target_ids:
+                    # Create target tensor [batch_size]
+                    target_tensor = torch.tensor([target_id] * input_ids.size(0), device=self.device)
 
-            # Process each context
-            neuron_orig_probs = []
-            neuron_refl_probs = []
-            neuron_prob_changes = []
+                    # Calculate loss
+                    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
+                    losses = loss_fn(reflected_logits, target_tensor)
 
-            for j, context in enumerate(context_inputs):
-                orig_logits = original_logits_list[j]
+                    # Average across batch dimension if needed
+                    reflected_losses[target_id] = losses.mean().item()
 
-                # Compute probabilities
-                orig_probs, refl_probs = self.compute_token_probabilities_linear(
-                    activation, reflected, neuron_idx, token_ids, orig_logits
-                )
+            # Compute loss changes
+            loss_changes = {t_id: reflected_losses[t_id] - original_losses[t_id] for t_id in target_ids}
 
-                # Calculate changes
-                prob_changes = {t_id: refl_probs[t_id] - orig_probs[t_id] for t_id in token_ids}
+            # Store results
+            results["reflected_loss"].append(reflected_losses)
+            results["loss_changes"].append(loss_changes)
 
-                neuron_orig_probs.append(orig_probs)
-                neuron_refl_probs.append(refl_probs)
-                neuron_prob_changes.append(prob_changes)
-
-            results["original_probs"].append(neuron_orig_probs)
-            results["reflected_probs"].append(neuron_refl_probs)
-            results["prob_changes"].append(neuron_prob_changes)
+            # Disable reflection for next neuron
+            self.disable_reflection()
 
         return results
+
+    def run_reflection_analysis(
+        self,
+        input_dataset: list[torch.Tensor],
+        target_ids: list[int],
+        neurons: list[int],
+        activations: np.ndarray,
+        original_losses_by_context: list[dict[int, float]] = None,
+    ) -> dict[str, t.Any]:
+        """Run comprehensive reflection analysis on a dataset.
+
+        Args:
+            input_dataset: List of input tensors
+            target_ids: Target token IDs to analyze loss changes for
+            neurons: List of neuron indices to reflect
+            activations: Activation vectors for the neurons
+            original_losses_by_context: Pre-computed original losses for each context and target token
+
+        Returns:
+            Dictionary containing analysis results
+
+        """
+        if len(neurons) != len(activations):
+            raise ValueError(f"Number of neurons ({len(neurons)}) must match activations ({len(activations)})")
+
+        # Prepare results structure
+        results = {
+            "neurons": neurons,
+            "target_ids": target_ids,
+            "original_loss": [[] for _ in range(len(neurons))],
+            "reflected_loss": [[] for _ in range(len(neurons))],
+            "loss_changes": [[] for _ in range(len(neurons))],
+            "original_activations": activations.tolist(),
+            "reflected_activations": [],
+            "distances_to_hyperplane": [],
+            "neuron_types": [],
+        }
+
+        # Calculate and store reflected activations and neuron types
+        for i, act in enumerate(activations):
+            # Calculate distance to hyperplane
+            dist = np.dot(act - self.hyperplane_point, self.normal_unit)
+            results["distances_to_hyperplane"].append(float(dist))
+
+            # Reflect activation and store
+            reflected = self.reflect_across_hyperplane(act)
+            results["reflected_activations"].append(reflected.tolist())
+
+            # Classify neuron
+            neuron_type = self.classify_neuron(act)
+            results["neuron_types"].append(neuron_type)
+
+        # Process each context input
+        for context_idx, input_ids in enumerate(tqdm(input_dataset, desc="Processing contexts")):
+            # Move input to correct device
+            if hasattr(input_ids, "to"):
+                input_ids = input_ids.to(self.device)
+
+            # Get or compute original losses for all target tokens
+            if original_losses_by_context is not None and context_idx < len(original_losses_by_context):
+                # Use pre-computed losses
+                original_losses_by_target = original_losses_by_context[context_idx]
+            else:
+                # Compute original losses
+                self.disable_reflection()
+                original_losses_by_target = {}
+
+                with torch.no_grad():
+                    outputs = self.model(input_ids)
+                    # Get logits for the last token prediction
+                    if hasattr(outputs, "logits"):
+                        original_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
+                    else:
+                        original_logits = outputs[:, -1, :]  # [batch, vocab_size]
+
+                    # Calculate loss for each target token
+                    for target_id in target_ids:
+                        # Create target tensor [batch_size]
+                        target_tensor = torch.tensor([target_id] * input_ids.size(0), device=self.device)
+
+                        # Calculate loss
+                        loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
+                        losses = loss_fn(original_logits, target_tensor)
+
+                        # Average across batch dimension if needed
+                        original_losses_by_target[target_id] = losses.mean().item()
+
+            # Process each neuron
+            for neuron_idx, neuron in enumerate(
+                tqdm(neurons, desc=f"Processing neurons for context {context_idx}", leave=False)
+            ):
+                # Store original loss
+                results["original_loss"][neuron_idx].append(original_losses_by_target)
+
+                # Get corresponding activation
+                activation = activations[neuron_idx]
+
+                # Set up reflection for this neuron
+                self.setup_reflection(neuron, activation)
+
+                # Compute reflected loss
+                self.enable_reflection()
+
+                with torch.no_grad():
+                    outputs = self.model(input_ids)
+                    # Get logits for the last token prediction
+                    if hasattr(outputs, "logits"):
+                        reflected_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
+                    else:
+                        reflected_logits = outputs[:, -1, :]  # [batch, vocab_size]
+
+                    # Calculate reflected loss for each target token
+                    reflected_losses = {}
+                    for target_id in target_ids:
+                        # Create target tensor [batch_size]
+                        target_tensor = torch.tensor([target_id] * input_ids.size(0), device=self.device)
+
+                        # Calculate loss
+                        loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
+                        losses = loss_fn(reflected_logits, target_tensor)
+
+                        # Average across batch dimension if needed
+                        reflected_losses[target_id] = losses.mean().item()
+
+                # Compute loss changes
+                loss_changes = {t_id: reflected_losses[t_id] - original_losses_by_target[t_id] for t_id in target_ids}
+
+                # Store results
+                results["reflected_loss"][neuron_idx].append(reflected_losses)
+                results["loss_changes"][neuron_idx].append(loss_changes)
+
+                # Disable reflection for the next neuron
+                self.disable_reflection()
+
+        return results
+
+    def save_results(self, results: dict[str, t.Any], output_path: str | Path) -> None:
+        """Save analysis results to a file.
+
+        Args:
+            results: Analysis results dictionary
+            output_path: Path to save results to
+
+        """
+        output_path = Path(output_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        with open(output_path, "wb") as f:
+            pickle.dump(results, f)
+
+        logger.info(f"Analysis results saved to {output_path}")
+
+    def load_results(self, input_path: str | Path) -> dict[str, t.Any]:
+        """Load analysis results from a file.
+
+        Args:
+            input_path: Path to load results from
+
+        Returns:
+            Dictionary of analysis results
+
+        """
+        input_path = Path(input_path)
+        if not input_path.exists():
+            raise FileNotFoundError(f"Results file not found: {input_path}")
+
+        with open(input_path, "rb") as f:
+            results = pickle.load(f)
+
+        logger.info(f"Analysis results loaded from {input_path}")
+        return results
+
+    def analyze_impact(self, results: dict[str, t.Any], threshold: float = 0.1) -> dict[str, t.Any]:
+        """Analyze functional impact of reflection across hyperplane.
+
+        Args:
+            results: Analysis results dictionary
+            threshold: Threshold for significant loss change
+
+        Returns:
+            Dictionary with impact metrics
+
+        """
+        impact_metrics = {
+            "significant_changes": 0,
+            "consistent_with_hypothesis": 0,
+            "average_loss_delta": 0.0,
+            "max_loss_delta": 0.0,
+            "neuron_level_impacts": [],
+        }
+
+        total_samples = 0
+        total_delta = 0.0
+        max_delta = 0.0
+
+        for neuron_idx, loss_changes in enumerate(results["loss_changes"]):
+            neuron_type = results["neuron_types"][neuron_idx]
+            neuron_impact = {
+                "neuron_idx": results["neurons"][neuron_idx],
+                "neuron_type": neuron_type,
+                "distance_to_hyperplane": results["distances_to_hyperplane"][neuron_idx],
+                "avg_loss_delta": 0.0,
+                "significant_changes": 0,
+                "consistent_changes": 0,
+            }
+
+            neuron_deltas = []
+            for context_changes in loss_changes:
+                for token_id, delta in context_changes.items():
+                    total_samples += 1
+                    neuron_deltas.append(delta)
+                    total_delta += abs(delta)
+                    max_delta = max(max_delta, abs(delta))
+
+                    # Count significant changes
+                    if abs(delta) > threshold:
+                        impact_metrics["significant_changes"] += 1
+                        neuron_impact["significant_changes"] += 1
+
+                        # Check consistency with hypothesis
+                        # For loss, negative delta means better (lower loss)
+                        # "special" neurons should decrease loss for target tokens
+                        expected_direction = -1 if neuron_type == "special" else 1
+                        if (delta * expected_direction) < 0:  # Reversed compared to probability
+                            impact_metrics["consistent_with_hypothesis"] += 1
+                            neuron_impact["consistent_changes"] += 1
+
+            neuron_impact["avg_loss_delta"] = np.mean(np.abs(neuron_deltas))
+            impact_metrics["neuron_level_impacts"].append(neuron_impact)
+
+        if total_samples > 0:
+            impact_metrics["average_loss_delta"] = total_delta / total_samples
+        impact_metrics["max_loss_delta"] = max_delta
+
+        # Calculate consistency percentage
+        if impact_metrics["significant_changes"] > 0:
+            impact_metrics["consistency_percentage"] = (
+                impact_metrics["consistent_with_hypothesis"] / impact_metrics["significant_changes"] * 100
+            )
+        else:
+            impact_metrics["consistency_percentage"] = 0.0
+
+        return impact_metrics

@@ -78,7 +78,7 @@ class NeuronFeatureExtractor:
         if out_path.is_file() and self.args.resume:
             logger.info(f"Resuming file from {out_path}")
             fea_data = pd.read_feather(out_path)
-            return fea_data
+            return fea_data.head(self.args.fea_dim)
 
         entropy_path = self.entropy_path / self.step_num / str(self.args.data_range_end) / "entropy_df.csv"
         if entropy_path.is_file():
@@ -92,24 +92,22 @@ class NeuronFeatureExtractor:
                 threshold_path=self.entropy_path / self.args.stat_file,
             )
             fea_data = df_filter.filter_df_by_freq()
-
             # load file by freq
             fea_data = self._filter_token(fea_data, groupby_col="str_tokens", sort_by_col="freq")
             # Save the selected intermediate data
             fea_data.reset_index(drop=True).to_feather(out_path)
-        else:
-            logger.info(f"No file from {entropy_path}")
-        return fea_data
+            return fea_data.head(self.args.fea_dim)
+        if not entropy_path.is_file():
+            raise FileNotFoundError(f"File not found: {entropy_path}")
+        return None
 
     def _filter_token(self, fea_data, groupby_col: str, sort_by_col: str) -> pd.DataFrame:
         """Filter top-n tokens together with the rows."""
-        first_n_groups = fea_data[groupby_col].drop_duplicates().head(self.args.fea_dim)
-        filtered_df = fea_data[fea_data[groupby_col].isin(first_n_groups)]
+        fea_data = fea_data.drop_duplicates(groupby_col)
+        # save the intermediate file
         if "longtail" in self.args.sel_freq:
-            return (
-                filtered_df.sort_values(by=sort_by_col, ascending=True).groupby(groupby_col, group_keys=False).head(1)
-            )
-        return filtered_df.sort_values(by=sort_by_col, ascending=False).groupby(groupby_col, group_keys=False).head(1)
+            return fea_data.sort_values(by=sort_by_col, ascending=True)
+        return fea_data.sort_values(by=sort_by_col, ascending=False)
 
     def build_vector(
         self, loss_data: pd.DataFrame, fea_data: pd.DataFrame
@@ -168,7 +166,6 @@ class NeuronFeatureExtractor:
                 "neuron_count": len(neuron_features),
             },
         }
-        # TDOO: add additional info: context, original_loss, ablation_loss,
         JsonProcessor.save_json(results, out_path)
         logger.info(f"Save file to {out_path}")
         return results

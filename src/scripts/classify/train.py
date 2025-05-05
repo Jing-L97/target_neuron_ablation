@@ -75,7 +75,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude_random", type=bool, default=True, help="Include all neuron indices if set True")
     parser.add_argument("--run_baseline", action="store_true", help="Whether to run baseline models")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
-    parser.add_argument("--fea_dim", type=int, default=5, help="Number of tokens as the activation feature")
+    parser.add_argument("--fea_dim", type=int, default=50, help="Number of tokens as the activation feature")
     parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
@@ -90,7 +90,6 @@ def parse_args() -> argparse.Namespace:
 #######################################################################################################
 # Functions applied in the main scripts
 #######################################################################################################
-# TODO: configure different saving paths
 
 
 def configure_path(args):
@@ -134,55 +133,26 @@ class Trainer:
         classification_condition = self._get_classification_condition()
 
         for step in self.step_dirs:
-            # try:
-            # Load data
-            logger.info("----------Stage 1: Loading training data---------------------------")
-            X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
-            # configure the save path
-            step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
-            # Train classifier
-            logger.info("----------Stage 2: Training data for hyperplanes-------------------")
-            _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
-            logger.info(f"############################################ Finished step {step[1]}")
+            try:
+                # Load data
+                logger.info("----------Stage 1: Loading training data---------------------------")
+                X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
+                # configure the save path
+                step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
+                # Train classifier
+                logger.info("----------Stage 2: Training data for hyperplanes-------------------")
+                _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
+                logger.info(f"############################################ Finished step {step[1]}")
 
-        # except Exception as e:
-        # logger.info(f"Error processing step {step[1]}: {e!s}")
+            except Exception as e:
+                logger.info(f"Error processing step {step[1]}: {e!s}")
 
     def _load_data(
         self, step: tuple[str, str], threshold: float | None, classification_condition: str
     ) -> tuple[np.ndarray, np.ndarray, list[str]]:
         """Load and prepare data for classification from a single step."""
-        # intialize the unigram analyzer
-        unigram_distrib, unigram_count = load_unigram(model_name=self.args.model, device="cpu")
-        # intialize the unigram analyzer
-        unigram_analyzer = UnigramAnalyzer(
-            device="cpu", model_name=self.args.model, unigram_distrib=unigram_distrib, unigram_count=unigram_count
-        )
-        # initilize the selector class
-        data_path = self.data_path / str(step[1]) / str(self.args.data_range_end) / "features.json"
-
-        if data_path.is_file() and self.args.resume:
-            logger.info(f"--Step 1: Resuming feature data from {data_path}")
-
-        # rebuild the features if not setting resume
-        else:
-            logger.info("--Step 1:Building feature data from scratch.")
-            feature_extractor = NeuronFeatureExtractor(
-                args=self.args,
-                feather_path=self.feather_path,
-                entropy_path=self.entropy_path,
-                step_path=step[0],
-                unigram_analyzer=unigram_analyzer,
-                out_dir=self.data_path / str(step[1]) / str(self.args.data_range_end),
-                step_num=step[1],
-                device="cpu",
-            )
-            feature_extractor.run_pipeline()
-
-        # load features fromt ehsave path
-        feature_loader = FeatureLoader(data_path=data_path)
-        data, fea = feature_loader.run_pipeline()
-        logger.info("Features have been loaded.")
+        # load data
+        data, fea = self._load_fea(step)
 
         # Label data
         if self.args.label_type == "threshold":
@@ -273,6 +243,40 @@ class Trainer:
             "suppress": suppress_neuron_indices,
             "random": random_indices,
         }
+
+    def _load_fea(self, step) -> tuple[dict, dict]:
+        # intialize the unigram analyzer
+        unigram_distrib, unigram_count = load_unigram(model_name=self.args.model, device="cpu")
+        # intialize the unigram analyzer
+        unigram_analyzer = UnigramAnalyzer(
+            device="cpu", model_name=self.args.model, unigram_distrib=unigram_distrib, unigram_count=unigram_count
+        )
+        # initilize the selector class
+        data_path = self.data_path / str(step[1]) / str(self.args.data_range_end) / "features.json"
+
+        if data_path.is_file() and self.args.resume:
+            logger.info(f"--Step 1: Resuming feature data from {data_path}")
+
+        # rebuild the features if not setting resume
+        else:
+            logger.info("--Step 1:Building feature data from scratch.")
+            feature_extractor = NeuronFeatureExtractor(
+                args=self.args,
+                feather_path=self.feather_path,
+                entropy_path=self.entropy_path,
+                step_path=step[0],
+                unigram_analyzer=unigram_analyzer,
+                out_dir=self.data_path / str(step[1]) / str(self.args.data_range_end),
+                step_num=step[1],
+                device="cpu",
+            )
+            feature_extractor.run_pipeline()
+
+        # load features fromt ehsave path
+        feature_loader = FeatureLoader(data_path=data_path)
+        data, fea = feature_loader.run_pipeline()
+        logger.info("Features have been loaded.")
+        return data, fea
 
     def _load_threshold(self) -> float | None:
         """Load threshold if needed based on label type."""
