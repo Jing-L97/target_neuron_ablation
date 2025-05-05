@@ -356,7 +356,7 @@ class NeuronClassifier:
             self.X_train,
             self.y_train,
             scoring="accuracy",
-            cv=5,
+            cv=3,
             n_permutations=n_permutations,
             random_state=self.random_state,
         )
@@ -713,7 +713,7 @@ class NeuronClassifier:
         self.train_comparison_classifiers()
 
         logger.info("Performing cross-validation...")
-        self.cross_validate_svm(kernel="linear", n_splits=5)
+        self.cross_validate_svm(kernel="linear", n_splits=3)
 
         logger.info("Performing permutation test...")
         self.perform_permutation_test(n_permutations=100)  # Use a smaller number for speed

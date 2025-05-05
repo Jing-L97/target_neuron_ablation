@@ -1,4 +1,5 @@
 import logging
+import os
 import typing as t
 
 import matplotlib.pyplot as plt
@@ -9,6 +10,7 @@ from transformers import AutoTokenizer
 
 from neuron_analyzer.load_util import load_unigram
 
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # Only show errors, not warnings
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -362,9 +364,9 @@ class UnigramAnalyzer:
         self.model_name = model_name
         self.device = device
         if unigram_distrib is None:
-            self.unigram_distrib, self.unigram_count = unigram_distrib, unigram_count
-        else:
             self.unigram_distrib, self.unigram_count = load_unigram(self.model_name, self.device)
+        else:
+            self.unigram_distrib, self.unigram_count = unigram_distrib, unigram_count
 
     def get_unigram_freq(self, word: str) -> list[tuple[int, int, float]]:
         """Get the unigram count and frequency for a given word."""

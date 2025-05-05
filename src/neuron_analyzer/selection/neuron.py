@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import logging
+import os
 from pathlib import Path
 
 import numpy as np
@@ -7,6 +8,7 @@ import pandas as pd
 
 from neuron_analyzer.load_util import load_tail_threshold_stat
 
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # Only show errors, not warnings
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -28,6 +30,7 @@ class NeuronSelector:
         sel_freq: str | bool = False,
         unigram_analyzer=None,
         sel_by_med: bool = False,
+        debug_row_num=20000,
     ):
         """Initialize the NeuronSelector."""
         self.feather_path = feather_path
@@ -36,6 +39,7 @@ class NeuronSelector:
         self.debug = debug
         self.sel_freq = sel_freq
         self.sel_by_med = sel_by_med
+        self.debug_row_num = debug_row_num
 
         # only load the arguments when needing longtail
         if self.sel_freq:
@@ -61,32 +65,38 @@ class NeuronSelector:
         """Filter df by frequency if required."""
         if self.feather_path.suffix == ".feather":
             final_df = pd.read_feather(self.feather_path)
+            if self.debug:
+                final_df = final_df.head(self.debug_row_num)
+                logger.info(f"Entering debugging mode. Loading first {self.debug_row_num} rows.")
         if self.feather_path.suffix == ".csv":
-            final_df = pd.read_csv(self.feather_path)
+            if self.debug:
+                final_df = pd.read_csv(self.feather_path, nrows=self.debug_row_num)
+                logger.info(f"Entering debugging mode. Loading first {self.debug_row_num} rows.")
+            else:
+                final_df = pd.read_csv(self.feather_path)
         logger.info(f"Analyzing file from {self.feather_path}")
 
-        if self.debug:
-            first_n_rows = 5000
-            final_df = final_df.head(first_n_rows)
-            logger.info(f"Entering debugging mode. Loading first {first_n_rows} rows.")
         # filter the df by stats
         if self.sel_freq:
             # get word freq
-            final_df["freq"] = final_df["str_tokens"].apply(self._extract_freq)
-            logger.info(f"{final_df.shape[0]} words before filtering")
+            final_df["freq"] = final_df["token_id"].apply(self._get_freq)
+            logger.info(f"{final_df.shape[0]} rows before filtering")
             # filter by the threshold
             prob_threshold = load_tail_threshold_stat(self.threshold_path)
             if "longtail" in self.sel_freq:
                 final_df = final_df[final_df["freq"] < prob_threshold]
             else:
                 final_df = final_df[final_df["freq"] > prob_threshold]
-            logger.info(f"{final_df.shape[0]} words after filtering.")
+            logger.info(f"{final_df.shape[0]} rows after filtering.")
         return final_df
 
-    def _extract_freq(self, word):
+    def _get_freq(self, token_id: int) -> float:
         """Extract frequency from the unifram analyzer."""
-        stat = self.unigram_analyzer.get_unigram_freq(word)
-        return stat[0][2]
+        try:
+            stat = self.unigram_analyzer._extract_freq(token_id)
+            return stat[1]
+        except:
+            return 0.0
 
     def _prepare_dataframe(self, final_df: pd.DataFrame) -> pd.DataFrame | None:
         """Common preprocessing for the DataFrame."""

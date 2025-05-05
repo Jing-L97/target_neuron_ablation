@@ -28,36 +28,42 @@ class NeuronFeatureExtractor:
     def __init__(
         self,
         args: t.Any,
-        abl_path: Path,
+        feather_path: Path,
+        entropy_path: Path,
         step_path: Path,
         out_dir: Path,
         step_num: str,
         device: str,
+        unigram_analyzer,
     ):
         """Initialize the NeuronFeatureExtractor."""
         self.args = args
-        self.abl_path = abl_path
+        self.feather_path = feather_path
+        self.entropy_path = entropy_path
         self.step_path = step_path
         self.device = device
+        self.unigram_analyzer = unigram_analyzer
         self.step_num = str(step_num)
         # configure out path dir
-        self.out_dir = out_dir / self.step_num / str(self.args.data_range_end)
+        self.out_dir = out_dir
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
     def load_delta_loss(self) -> pd.DataFrame:
         """Load and filter feather data."""
         out_path = self.out_dir / f"k{self.args.k}.feather"
         if out_path.is_file() and self.args.resume:
+            logger.info(f"Resuming file from {out_path}")
             self.loss_data = pd.read_feather(out_path)
             return self.loss_data
 
-        feather_path = self.abl_path / self.step_num / str(self.args.data_range_end) / f"k{self.args.k}.feather"
+        feather_path = self.feather_path / self.step_num / str(self.args.data_range_end) / f"k{self.args.k}.feather"
         if feather_path.is_file():
             group_analyzer = NeuronGroupAnalyzer(
                 args=self.args,
                 feather_path=feather_path,
+                unigram_analyzer=self.unigram_analyzer,
                 step_path=self.step_path,
-                abl_path=self.abl_path,
+                abl_path=self.entropy_path,
                 device=self.device,
             )
             self.loss_data = group_analyzer.load_activation_df()
@@ -68,26 +74,37 @@ class NeuronFeatureExtractor:
 
     def load_fea(self) -> pd.DataFrame:
         """Load and filter feather data."""
-        out_path = self.out_dir / "entropy_df.csv"
+        out_path = self.out_dir / "entropy_df.feather"
         if out_path.is_file() and self.args.resume:
-            self.fea_data = pd.read_csv(out_path)
-            return self.fea_data
+            logger.info(f"Resuming file from {out_path}")
+            fea_data = pd.read_feather(out_path)
+            return fea_data
 
-        entropy_path = self.abl_path / self.step_num / str(self.args.data_range_end) / "entropy_df.csv"
+        entropy_path = self.entropy_path / self.step_num / str(self.args.data_range_end) / "entropy_df.csv"
         if entropy_path.is_file():
+            logger.info(f"Loading file from {entropy_path}")
             # filter file
-            df_filter = NeuronSelector(feather_path=entropy_path, sel_freq=self.args.sel_freq, device="cpu")
-            self.activation_data = df_filter.filter_df_by_freq()
-            # load file by freq
-            self.fea_data = self._filter_token(groupby_col="str_tokens", sort_by_col="freq")
-        # Save the selected intermediate data
-        self.activation_data.reset_index(drop=True).to_csv(out_path)
-        return self.fea_data
+            df_filter = NeuronSelector(
+                feather_path=entropy_path,
+                sel_freq=self.args.sel_freq,
+                unigram_analyzer=self.unigram_analyzer,
+                debug=self.args.debug,
+                threshold_path=self.entropy_path / self.args.stat_file,
+            )
+            fea_data = df_filter.filter_df_by_freq()
 
-    def _filter_token(self, groupby_col: str, sort_by_col: str) -> pd.DataFrame:
+            # load file by freq
+            fea_data = self._filter_token(fea_data, groupby_col="str_tokens", sort_by_col="freq")
+            # Save the selected intermediate data
+            fea_data.reset_index(drop=True).to_feather(out_path)
+        else:
+            logger.info(f"No file from {entropy_path}")
+        return fea_data
+
+    def _filter_token(self, fea_data, groupby_col: str, sort_by_col: str) -> pd.DataFrame:
         """Filter top-n tokens together with the rows."""
-        first_n_groups = self.df[groupby_col].drop_duplicates().head(self.args.fea_dim)
-        filtered_df = self.df[self.df[groupby_col].isin(first_n_groups)]
+        first_n_groups = fea_data[groupby_col].drop_duplicates().head(self.args.fea_dim)
+        filtered_df = fea_data[fea_data[groupby_col].isin(first_n_groups)]
         if "longtail" in self.args.sel_freq:
             return (
                 filtered_df.sort_values(by=sort_by_col, ascending=True).groupby(groupby_col, group_keys=False).head(1)
@@ -111,7 +128,7 @@ class NeuronFeatureExtractor:
                 neuron_features[neuron_idx] = fea_data[col_header].to_list()
                 # Get all delta loss rows for this neuron
                 neuron_data = loss_data[loss_data["component_name"] == neuron_idx]
-                delta_losses[neuron_idx] = float(neuron_data["delta_loss_post_ablation"].values.mean())
+                delta_losses[neuron_idx] = float(neuron_data["delta_loss_post_ablation"].mean())
         return neuron_features, delta_losses
 
     def _get_column_name(self, columns, idx):
@@ -135,20 +152,23 @@ class NeuronFeatureExtractor:
             return JsonProcessor.load_json(out_path)
 
         # Load data if not already loaded
-        loss_data = self.load_delta_loss()
         fea_data = self.load_fea()
+        logger.info("Finish loading fea data.")
+        loss_data = self.load_delta_loss()
+        logger.info("Finish loading loss data.")
         # Calculate features and losses if not provided
         neuron_features, delta_losses = self.build_vector(loss_data, fea_data)
         # Prepare the results dictionary
         results = {
             "step_num": self.step_num,
-            "neuron_features": {k: v.tolist() for k, v in neuron_features.items()},
+            "neuron_features": neuron_features,
             "delta_losses": delta_losses,
             "metadata": {
                 "feature_count": len(next(iter(neuron_features.values()))),
                 "neuron_count": len(neuron_features),
             },
         }
+        # TDOO: add additional info: context, original_loss, ablation_loss,
         JsonProcessor.save_json(results, out_path)
         logger.info(f"Save file to {out_path}")
         return results

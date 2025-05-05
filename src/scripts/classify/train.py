@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,8 @@ from neuron_analyzer.classify.preprocess import (
 from neuron_analyzer.load_util import StepPathProcessor, load_unigram
 from neuron_analyzer.selection.neuron import generate_random_indices
 
+os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # Only show errors, not warnings
+
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 logger = logging.getLogger(__name__)
@@ -31,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train classifier to seperate different neurons.")
 
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-410m-deduped", help="Target model name")
+    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
@@ -66,13 +69,13 @@ def parse_args() -> argparse.Namespace:
         "--sel_freq",
         type=str,
         choices=["longtail_50", "common"],
-        default="common",
+        default="longtail_50",
     )
     parser.add_argument("--load_stat", type=bool, default=True, help="Whether to load from existing index")
     parser.add_argument("--exclude_random", type=bool, default=True, help="Include all neuron indices if set True")
     parser.add_argument("--run_baseline", action="store_true", help="Whether to run baseline models")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
-    parser.add_argument("--fea_dim", type=int, default=50, help="Number of tokens as the activation feature")
+    parser.add_argument("--fea_dim", type=int, default=5, help="Number of tokens as the activation feature")
     parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
@@ -87,18 +90,20 @@ def parse_args() -> argparse.Namespace:
 #######################################################################################################
 # Functions applied in the main scripts
 #######################################################################################################
+# TODO: configure different saving paths
 
 
 def configure_path(args):
     """Configure save path based on the setting."""
     save_heuristic = f"{args.heuristic}_med" if args.sel_by_med else args.heuristic
-    data_path = settings.PATH.classify_dir / "data" / args.vector / args.model / save_heuristic
-    model_path = settings.PATH.classify_dir / "model" / args.vector / args.model / save_heuristic
-    eval_path = settings.PATH.classify_dir / "eval" / args.vector / args.model / save_heuristic
-    abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
+    data_path = settings.PATH.classify_dir / "data" / args.sel_freq / args.model / save_heuristic
+    model_path = settings.PATH.classify_dir / "model" / args.sel_freq / args.model / save_heuristic
+    eval_path = settings.PATH.classify_dir / "eval" / args.sel_freq / args.model / save_heuristic
+    feather_path = settings.PATH.result_dir / "ablations" / "mean" / args.model
+    entropy_path = settings.PATH.result_dir / "ablations" / "longtail_50" / args.model
     model_path.mkdir(parents=True, exist_ok=True)
     eval_path.mkdir(parents=True, exist_ok=True)
-    return data_path, model_path, eval_path, abl_path
+    return data_path, model_path, eval_path, feather_path, entropy_path
 
 
 class Trainer:
@@ -107,7 +112,8 @@ class Trainer:
     def __init__(
         self,
         args: Any,
-        abl_path: Path,
+        feather_path: Path,
+        entropy_path: Path,
         data_path: Path,
         model_path: Path,
         eval_path: Path,
@@ -119,7 +125,8 @@ class Trainer:
         self.model_path = model_path
         self.eval_path = eval_path
         self.step_dirs = step_dirs
-        self.abl_path = abl_path
+        self.feather_path = feather_path
+        self.entropy_path = entropy_path
 
     def run_pipeline(self) -> dict[str, Any]:
         """Extract optimal threshold across multiple steps and run classification."""
@@ -129,11 +136,14 @@ class Trainer:
         for step in self.step_dirs:
             # try:
             # Load data
+            logger.info("----------Stage 1: Loading training data---------------------------")
             X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
             # configure the save path
             step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
             # Train classifier
+            logger.info("----------Stage 2: Training data for hyperplanes-------------------")
             _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
+            logger.info(f"############################################ Finished step {step[1]}")
 
         # except Exception as e:
         # logger.info(f"Error processing step {step[1]}: {e!s}")
@@ -142,32 +152,45 @@ class Trainer:
         self, step: tuple[str, str], threshold: float | None, classification_condition: str
     ) -> tuple[np.ndarray, np.ndarray, list[str]]:
         """Load and prepare data for classification from a single step."""
-        # Filter features with unequal length
+        # intialize the unigram analyzer
         unigram_distrib, unigram_count = load_unigram(model_name=self.args.model, device="cpu")
         # intialize the unigram analyzer
-        unigram_analyzer = UnigramAnalyzer(device="cpu", unigram_distrib=unigram_distrib, unigram_count=unigram_count)
+        unigram_analyzer = UnigramAnalyzer(
+            device="cpu", model_name=self.args.model, unigram_distrib=unigram_distrib, unigram_count=unigram_count
+        )
         # initilize the selector class
         data_path = self.data_path / str(step[1]) / str(self.args.data_range_end) / "features.json"
-        if not data_path.is_file():
+
+        if data_path.is_file() and self.args.resume:
+            logger.info(f"--Step 1: Resuming feature data from {data_path}")
+
+        # rebuild the features if not setting resume
+        else:
+            logger.info("--Step 1:Building feature data from scratch.")
             feature_extractor = NeuronFeatureExtractor(
                 args=self.args,
-                abl_path=self.abl_path,
+                feather_path=self.feather_path,
+                entropy_path=self.entropy_path,
                 step_path=step[0],
+                unigram_analyzer=unigram_analyzer,
                 out_dir=self.data_path / str(step[1]) / str(self.args.data_range_end),
                 step_num=step[1],
                 device="cpu",
             )
             feature_extractor.run_pipeline()
 
+        # load features fromt ehsave path
         feature_loader = FeatureLoader(data_path=data_path)
         data, fea = feature_loader.run_pipeline()
         logger.info("Features have been loaded.")
 
         # Label data
         if self.args.label_type == "threshold":
+            logger.info("--Step 2: Labeling data from the selected threshold")
             threshold_labeler = ThresholdLabeler(threshold=threshold, data=data)
             labels, neuron_indices = threshold_labeler.run_pipeline()
         elif self.args.label_type == "fixed":
+            logger.info("--Step 2: Labeling data from the prelabeled data")
             fixed_labeler = FixedLabeler(
                 data=data,
                 run_baseline=self.args.run_baseline,
@@ -178,6 +201,7 @@ class Trainer:
             raise ValueError(f"Unsupported label_type: {self.args.label_type}")
 
         # Integrate features and labels
+        logger.info("--Step 3: Building dataset for training")
         filename = (
             f"data_{classification_condition}_baseline.json"
             if self.args.run_baseline
@@ -257,7 +281,8 @@ class Trainer:
                 data_path=self.data_path / "global_threshold_results.json",
                 threshold_mode=f"{self.args.threshold_mode}_recommendation",
             )
-        return None
+        # return None
+        return 0.0
 
     def _get_classification_condition(self) -> str:
         """Get the notation string for different classification conditions."""
@@ -298,11 +323,11 @@ def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
     # loop over different steps
-    data_path, model_path, eval_path, abl_path = configure_path(args)
+    data_path, model_path, eval_path, feather_path, entropy_path = configure_path(args)
     # initilize with the step dir
-    step_processor = StepPathProcessor(abl_path)
+    step_processor = StepPathProcessor(entropy_path)
     step_dirs = step_processor.sort_paths()
-    trainer = Trainer(args, abl_path, data_path, model_path, eval_path, step_dirs)
+    trainer = Trainer(args, feather_path, entropy_path, data_path, model_path, eval_path, step_dirs)
     trainer.run_pipeline()
 
 

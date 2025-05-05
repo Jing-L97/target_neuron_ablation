@@ -93,15 +93,14 @@ def main() -> None:
             feather_path = abl_path / str(step) / str(args.data_range_end) / f"k{args.k}.feather"
             if feather_path.is_file():
                 # initilize the class
+                # TODO: add unigram analyzer for intilization
                 neuron_selector = NeuronSelector(
                     feather_path=feather_path,
                     debug=args.debug,
                     top_n=args.top_n,
                     step=step.name,
-                    tokenizer_name=args.tokenizer_name,
                     threshold_path=abl_path / args.stat_file,
                     sel_freq=args.sel_freq,
-                    device=device,
                     sel_by_med=args.sel_by_med,
                 )
                 frame = neuron_selector.run_pipeline(heuristic=args.heuristic, effect=args.effect)

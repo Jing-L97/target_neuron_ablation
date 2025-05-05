@@ -32,6 +32,7 @@ class NeuronGroupAnalyzer:
         self,
         args,
         device: str,
+        unigram_analyzer=None,
         feather_path: Path = None,
         step_path: Path = None,
         abl_path: Path = None,
@@ -39,6 +40,7 @@ class NeuronGroupAnalyzer:
     ):
         self.args = args
         self.device = device
+        self.unigram_analyzer = unigram_analyzer
         self.feather_path = feather_path
         self.step = step_path
         self.abl_path = abl_path
@@ -79,7 +81,7 @@ class NeuronGroupAnalyzer:
             debug=self.args.debug,
             top_n=self.args.top_n,
             step=self.step.name,
-            tokenizer_name=self.args.tokenizer_name,
+            unigram_analyzer=self.unigram_analyzer,
             threshold_path=Path(self.abl_path) / self.args.stat_file,
             sel_by_med=self.args.sel_by_med,
             sel_freq=self.args.sel_freq,
