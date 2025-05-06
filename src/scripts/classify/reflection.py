@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.geometry_util import NeuronGroupAnalyzer, get_group_name
@@ -95,9 +96,18 @@ def configure_path(args):
 class ReflectionAnalyzer:
     """Class for running the entire neuron classification pipeline."""
 
-    def __init__(self, args: Any, data_path: Path, model_path: Path, eval_path: Path, step_dirs: list[tuple[str, str]]):
+    def __init__(
+        self,
+        args: Any,
+        device: str,
+        data_path: Path,
+        model_path: Path,
+        eval_path: Path,
+        step_dirs: list[tuple[str, str]],
+    ):
         """Initialize the pipeline with all necessary parameters."""
         self.args = args
+        self.device = device
         self.data_path = data_path
         self.model_path = model_path
         self.eval_path = eval_path
@@ -116,7 +126,11 @@ class ReflectionAnalyzer:
                 step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
                 # intialize the analyzer
                 _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
-                SVMHyperplaneReflector(svm_checkpoint_path=step_model_path, model_name=self.args.model_name)
+                reflector = SVMHyperplaneReflector(
+                    svm_checkpoint_path=step_model_path / "SVM.blob", model_name=self.args.model_name
+                )
+                results = reflector.run_pipeline()
+
             except Exception as e:
                 logger.info(f"Error processing step {step[1]}: {e!s}")
 
@@ -263,6 +277,7 @@ class ReflectionAnalyzer:
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
     # loop over different steps
     data_path, model_path, eval_path = configure_path(args)
     # initilize with the step dir

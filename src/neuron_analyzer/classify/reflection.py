@@ -20,27 +20,16 @@ class SVMHyperplaneReflector:
     def __init__(
         self,
         svm_checkpoint_path: str | Path,
+        device: str,
         layer_name: str | None = None,
         layer_num: int = -1,
         model_name: str = "pythia-410m",
         use_pca: bool = False,
         n_components: int = 10,
     ):
-        """Initialize the reflector with model and configuration.
-
-        Args:
-            model: The neural network model to analyze
-            svm_checkpoint_path: Path to the SVM model file
-            layer_name: Full name of the layer (overrides layer_num if provided)
-            layer_num: Layer number (used if layer_name not provided)
-            model_name: Name of the model architecture
-            use_pca: Whether to use PCA for dimensionality reduction
-            n_components: Number of PCA components if use_pca=True
-
-        """
-        self.model = model
-        self.device = next(model.parameters()).device
-        self.svm_checkpoint_path = Path(svm_checkpoint_path)
+        """Initialize the reflector with model and configuration."""
+        self.device = device
+        self.svm_checkpoint_path = svm_checkpoint_path
         self.use_pca = use_pca
         self.n_components = n_components
         self.model_name = model_name
