@@ -21,6 +21,8 @@ class SVMHyperplaneReflector:
         self,
         svm_checkpoint_path: str | Path,
         device: str,
+        model,
+        tokenizer,
         layer_name: str | None = None,
         layer_num: int = -1,
         model_name: str = "pythia-410m",
@@ -29,6 +31,8 @@ class SVMHyperplaneReflector:
     ):
         """Initialize the reflector with model and configuration."""
         self.device = device
+        self.model = model
+        self.tokenizer = tokenizer
         self.svm_checkpoint_path = svm_checkpoint_path
         self.use_pca = use_pca
         self.n_components = n_components
@@ -172,6 +176,7 @@ class SVMHyperplaneReflector:
             Classification string: "special" if on positive side of hyperplane, "common" otherwise
 
         """
+        # check whether the given neuron has the label
         decision_value = np.dot(activation, self.normal_vector) + self.intercept
         return "special" if decision_value > 0 else "common"
 
@@ -244,141 +249,48 @@ class SVMHyperplaneReflector:
 
         logger.info("Reflector cleaned up")
 
-    def compute_token_loss(
-        self,
-        input_ids: torch.Tensor,
-        target_ids: list[int],
-        neurons: list[int],
-        activations: np.ndarray,
-        original_losses: dict[int, float] = None,
-    ) -> dict[str, t.Any]:
-        """Compute token loss after reflection.
-
-        Args:
-            input_ids: Input token IDs
-            target_ids: List of target token IDs to compute loss for
-            neurons: List of neuron indices to reflect
-            activations: Activation vectors for the neurons
-            original_losses: Dictionary of original losses per target token (if already computed)
-
-        Returns:
-            Dictionary of loss results
-
-        """
-        results = {
-            "neurons": neurons,
-            "target_ids": target_ids,
-            "original_loss": [],
-            "reflected_loss": [],
-            "loss_changes": [],
-            "neuron_types": [],
-        }
-
-        # Classify neurons
-        for i, neuron_idx in enumerate(neurons):
-            neuron_type = self.classify_neuron(activations[i])
-            results["neuron_types"].append(neuron_type)
-
-        # If original losses not provided, compute them
-        if original_losses is None:
-            self.disable_reflection()
-            with torch.no_grad():
-                outputs = self.model(input_ids)
-                # Get logits for the last token prediction
-                if hasattr(outputs, "logits"):
-                    original_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
-                else:
-                    original_logits = outputs[:, -1, :]  # [batch, vocab_size]
-
-                # Calculate loss using model's loss function if available
-                # Otherwise use CrossEntropyLoss
-                original_losses = {}
-                for target_id in target_ids:
-                    # Create target tensor [batch_size]
-                    target_tensor = torch.tensor([target_id] * input_ids.size(0), device=self.device)
-
-                    # Calculate loss
-                    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
-                    losses = loss_fn(original_logits, target_tensor)
-
-                    # Average across batch dimension if needed
-                    original_losses[target_id] = losses.mean().item()
-
-        # Process each neuron
-        for i, neuron_idx in enumerate(tqdm(neurons, desc="Processing neurons")):
-            # Store the original loss
-            results["original_loss"].append(original_losses)
-
-            # Set up reflection for this neuron
-            self.setup_reflection(neuron_idx, activations[i])
-
-            # Compute reflected loss
-            self.enable_reflection()
-
-            with torch.no_grad():
-                outputs = self.model(input_ids)
-                # Get logits for the last token prediction
-                if hasattr(outputs, "logits"):
-                    reflected_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
-                else:
-                    reflected_logits = outputs[:, -1, :]  # [batch, vocab_size]
-
-                # Calculate loss for each target token
-                reflected_losses = {}
-                for target_id in target_ids:
-                    # Create target tensor [batch_size]
-                    target_tensor = torch.tensor([target_id] * input_ids.size(0), device=self.device)
-
-                    # Calculate loss
-                    loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
-                    losses = loss_fn(reflected_logits, target_tensor)
-
-                    # Average across batch dimension if needed
-                    reflected_losses[target_id] = losses.mean().item()
-
-            # Compute loss changes
-            loss_changes = {t_id: reflected_losses[t_id] - original_losses[t_id] for t_id in target_ids}
-
-            # Store results
-            results["reflected_loss"].append(reflected_losses)
-            results["loss_changes"].append(loss_changes)
-
-            # Disable reflection for next neuron
-            self.disable_reflection()
-
-        return results
+    def tokenize_input(self, input_string: str) -> list[int]:
+        """Tokenize inputs from the given tokenizer."""
+        return self.tokenizer.encode(input_string, add_special_tokens=False)
 
     def run_reflection_analysis(
         self,
-        input_dataset: list[torch.Tensor],
-        target_ids: list[int],
-        neurons: list[int],
-        activations: np.ndarray,
-        original_losses_by_context: list[dict[int, float]] = None,
+        tokenized_input: list[int],  # Token IDs for the input string A
+        target_token_ids: list[int],  # Token IDs of the target string B
+        neurons: list[int],  # List of neuron indices to reflect
+        activations: np.ndarray,  # Activation vectors for the neurons
+        original_loss: float | None = None,  # Optional pre-computed loss
     ) -> dict[str, t.Any]:
-        """Run comprehensive reflection analysis on a dataset.
-
-        Args:
-            input_dataset: List of input tensors
-            target_ids: Target token IDs to analyze loss changes for
-            neurons: List of neuron indices to reflect
-            activations: Activation vectors for the neurons
-            original_losses_by_context: Pre-computed original losses for each context and target token
-
-        Returns:
-            Dictionary containing analysis results
-
-        """
+        """Run comprehensive reflection analysis on a tokenized input."""
         if len(neurons) != len(activations):
             raise ValueError(f"Number of neurons ({len(neurons)}) must match activations ({len(activations)})")
+
+        # Convert tokenized input to tensor
+        input_ids = torch.tensor([tokenized_input], device=self.device)
+
+        # Find the last occurrence of target_token_ids in input_ids
+        target_len = len(target_token_ids)
+
+        # Search from the end to find the last occurrence
+        last_pos = -1
+        for i in range(len(tokenized_input) - target_len + 1):
+            if tokenized_input[i : i + target_len] == target_token_ids:
+                last_pos = i
+
+        if last_pos == -1:
+            raise ValueError(f"Target token sequence {target_token_ids} not found in input: {tokenized_input}")
+
+        # Store the position of the target tokens (start and end position)
+        start_pos = last_pos
+        end_pos = last_pos + target_len
 
         # Prepare results structure
         results = {
             "neurons": neurons,
-            "target_ids": target_ids,
-            "original_loss": [[] for _ in range(len(neurons))],
-            "reflected_loss": [[] for _ in range(len(neurons))],
-            "loss_changes": [[] for _ in range(len(neurons))],
+            "target_token_ids": target_token_ids,
+            "original_loss": [],
+            "reflected_loss": [],
+            "loss_changes": [],
             "original_activations": activations.tolist(),
             "reflected_activations": [],
             "distances_to_hyperplane": [],
@@ -388,8 +300,8 @@ class SVMHyperplaneReflector:
         # Calculate and store reflected activations and neuron types
         for i, act in enumerate(activations):
             # Calculate distance to hyperplane
-            dist = np.dot(act - self.hyperplane_point, self.normal_unit)
-            results["distances_to_hyperplane"].append(float(dist))
+            dist = float(np.dot(act - self.hyperplane_point, self.normal_unit))
+            results["distances_to_hyperplane"].append(dist)
 
             # Reflect activation and store
             reflected = self.reflect_across_hyperplane(act)
@@ -399,98 +311,83 @@ class SVMHyperplaneReflector:
             neuron_type = self.classify_neuron(act)
             results["neuron_types"].append(neuron_type)
 
-        # Process each context input
-        for context_idx, input_ids in enumerate(tqdm(input_dataset, desc="Processing contexts")):
-            # Move input to correct device
-            if hasattr(input_ids, "to"):
-                input_ids = input_ids.to(self.device)
+        # Compute or use provided original loss
+        if original_loss is None:
+            # Compute original loss
+            self.disable_reflection()
 
-            # Get or compute original losses for all target tokens
-            if original_losses_by_context is not None and context_idx < len(original_losses_by_context):
-                # Use pre-computed losses
-                original_losses_by_target = original_losses_by_context[context_idx]
-            else:
-                # Compute original losses
-                self.disable_reflection()
-                original_losses_by_target = {}
+            with torch.no_grad():
+                outputs = self.model(input_ids)
 
-                with torch.no_grad():
-                    outputs = self.model(input_ids)
-                    # Get logits for the last token prediction
+                # For each position in the target sequence, we need to predict the next token
+                total_loss = 0.0
+                for pos in range(start_pos, end_pos - 1):
+                    # Get logits for current position (predicting the next token)
+
+                    logits = outputs.logits[0, pos, :] if hasattr(outputs, "logits") else outputs[0, pos, :]
+                    # Target is the next token
+                    target = input_ids[0, pos + 1]
+                    # Calculate loss
+                    loss_fn = torch.nn.CrossEntropyLoss()
+                    loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
+                    total_loss += loss.item()
+
+                # Average loss across target token positions
+                num_positions = end_pos - start_pos - 1
+                original_loss = total_loss / max(1, num_positions) if num_positions > 0 else 0.0
+
+        # Process each neuron
+        for neuron_idx, neuron in enumerate(tqdm(neurons, desc="Processing neurons")):
+            # Store original loss
+            results["original_loss"].append(original_loss)
+
+            # Get corresponding activation
+            activation = activations[neuron_idx]
+
+            # Set up reflection for this neuron
+            self.setup_reflection(neuron, activation)
+
+            # Compute reflected loss
+            self.enable_reflection()
+
+            with torch.no_grad():
+                outputs = self.model(input_ids)
+
+                # For each position in the target sequence, we need to predict the next token
+                total_loss = 0.0
+                for pos in range(start_pos, end_pos - 1):
+                    # Get logits for current position (predicting the next token)
                     if hasattr(outputs, "logits"):
-                        original_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
+                        logits = outputs.logits[0, pos, :]  # [vocab_size]
                     else:
-                        original_logits = outputs[:, -1, :]  # [batch, vocab_size]
+                        logits = outputs[0, pos, :]  # [vocab_size]
 
-                    # Calculate loss for each target token
-                    for target_id in target_ids:
-                        # Create target tensor [batch_size]
-                        target_tensor = torch.tensor([target_id] * input_ids.size(0), device=self.device)
+                    # Target is the next token
+                    target = input_ids[0, pos + 1]
 
-                        # Calculate loss
-                        loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
-                        losses = loss_fn(original_logits, target_tensor)
+                    # Calculate loss
+                    loss_fn = torch.nn.CrossEntropyLoss()
+                    loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
+                    total_loss += loss.item()
 
-                        # Average across batch dimension if needed
-                        original_losses_by_target[target_id] = losses.mean().item()
+                # Average loss across target token positions
+                num_positions = end_pos - start_pos - 1
+                reflected_loss = total_loss / max(1, num_positions) if num_positions > 0 else 0.0
 
-            # Process each neuron
-            for neuron_idx, neuron in enumerate(
-                tqdm(neurons, desc=f"Processing neurons for context {context_idx}", leave=False)
-            ):
-                # Store original loss
-                results["original_loss"][neuron_idx].append(original_losses_by_target)
+            # Compute loss change
+            loss_change = reflected_loss - original_loss
 
-                # Get corresponding activation
-                activation = activations[neuron_idx]
+            # Store results
+            results["reflected_loss"].append(reflected_loss)
+            results["loss_changes"].append(loss_change)
 
-                # Set up reflection for this neuron
-                self.setup_reflection(neuron, activation)
-
-                # Compute reflected loss
-                self.enable_reflection()
-
-                with torch.no_grad():
-                    outputs = self.model(input_ids)
-                    # Get logits for the last token prediction
-                    if hasattr(outputs, "logits"):
-                        reflected_logits = outputs.logits[:, -1, :]  # [batch, vocab_size]
-                    else:
-                        reflected_logits = outputs[:, -1, :]  # [batch, vocab_size]
-
-                    # Calculate reflected loss for each target token
-                    reflected_losses = {}
-                    for target_id in target_ids:
-                        # Create target tensor [batch_size]
-                        target_tensor = torch.tensor([target_id] * input_ids.size(0), device=self.device)
-
-                        # Calculate loss
-                        loss_fn = torch.nn.CrossEntropyLoss(reduction="none")
-                        losses = loss_fn(reflected_logits, target_tensor)
-
-                        # Average across batch dimension if needed
-                        reflected_losses[target_id] = losses.mean().item()
-
-                # Compute loss changes
-                loss_changes = {t_id: reflected_losses[t_id] - original_losses_by_target[t_id] for t_id in target_ids}
-
-                # Store results
-                results["reflected_loss"][neuron_idx].append(reflected_losses)
-                results["loss_changes"][neuron_idx].append(loss_changes)
-
-                # Disable reflection for the next neuron
-                self.disable_reflection()
+            # Disable reflection for the next neuron
+            self.disable_reflection()
 
         return results
 
     def save_results(self, results: dict[str, t.Any], output_path: str | Path) -> None:
-        """Save analysis results to a file.
-
-        Args:
-            results: Analysis results dictionary
-            output_path: Path to save results to
-
-        """
+        """Save analysis results to a file."""
         output_path = Path(output_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -499,94 +396,21 @@ class SVMHyperplaneReflector:
 
         logger.info(f"Analysis results saved to {output_path}")
 
-    def load_results(self, input_path: str | Path) -> dict[str, t.Any]:
-        """Load analysis results from a file.
+    def run_pipeline_single(
+        self, input_string: str, target_string: str, neurons: list, activations: np.ndarray, original_loss=None
+    ):
+        """Run the reflection analysis pipeline."""
+        # tokenize the string
+        tokenized_input = self.tokenize_input(input_string)
+        target_token_ids = self.tokenize_input(target_string)
 
-        Args:
-            input_path: Path to load results from
+        # run analyses
+        return self.run_reflection_analysis(
+            tokenized_input=tokenized_input,
+            target_token_ids=target_token_ids,
+            neurons=neurons,
+            activations=activations,
+            original_loss=original_loss,
+        )
 
-        Returns:
-            Dictionary of analysis results
-
-        """
-        input_path = Path(input_path)
-        if not input_path.exists():
-            raise FileNotFoundError(f"Results file not found: {input_path}")
-
-        with open(input_path, "rb") as f:
-            results = pickle.load(f)
-
-        logger.info(f"Analysis results loaded from {input_path}")
-        return results
-
-    def analyze_impact(self, results: dict[str, t.Any], threshold: float = 0.1) -> dict[str, t.Any]:
-        """Analyze functional impact of reflection across hyperplane.
-
-        Args:
-            results: Analysis results dictionary
-            threshold: Threshold for significant loss change
-
-        Returns:
-            Dictionary with impact metrics
-
-        """
-        impact_metrics = {
-            "significant_changes": 0,
-            "consistent_with_hypothesis": 0,
-            "average_loss_delta": 0.0,
-            "max_loss_delta": 0.0,
-            "neuron_level_impacts": [],
-        }
-
-        total_samples = 0
-        total_delta = 0.0
-        max_delta = 0.0
-
-        for neuron_idx, loss_changes in enumerate(results["loss_changes"]):
-            neuron_type = results["neuron_types"][neuron_idx]
-            neuron_impact = {
-                "neuron_idx": results["neurons"][neuron_idx],
-                "neuron_type": neuron_type,
-                "distance_to_hyperplane": results["distances_to_hyperplane"][neuron_idx],
-                "avg_loss_delta": 0.0,
-                "significant_changes": 0,
-                "consistent_changes": 0,
-            }
-
-            neuron_deltas = []
-            for context_changes in loss_changes:
-                for token_id, delta in context_changes.items():
-                    total_samples += 1
-                    neuron_deltas.append(delta)
-                    total_delta += abs(delta)
-                    max_delta = max(max_delta, abs(delta))
-
-                    # Count significant changes
-                    if abs(delta) > threshold:
-                        impact_metrics["significant_changes"] += 1
-                        neuron_impact["significant_changes"] += 1
-
-                        # Check consistency with hypothesis
-                        # For loss, negative delta means better (lower loss)
-                        # "special" neurons should decrease loss for target tokens
-                        expected_direction = -1 if neuron_type == "special" else 1
-                        if (delta * expected_direction) < 0:  # Reversed compared to probability
-                            impact_metrics["consistent_with_hypothesis"] += 1
-                            neuron_impact["consistent_changes"] += 1
-
-            neuron_impact["avg_loss_delta"] = np.mean(np.abs(neuron_deltas))
-            impact_metrics["neuron_level_impacts"].append(neuron_impact)
-
-        if total_samples > 0:
-            impact_metrics["average_loss_delta"] = total_delta / total_samples
-        impact_metrics["max_loss_delta"] = max_delta
-
-        # Calculate consistency percentage
-        if impact_metrics["significant_changes"] > 0:
-            impact_metrics["consistency_percentage"] = (
-                impact_metrics["consistent_with_hypothesis"] / impact_metrics["significant_changes"] * 100
-            )
-        else:
-            impact_metrics["consistency_percentage"] = 0.0
-
-        return impact_metrics
+    def run_pipeline_

@@ -6,7 +6,7 @@
 #SBATCH --mem=80G
 #SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/group_common_%a.log
-#SBATCH --array=0-11
+#SBATCH --array=0-11%3
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 SEL_FREQ="common"
