@@ -7,6 +7,8 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
+from neuron_analyzer.load_util import JsonProcessor
+
 logger = logging.getLogger(__name__)
 
 
@@ -23,6 +25,7 @@ class SVMHyperplaneReflector:
         device: str,
         model,
         tokenizer,
+        step_num: int,
         layer_name: str | None = None,
         layer_num: int = -1,
         model_name: str = "pythia-410m",
@@ -253,6 +256,28 @@ class SVMHyperplaneReflector:
         """Tokenize inputs from the given tokenizer."""
         return self.tokenizer.encode(input_string, add_special_tokens=False)
 
+    def compute_loss(self, input_ids, start_pos, end_pos) -> float:
+        """Compute the loss value of the target token."""
+        with torch.no_grad():
+            outputs = self.model(input_ids)
+
+            # For each position in the target sequence, we need to predict the next token
+            total_loss = 0.0
+            for pos in range(start_pos, end_pos - 1):
+                # Get logits for current position (predicting the next token)
+                logits = outputs.logits[0, pos, :] if hasattr(outputs, "logits") else outputs[0, pos, :]
+                # Target is the next token
+                target = input_ids[0, pos + 1]
+                # Calculate loss
+                loss_fn = torch.nn.CrossEntropyLoss()
+                loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
+                total_loss += loss.item()
+            # Average loss across target token positions
+            num_positions = end_pos - start_pos - 1
+            original_loss = total_loss / max(1, num_positions) if num_positions > 0 else 0.0
+
+        return original_loss
+
     def run_reflection_analysis(
         self,
         tokenized_input: list[int],  # Token IDs for the input string A
@@ -315,26 +340,7 @@ class SVMHyperplaneReflector:
         if original_loss is None:
             # Compute original loss
             self.disable_reflection()
-
-            with torch.no_grad():
-                outputs = self.model(input_ids)
-
-                # For each position in the target sequence, we need to predict the next token
-                total_loss = 0.0
-                for pos in range(start_pos, end_pos - 1):
-                    # Get logits for current position (predicting the next token)
-
-                    logits = outputs.logits[0, pos, :] if hasattr(outputs, "logits") else outputs[0, pos, :]
-                    # Target is the next token
-                    target = input_ids[0, pos + 1]
-                    # Calculate loss
-                    loss_fn = torch.nn.CrossEntropyLoss()
-                    loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
-                    total_loss += loss.item()
-
-                # Average loss across target token positions
-                num_positions = end_pos - start_pos - 1
-                original_loss = total_loss / max(1, num_positions) if num_positions > 0 else 0.0
+            original_loss = self.compute_loss(input_ids, start_pos, end_pos)
 
         # Process each neuron
         for neuron_idx, neuron in enumerate(tqdm(neurons, desc="Processing neurons")):
@@ -346,33 +352,9 @@ class SVMHyperplaneReflector:
 
             # Set up reflection for this neuron
             self.setup_reflection(neuron, activation)
-
             # Compute reflected loss
             self.enable_reflection()
-
-            with torch.no_grad():
-                outputs = self.model(input_ids)
-
-                # For each position in the target sequence, we need to predict the next token
-                total_loss = 0.0
-                for pos in range(start_pos, end_pos - 1):
-                    # Get logits for current position (predicting the next token)
-                    if hasattr(outputs, "logits"):
-                        logits = outputs.logits[0, pos, :]  # [vocab_size]
-                    else:
-                        logits = outputs[0, pos, :]  # [vocab_size]
-
-                    # Target is the next token
-                    target = input_ids[0, pos + 1]
-
-                    # Calculate loss
-                    loss_fn = torch.nn.CrossEntropyLoss()
-                    loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
-                    total_loss += loss.item()
-
-                # Average loss across target token positions
-                num_positions = end_pos - start_pos - 1
-                reflected_loss = total_loss / max(1, num_positions) if num_positions > 0 else 0.0
+            reflected_loss = self.compute_loss(input_ids, start_pos, end_pos)
 
             # Compute loss change
             loss_change = reflected_loss - original_loss
@@ -386,19 +368,9 @@ class SVMHyperplaneReflector:
 
         return results
 
-    def save_results(self, results: dict[str, t.Any], output_path: str | Path) -> None:
-        """Save analysis results to a file."""
-        output_path = Path(output_path)
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-
-        with open(output_path, "wb") as f:
-            pickle.dump(results, f)
-
-        logger.info(f"Analysis results saved to {output_path}")
-
     def run_pipeline_single(
         self, input_string: str, target_string: str, neurons: list, activations: np.ndarray, original_loss=None
-    ):
+    ) -> dict:
         """Run the reflection analysis pipeline."""
         # tokenize the string
         tokenized_input = self.tokenize_input(input_string)
@@ -413,4 +385,24 @@ class SVMHyperplaneReflector:
             original_loss=original_loss,
         )
 
-    def run_pipeline_
+    def run_pipeline_multi(
+        self,
+        input_string_lst: list[str],
+        target_string_lst: list[str],
+        neurons: list[int],
+        activations: np.ndarray,
+        original_loss=None,
+    ) -> list:
+        """Run the reflection analysis pipeline."""
+        # get the results list
+        results = []
+        for i, input_string in enumerate(input_string_lst):
+            results.append(
+                self.run_pipeline_single(
+                    input_string, target_string_lst[i], neurons, activations, original_loss=original_loss
+                )
+            )
+        result_dict = {}
+        # save the results as a json
+        # TODO: change the
+        JsonProcessor.save_json
