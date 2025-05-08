@@ -5,22 +5,14 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 import torch
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.geometry_util import NeuronGroupAnalyzer, get_group_name
-from neuron_analyzer.classify.analyses import NeuronHypothesisTester
-from neuron_analyzer.classify.classifier import NeuronClassifier
-from neuron_analyzer.classify.preprocess import (
-    DataLoader,
-    FeatureLoader,
-    FixedLabeler,
-    ThresholdLabeler,
-    get_threshold,
-)
+from neuron_analyzer.analysis.geometry_util import get_group_name, get_last_layer
 from neuron_analyzer.classify.reflection import SVMHyperplaneReflector
-from neuron_analyzer.load_util import StepPathProcessor
-from neuron_analyzer.selection.neuron import generate_random_indices
+from neuron_analyzer.eval.surprisal import StepSurprisalExtractor
+from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -31,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Train classifier to seperate different neurons.")
 
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-410m-deduped", help="Target model name")
+    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
@@ -43,18 +35,11 @@ def parse_args() -> argparse.Namespace:
         "--group_size", type=str, choices=["best", "target_size"], default="best", help="different group size"
     )
     parser.add_argument(
-        "--threshold_mode",
+        "--classifier_type",
         type=str,
-        default="unified",
-        choices=["binary", "unified", "triclass"],
-        help="which optimal threshold to choose from",
-    )
-    parser.add_argument(
-        "--label_type",
-        type=str,
-        default="fixed",
-        choices=["fixed", "threshold"],
-        help="selected label type",
+        default="svm_linear",
+        choices=["svm_linear", "linear_svc"],
+        help="selected classifier type",
     )
     parser.add_argument(
         "--class_num",
@@ -112,161 +97,78 @@ class ReflectionAnalyzer:
         self.model_path = model_path
         self.eval_path = eval_path
         self.step_dirs = step_dirs
+        self.layer_num = get_last_layer(self.args.model)
 
     def run_pipeline(self) -> dict[str, Any]:
         """Extract optimal threshold across multiple steps and run classification."""
-        threshold = self._load_threshold()
-        classification_condition = self._get_classification_condition()
-
         for step in self.step_dirs:
-            try:
-                # Load data
-                X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
-                # configure the save path
-                step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
-                # intialize the analyzer
-                _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
-                reflector = SVMHyperplaneReflector(
-                    svm_checkpoint_path=step_model_path / "SVM.blob", model_name=self.args.model_name
-                )
-                results = reflector.run_pipeline()
+            # try:
+            # configure the save path
+            step_data_path, step_model_path, step_eval_path = self._configure_save_path(step)
+            # Load data
+            neurons, activation_lst, input_string_lst, target_string_lst = self._load_data(step_data_path)
+            # load model and tokenizer
+            model, tokenizer = self.load_model_tokenizer(step[1])
 
-            except Exception as e:
-                logger.info(f"Error processing step {step[1]}: {e!s}")
+            # intialize the analyzer
+            reflector = SVMHyperplaneReflector(
+                svm_checkpoint_path=step_model_path / f"{self.args.classifier_type}.joblib",
+                model_name=self.args.model,
+                device=self.device,
+                model=model,
+                tokenizer=tokenizer,
+                layer_num=self.layer_num,
+                save_path=step_eval_path / "reflection.json",
+                step_num=step[1],
+            )
 
-    def _load_data(
-        self, step: tuple[str, str], threshold: float | None, classification_condition: str
-    ) -> tuple[np.ndarray, np.ndarray, list[str]]:
+            reflector.run_pipeline_multi(
+                input_string_lst=input_string_lst,
+                target_string_lst=target_string_lst,
+                neurons=neurons,
+                activation_lst=activation_lst,
+            )
+
+        # except Exception as e:
+        # logger.info(f"Error processing step {step[1]}: {e!s}")
+
+    def _load_data(self, step_data_path: Path) -> tuple[np.ndarray, np.ndarray, list[str]]:
         """Load and prepare data for reflection test."""
-        # Filter features with unequal length
-        feature_loader = FeatureLoader(data_dir=self.data_path / str(step[1]) / str(self.args.data_range_end))
-        data, fea = feature_loader.run_pipeline()
-        logger.info("Features have been loaded.")
+        # Load neuron indices and activations
+        data = JsonProcessor.load_json(step_data_path / f"data_{self.args.top_n}.json")
+        neurons, activation_lst = data["neuron_indices"], data["X"]
+        # load input strings
+        df = pd.read_feather(step_data_path / "entropy_df.feather")
+        df = df.head(self.args.top_n)
+        return neurons, activation_lst, df["context"].to_list(), df["str_tokens"].to_list()
 
-        # Label data
-        if self.args.label_type == "threshold":
-            threshold_labeler = ThresholdLabeler(threshold=threshold, data=data)
-            labels, neuron_indices = threshold_labeler.run_pipeline()
-        elif self.args.label_type == "fixed":
-            fixed_labeler = FixedLabeler(
-                data=data,
-                run_baseline=self.args.run_baseline,
-                class_indices=self._load_neuron_indices(data=data, step_path=step[0]),
-            )
-            fea, labels, neuron_indices = fixed_labeler.run_pipeline()
-        else:
-            raise ValueError(f"Unsupported label_type: {self.args.label_type}")
-
-        # Integrate features and labels
-        filename = (
-            f"data_{classification_condition}_baseline.json"
-            if self.args.run_baseline
-            else f"data_{classification_condition}.json"
+    def load_model_tokenizer(self, step: int):
+        """Process a single step with the given configuration."""
+        # initlize the model handler class
+        model_cache_dir = settings.PATH.model_dir / self.args.model
+        extractor = StepSurprisalExtractor(
+            config=[],
+            model_name=self.args.model,
+            model_cache_dir=model_cache_dir,  # note here we use the relative path
+            layer_num=self.layer_num,
+            device=self.device,
         )
-        data_loader = DataLoader(
-            X=fea,
-            y=labels,
-            neuron_indices=neuron_indices,
-            out_path=self.data_path / str(step[1]) / str(self.args.data_range_end) / filename,
-        )
-        X, y, neuron_indices = data_loader.run_pipeline()
+        return extractor.load_model_for_step(step)
 
-        return X, y, neuron_indices
-
-    def _classify_neuron(
-        self,
-        X: np.ndarray,
-        y: np.ndarray,
-        neuron_indices: list[str],
-        step_model_path: Path,
-        step_eval_path: Path,
-    ) -> dict[str, Any]:
-        """Train and evaluate classifier from single step."""
-        # configure save path
-        filename = "separation_analysis_baseline.json" if self.args.run_baseline else "separation_analysis.json"
-        # Train and evaluate the classifiers
-        classifier = NeuronClassifier(
-            X=X,
-            y=y,
-            model_path=step_model_path,
-            eval_path=step_eval_path,
-            neuron_indices=neuron_indices,
-            class_num=self.args.class_num,
-            test_size=0.2,
-            run_baseline=self.args.run_baseline,
-        )
-        classifier_results = classifier.run_pipeline()
-
-        # Initial analyses on the results
-        hypothesis_tester = NeuronHypothesisTester(
-            classifier_results=classifier_results,
-            out_path=step_eval_path / filename,
-            resume=self.args.resume,
-        )
-        summary = hypothesis_tester.run_pipeline()
-
-        return summary
-
-    def _load_neuron_indices(self, data: dict, step_path: str) -> dict[str, list[int]]:
-        """Load neuron indices from the existing file."""
-        neuron_analyzer = NeuronGroupAnalyzer(args=self.args, device="cpu", step_path=step_path)
-        boost_neuron_indices, suppress_neuron_indices, random_indices = neuron_analyzer.load_neurons()
-        group_size = max(len(boost_neuron_indices), len(suppress_neuron_indices))
-        special_indices = set(boost_neuron_indices + suppress_neuron_indices + random_indices)
-
-        if self.args.run_baseline:
-            baseline_indices = generate_random_indices(
-                all_neuron_indices=data["neuron_features"].keys(),
-                special_indices=special_indices,
-                group_size=group_size,
-                num_random_groups=1,
-            )
-            # merge mulitple indices
-            baseline_indices = [item for sublist in baseline_indices for item in sublist]
-            return {"baseline": baseline_indices, "random": random_indices}
-        return {
-            "boost": boost_neuron_indices,
-            "suppress": suppress_neuron_indices,
-            "random": random_indices,
-        }
-
-    def _load_threshold(self) -> float | None:
-        """Load threshold if needed based on label type."""
-        if self.args.label_type == "threshold":
-            return get_threshold(
-                data_path=self.data_path / "global_threshold_results.json",
-                threshold_mode=f"{self.args.threshold_mode}_recommendation",
-            )
-        return None
-
-    def _get_classification_condition(self) -> str:
-        """Get the notation string for different classification conditions."""
-        if self.args.label_type == "threshold":
-            return self.args.threshold_mode
-        if self.args.label_type == "fixed":
-            return str(self.args.top_n)
-        return "undefined"
-
-    def _configure_save_path(self, step: tuple[str, str], classification_condition: str) -> tuple[Path, Path]:
+    def _configure_save_path(self, step: tuple[str, str]) -> tuple[Path, Path, Path]:
         """Configure dave path based on different conditions."""
-        step_model_path = (
-            self.model_path
-            / str(step[1])
+        group_name = get_group_name(self.args)
+        suffix_path = (
+            Path(str(step[1]))
             / str(self.args.data_range_end)
-            / classification_condition
+            / str(self.args.top_n)
             / str(self.args.class_num)
+            / group_name
         )
-        step_eval_path = (
-            self.eval_path
-            / str(step[1])
-            / str(self.args.data_range_end)
-            / classification_condition
-            / str(self.args.class_num)
-        )
-        if self.args.label_type == "fixed":
-            group_name = get_group_name(self.args)
-            return step_model_path / group_name, step_eval_path / group_name
-        return step_model_path, step_eval_path
+        step_model_path = self.model_path / suffix_path
+        step_eval_path = self.eval_path / suffix_path
+        step_data_path = self.data_path / str(step[1]) / str(self.args.data_range_end)
+        return step_data_path, step_model_path, step_eval_path
 
 
 #######################################################################################################
@@ -284,7 +186,9 @@ def main() -> None:
     step_processor = StepPathProcessor(data_path)
     step_dirs = step_processor.sort_paths()
     data_path, model_path, eval_path = configure_path(args)
-    trainer = Trainer(args, data_path, model_path, eval_path, step_dirs)
+    trainer = ReflectionAnalyzer(
+        args=args, device=device, data_path=data_path, model_path=model_path, eval_path=eval_path, step_dirs=step_dirs
+    )
     trainer.run_pipeline()
 
 

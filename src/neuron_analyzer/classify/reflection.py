@@ -1,8 +1,8 @@
 import logging
-import pickle
 import typing as t
 from pathlib import Path
 
+import joblib
 import numpy as np
 import torch
 from tqdm import tqdm
@@ -26,6 +26,7 @@ class SVMHyperplaneReflector:
         model,
         tokenizer,
         step_num: int,
+        save_path: Path,
         layer_name: str | None = None,
         layer_num: int = -1,
         model_name: str = "pythia-410m",
@@ -40,6 +41,7 @@ class SVMHyperplaneReflector:
         self.use_pca = use_pca
         self.n_components = n_components
         self.model_name = model_name
+        self.step_num = step_num
 
         # Set layer name based on model architecture or use provided name
         if layer_name is None:
@@ -71,7 +73,7 @@ class SVMHyperplaneReflector:
         self.normal_unit: np.ndarray | None = None
         self.intercept: float | None = None
         self.hyperplane_point: np.ndarray | None = None
-
+        self.save_path = save_path
         # Load SVM model and set up hooks
         self._load_svm_model()
         self._setup_hooks()
@@ -83,7 +85,7 @@ class SVMHyperplaneReflector:
 
         # Load the SVM model
         with open(self.svm_checkpoint_path, "rb") as f:
-            svm_model = pickle.load(f)
+            svm_model = joblib.load(f)
 
         # Extract hyperplane parameters
         if hasattr(svm_model, "coef_"):
@@ -109,6 +111,22 @@ class SVMHyperplaneReflector:
         logger.info(f"Loaded SVM model from {self.svm_checkpoint_path}")
         logger.info(f"Hyperplane normal vector shape: {self.normal_vector.shape}")
         logger.info(f"Hyperplane intercept: {self.intercept}")
+
+    def _get_layer_module(self) -> torch.nn.Module:
+        """Get the target layer module based on the layer name."""
+        # Split the layer name into parts
+        name_parts = self.layer_name.split(".")
+
+        # Start from the model and navigate through the hierarchy
+        current_module = self.model
+        for part in name_parts:
+            if hasattr(current_module, part):
+                current_module = getattr(current_module, part)
+            else:
+                raise AttributeError(f"Cannot find submodule {part} in {current_module}")
+
+        logger.info(f"Found target layer: {self.layer_name}")
+        return current_module
 
     def _setup_hooks(self) -> None:
         """Set up forward hooks for neuron reflection."""
@@ -150,6 +168,9 @@ class SVMHyperplaneReflector:
 
         except Exception as e:
             logger.error(f"Error setting up reflection hook: {e}")
+            # Include more diagnostic information in the error
+            logger.error(f"Layer name: {self.layer_name}")
+            logger.error(f"Model structure keys: {[k for k in self.model._modules.keys()]}")
             raise
 
     def reflect_across_hyperplane(self, activation: np.ndarray) -> np.ndarray:
@@ -181,7 +202,9 @@ class SVMHyperplaneReflector:
         """
         # check whether the given neuron has the label
         decision_value = np.dot(activation, self.normal_vector) + self.intercept
-        return "special" if decision_value > 0 else "common"
+        logger.info(decision_value)
+        # return "special" if decision_value > 0 else "common"
+        return decision_value
 
     def setup_reflection(self, neuron_idx: int, activation: np.ndarray) -> None:
         """Set up reflection for a specific neuron.
@@ -207,13 +230,7 @@ class SVMHyperplaneReflector:
         logger.info(f"Set up reflection for neuron {neuron_idx}")
 
     def setup_batch_reflection(self, neurons: list[int], activations: np.ndarray) -> None:
-        """Set up reflection for multiple neurons.
-
-        Args:
-            neurons: List of neuron indices to reflect
-            activations: Array of activation vectors for the neurons
-
-        """
+        """Set up reflection for multiple neurons."""
         if len(neurons) != len(activations):
             raise ValueError(
                 f"Number of neurons ({len(neurons)}) must match number of activations ({len(activations)})"
@@ -287,17 +304,14 @@ class SVMHyperplaneReflector:
         original_loss: float | None = None,  # Optional pre-computed loss
     ) -> dict[str, t.Any]:
         """Run comprehensive reflection analysis on a tokenized input."""
-        if len(neurons) != len(activations):
-            raise ValueError(f"Number of neurons ({len(neurons)}) must match activations ({len(activations)})")
-
         # Convert tokenized input to tensor
         input_ids = torch.tensor([tokenized_input], device=self.device)
-
         # Find the last occurrence of target_token_ids in input_ids
         target_len = len(target_token_ids)
 
         # Search from the end to find the last occurrence
         last_pos = -1
+
         for i in range(len(tokenized_input) - target_len + 1):
             if tokenized_input[i : i + target_len] == target_token_ids:
                 last_pos = i
@@ -316,7 +330,7 @@ class SVMHyperplaneReflector:
             "original_loss": [],
             "reflected_loss": [],
             "loss_changes": [],
-            "original_activations": activations.tolist(),
+            "original_activations": activations,
             "reflected_activations": [],
             "distances_to_hyperplane": [],
             "neuron_types": [],
@@ -333,8 +347,8 @@ class SVMHyperplaneReflector:
             results["reflected_activations"].append(reflected.tolist())
 
             # Classify neuron
-            neuron_type = self.classify_neuron(act)
-            results["neuron_types"].append(neuron_type)
+            # neuron_type = self.classify_neuron(act)
+            # results["neuron_types"].append(neuron_type)
 
         # Compute or use provided original loss
         if original_loss is None:
@@ -390,7 +404,7 @@ class SVMHyperplaneReflector:
         input_string_lst: list[str],
         target_string_lst: list[str],
         neurons: list[int],
-        activations: np.ndarray,
+        activation_lst: list[list],
         original_loss=None,
     ) -> list:
         """Run the reflection analysis pipeline."""
@@ -399,10 +413,9 @@ class SVMHyperplaneReflector:
         for i, input_string in enumerate(input_string_lst):
             results.append(
                 self.run_pipeline_single(
-                    input_string, target_string_lst[i], neurons, activations, original_loss=original_loss
+                    input_string, target_string_lst[i], neurons, activation_lst[i], original_loss=original_loss
                 )
             )
-        result_dict = {}
+        result_dict = {self.step_num: results}
         # save the results as a json
-        # TODO: change the
-        JsonProcessor.save_json
+        JsonProcessor.save_json(result_dict, self.save_path)

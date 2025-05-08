@@ -348,5 +348,14 @@ python finetune_lm.py \
     --save_steps 500 \
     --save_total_limit 2
     
-    
+
+
+# Install the Hugging Face CLI
+brew install huggingface-cli
+
+# Login with your Hugging Face credentials
+huggingface-cli login
+
+# Push your model files
+huggingface-cli upload BabyLM-community/babylm-baseline-100m-gpt-bert-causal-focus . 
 """
