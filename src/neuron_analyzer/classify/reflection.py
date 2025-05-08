@@ -13,11 +13,7 @@ logger = logging.getLogger(__name__)
 
 
 class SVMHyperplaneReflector:
-    """Performs reflection of neuron activations across an SVM decision boundary.
-
-    This class uses PyTorch hooks to modify activations during the forward pass,
-    allowing analysis of how crossing the SVM hyperplane affects model behavior.
-    """
+    """Performs reflection of neuron activations across an SVM decision boundary."""
 
     def __init__(
         self,
@@ -133,37 +129,8 @@ class SVMHyperplaneReflector:
         try:
             target_layer = self._get_layer_module()
 
-            def reflection_hook(module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
-                """Forward hook to reflect specified neurons across the hyperplane."""
-                if not self.reflection_enabled or not self.target_neurons:
-                    return output
-
-                # Clone the output to avoid modifying the original tensor in-place
-                modified_output = output.clone()
-
-                # Apply reflection to each target neuron
-                for neuron_idx in self.target_neurons:
-                    if neuron_idx in self.reflected_activations:
-                        # Get the reflected activation for this neuron
-                        reflected_value = self.reflected_activations[neuron_idx]
-
-                        # Apply the reflected value based on output tensor shape
-                        if len(modified_output.shape) == 3:
-                            # [batch, seq_len, hidden_dim]
-                            # Modify only the last token's activation for the target neuron
-                            modified_output[:, -1, neuron_idx] = torch.tensor(
-                                reflected_value, device=modified_output.device, dtype=modified_output.dtype
-                            )
-                        elif len(modified_output.shape) == 2:
-                            # [batch, hidden_dim]
-                            modified_output[:, neuron_idx] = torch.tensor(
-                                reflected_value, device=modified_output.device, dtype=modified_output.dtype
-                            )
-
-                return modified_output
-
             # Register the hook
-            self.hook_handle = target_layer.register_forward_hook(reflection_hook)
+            self.hook_handle = target_layer.register_forward_hook(self.reflection_hook)
             logger.info(f"Registered reflection hook on layer: {self.layer_name}")
 
         except Exception as e:
@@ -174,15 +141,7 @@ class SVMHyperplaneReflector:
             raise
 
     def reflect_across_hyperplane(self, activation: np.ndarray) -> np.ndarray:
-        """Reflect an activation vector across the SVM hyperplane.
-
-        Args:
-            activation: Vector to reflect
-
-        Returns:
-            Reflected vector on the opposite side of the hyperplane
-
-        """
+        """Reflect an activation vector of multiple tokens across the SVM hyperplane."""
         # Compute signed distance to hyperplane
         dist_to_plane = np.dot(activation - self.hyperplane_point, self.normal_unit)
 
@@ -191,59 +150,12 @@ class SVMHyperplaneReflector:
         return reflected
 
     def classify_neuron(self, activation: np.ndarray) -> str:
-        """Classify a neuron based on SVM decision function.
-
-        Args:
-            activation: Neuron activation vector
-
-        Returns:
-            Classification string: "special" if on positive side of hyperplane, "common" otherwise
-
-        """
+        """Classify a neuron based on SVM decision function."""
         # check whether the given neuron has the label
         decision_value = np.dot(activation, self.normal_vector) + self.intercept
         logger.info(decision_value)
         # return "special" if decision_value > 0 else "common"
         return decision_value
-
-    def setup_reflection(self, neuron_idx: int, activation: np.ndarray) -> None:
-        """Set up reflection for a specific neuron.
-
-        Args:
-            neuron_idx: Index of the neuron to reflect
-            activation: Original activation of the neuron
-
-        """
-        # Store original activation
-        self.original_activations[neuron_idx] = activation
-
-        # Calculate reflected activation
-        reflected = self.reflect_across_hyperplane(activation)
-
-        # Store reflected activation
-        self.reflected_activations[neuron_idx] = reflected
-
-        # Add to target neurons list if not already there
-        if neuron_idx not in self.target_neurons:
-            self.target_neurons.append(neuron_idx)
-
-        logger.info(f"Set up reflection for neuron {neuron_idx}")
-
-    def setup_batch_reflection(self, neurons: list[int], activations: np.ndarray) -> None:
-        """Set up reflection for multiple neurons."""
-        if len(neurons) != len(activations):
-            raise ValueError(
-                f"Number of neurons ({len(neurons)}) must match number of activations ({len(activations)})"
-            )
-
-        # Reset current targets
-        self.target_neurons = []
-        self.original_activations = {}
-        self.reflected_activations = {}
-
-        # Set up reflection for each neuron
-        for i, neuron_idx in enumerate(neurons):
-            self.setup_reflection(neuron_idx, activations[i])
 
     def enable_reflection(self) -> None:
         """Enable neuron reflection."""
@@ -295,17 +207,84 @@ class SVMHyperplaneReflector:
 
         return original_loss
 
+    def reflection_hook(self, module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
+        """Forward hook to reflect specified neurons across the hyperplane."""
+        if not self.reflection_enabled or not self.target_neurons:
+            return output
+
+        # Clone the output to avoid modifying the original tensor in-place
+        modified_output = output.clone()
+        logger.info(f"reflected activation length: {len(self.reflected_activations)}")
+        # Apply reflection to each target neuron
+        for neuron_idx in self.target_neurons:
+            # Get the reflected activation for this neuron
+
+            reflected_value = self.reflected_activations[neuron_idx]
+
+            # Convert to float if string
+            if isinstance(reflected_value, str):
+                try:
+                    reflected_value = float(reflected_value)
+                except ValueError:
+                    logger.error(f"Cannot convert string '{reflected_value}' for neuron {neuron_idx}")
+                    continue
+
+            # Make sure neuron_idx is an integer
+            neuron_idx = int(neuron_idx)
+
+            # Create a properly shaped tensor for the batch
+            batch_size = modified_output.shape[0]
+            modified_output[:, -1, neuron_idx] = float(reflected_value[neuron_idx])
+
+            # Handle the reflected value based on its type
+            if isinstance(reflected_value, np.ndarray):
+                # If it's a full activation vector, use it directly
+                # Create tensor of the right shape
+                reflected_tensor = torch.tensor(
+                    reflected_value, device=modified_output.device, dtype=modified_output.dtype
+                )
+                # Ensure correct shape for batch broadcasting
+                if len(reflected_tensor.shape) == 1:
+                    # Expand to batch dimension
+                    reflected_tensor = reflected_tensor.expand(batch_size, -1)
+                modified_output[:, -1, neuron_idx] = reflected_tensor[neuron_idx]
+            else:
+                # Scalar value case
+                modified_output[:, -1, neuron_idx] = float(reflected_value)
+
+        return modified_output
+
+    def setup_reflection(self, neuron_idx: int, activation: np.ndarray) -> None:
+        """Set up reflection for a specific neuron."""
+        # Store original activation
+        self.original_activations[neuron_idx] = activation
+
+        # Calculate reflected activation
+        reflected = self.reflect_across_hyperplane(activation)
+
+        # Store reflected activation
+        self.reflected_activations[neuron_idx] = reflected
+
+        # Add to target neurons list if not already there
+        if neuron_idx not in self.target_neurons:
+            self.target_neurons.append(neuron_idx)
+
+        logger.info(
+            f"Set up reflection for neuron {neuron_idx}: original shape={activation.shape}, reflected shape={reflected.shape}"
+        )
+
     def run_reflection_analysis(
         self,
         tokenized_input: list[int],  # Token IDs for the input string A
         target_token_ids: list[int],  # Token IDs of the target string B
         neurons: list[int],  # List of neuron indices to reflect
-        activations: np.ndarray,  # Activation vectors for the neurons
+        activations: list[list],  # Activation vectors for each neuron and token
         original_loss: float | None = None,  # Optional pre-computed loss
     ) -> dict[str, t.Any]:
         """Run comprehensive reflection analysis on a tokenized input."""
         # Convert tokenized input to tensor
         input_ids = torch.tensor([tokenized_input], device=self.device)
+
         # Find the last occurrence of target_token_ids in input_ids
         target_len = len(target_token_ids)
 
@@ -323,6 +302,9 @@ class SVMHyperplaneReflector:
         start_pos = last_pos
         end_pos = last_pos + target_len
 
+        # Log shapes for debugging
+        logger.info(f"Neurons length: {len(neurons)}")
+
         # Prepare results structure
         results = {
             "neurons": neurons,
@@ -330,25 +312,27 @@ class SVMHyperplaneReflector:
             "original_loss": [],
             "reflected_loss": [],
             "loss_changes": [],
-            "original_activations": activations,
+            "original_activations": activations.tolist() if isinstance(activations, np.ndarray) else activations,
             "reflected_activations": [],
             "distances_to_hyperplane": [],
             "neuron_types": [],
         }
 
-        # Calculate and store reflected activations and neuron types
-        for i, act in enumerate(activations):
+        # Calculate and store reflected activations for each neuron
+        for i, neuron in enumerate(neurons):
+            neuron_activation = activations[i]
+
+            # Convert to numpy array if it's not already
+            if not isinstance(neuron_activation, np.ndarray):
+                neuron_activation = np.array(neuron_activation)
+
             # Calculate distance to hyperplane
-            dist = float(np.dot(act - self.hyperplane_point, self.normal_unit))
+            dist = float(np.dot(neuron_activation - self.hyperplane_point, self.normal_unit))
             results["distances_to_hyperplane"].append(dist)
 
             # Reflect activation and store
-            reflected = self.reflect_across_hyperplane(act)
+            reflected = self.reflect_across_hyperplane(neuron_activation)
             results["reflected_activations"].append(reflected.tolist())
-
-            # Classify neuron
-            # neuron_type = self.classify_neuron(act)
-            # results["neuron_types"].append(neuron_type)
 
         # Compute or use provided original loss
         if original_loss is None:
@@ -361,11 +345,16 @@ class SVMHyperplaneReflector:
             # Store original loss
             results["original_loss"].append(original_loss)
 
-            # Get corresponding activation
-            activation = activations[neuron_idx]
+            # Get corresponding activation for this neuron
+            neuron_activation = activations[neuron_idx]
+
+            # Make sure it's a numpy array
+            if not isinstance(neuron_activation, np.ndarray):
+                neuron_activation = np.array(neuron_activation)
 
             # Set up reflection for this neuron
-            self.setup_reflection(neuron, activation)
+            self.setup_reflection(neuron, neuron_activation)
+
             # Compute reflected loss
             self.enable_reflection()
             reflected_loss = self.compute_loss(input_ids, start_pos, end_pos)
@@ -383,7 +372,7 @@ class SVMHyperplaneReflector:
         return results
 
     def run_pipeline_single(
-        self, input_string: str, target_string: str, neurons: list, activations: np.ndarray, original_loss=None
+        self, input_string: str, target_string: str, neurons: list[int], activations: list[list], original_loss=None
     ) -> dict:
         """Run the reflection analysis pipeline."""
         # tokenize the string
@@ -407,15 +396,26 @@ class SVMHyperplaneReflector:
         activation_lst: list[list],
         original_loss=None,
     ) -> list:
-        """Run the reflection analysis pipeline."""
+        """Run the reflection analysis pipeline for multiple inputs."""
         # get the results list
         results = []
+
+        # Process each input string with its corresponding activation data
         for i, input_string in enumerate(input_string_lst):
-            results.append(
-                self.run_pipeline_single(
-                    input_string, target_string_lst[i], neurons, activation_lst[i], original_loss=original_loss
-                )
+            input_activations = [sub[i] for sub in activation_lst]
+
+            # Process this input
+            result = self.run_pipeline_single(
+                input_string,
+                target_string_lst[i],
+                neurons,
+                input_activations,
+                original_loss=original_loss,
             )
+            results.append(result)
+
+        # Save results
         result_dict = {self.step_num: results}
-        # save the results as a json
         JsonProcessor.save_json(result_dict, self.save_path)
+
+        return results
