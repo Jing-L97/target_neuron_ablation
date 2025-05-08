@@ -51,7 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude_random", type=bool, default=True, help="Include all neuron indices if set True")
     parser.add_argument("--run_baseline", action="store_true", help="Whether to run baseline models")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
-    parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
+    parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
@@ -107,8 +107,12 @@ class ReflectionAnalyzer:
             step_data_path, step_model_path, step_eval_path = self._configure_save_path(step)
             # Load data
             neurons, activation_lst, input_string_lst, target_string_lst = self._load_data(step_data_path)
-            # load model and tokenizer
-            model, tokenizer = self.load_model_tokenizer(step[1])
+
+            # load model and tokenize target strings
+            model, tokenizer = self._load_model_tokenizer(step[1])
+            input_token_ids_list, target_token_ids_list = self._tokenize_strings(
+                tokenizer, input_string_lst, target_string_lst
+            )
 
             # intialize the analyzer
             reflector = SVMHyperplaneReflector(
@@ -122,11 +126,13 @@ class ReflectionAnalyzer:
                 step_num=step[1],
             )
 
-            reflector.run_pipeline_multi(
-                input_string_lst=input_string_lst,
-                target_string_lst=target_string_lst,
+            activations = [sub[1] for sub in activation_lst]
+
+            reflector.run_reflection_analysis(
+                tokenized_input=input_token_ids_list[1],
+                target_token_ids=target_token_ids_list[1],
                 neurons=neurons,
-                activation_lst=activation_lst,
+                activations=activations,
             )
 
         # except Exception as e:
@@ -142,7 +148,7 @@ class ReflectionAnalyzer:
         df = df.head(self.args.top_n)
         return neurons, activation_lst, df["context"].to_list(), df["str_tokens"].to_list()
 
-    def load_model_tokenizer(self, step: int):
+    def _load_model_tokenizer(self, step: int):
         """Process a single step with the given configuration."""
         # initlize the model handler class
         model_cache_dir = settings.PATH.model_dir / self.args.model
@@ -154,6 +160,12 @@ class ReflectionAnalyzer:
             device=self.device,
         )
         return extractor.load_model_for_step(step)
+
+    def _tokenize_strings(self, tokenizer, input_string_lst: list[str], target_string_lst: list[str]):
+        """Tokenize the target strings and token."""
+        input_token_ids_list = [tokenizer.encode(text, add_special_tokens=False) for text in input_string_lst]
+        target_token_ids_list = [tokenizer.encode(text, add_special_tokens=False) for text in target_string_lst]
+        return input_token_ids_list, target_token_ids_list
 
     def _configure_save_path(self, step: tuple[str, str]) -> tuple[Path, Path, Path]:
         """Configure dave path based on different conditions."""

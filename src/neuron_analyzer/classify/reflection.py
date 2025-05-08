@@ -181,31 +181,86 @@ class SVMHyperplaneReflector:
 
         logger.info("Reflector cleaned up")
 
-    def tokenize_input(self, input_string: str) -> list[int]:
-        """Tokenize inputs from the given tokenizer."""
-        return self.tokenizer.encode(input_string, add_special_tokens=False)
-
     def compute_loss(self, input_ids, start_pos, end_pos) -> float:
-        """Compute the loss value of the target token."""
+        """Compute the loss value of the target token or token sequence.
+
+        This function handles the computation of loss for:
+        - Single tokens (when end_pos - start_pos = 1)
+        - Multiple tokens (computing the average loss across the sequence)
+
+        Args:
+            input_ids: Tensor of shape [batch_size, sequence_length] containing input token IDs
+            start_pos: Starting position of the target sequence
+            end_pos: Ending position of the target sequence (exclusive)
+
+        Returns:
+            Loss value as a float
+
+        """
         with torch.no_grad():
+            # Get model outputs
             outputs = self.model(input_ids)
 
-            # For each position in the target sequence, we need to predict the next token
-            total_loss = 0.0
-            for pos in range(start_pos, end_pos - 1):
-                # Get logits for current position (predicting the next token)
-                logits = outputs.logits[0, pos, :] if hasattr(outputs, "logits") else outputs[0, pos, :]
-                # Target is the next token
-                target = input_ids[0, pos + 1]
-                # Calculate loss
-                loss_fn = torch.nn.CrossEntropyLoss()
-                loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
-                total_loss += loss.item()
-            # Average loss across target token positions
-            num_positions = end_pos - start_pos - 1
-            original_loss = total_loss / max(1, num_positions) if num_positions > 0 else 0.0
+            # Validate positions are in bounds
+            seq_length = input_ids.shape[1]
+            if start_pos < 0 or end_pos > seq_length:
+                logger.warning(f"Invalid position range: {start_pos} to {end_pos}, sequence length: {seq_length}")
+                return 0.0
 
-        return original_loss
+            # Check if we can predict any tokens
+            if start_pos >= seq_length - 1 or start_pos >= end_pos:
+                logger.warning(
+                    f"Cannot predict tokens: start_pos={start_pos}, end_pos={end_pos}, seq_length={seq_length}"
+                )
+                return 0.0
+
+            # Create loss function once
+            loss_fn = torch.nn.CrossEntropyLoss()
+
+            # Calculate loss for each position
+            total_loss = 0.0
+            valid_positions = 0
+
+            # Loop through positions where we can predict the next token
+            last_pos = min(end_pos - 1, seq_length - 2)  # We need at least one more token after this position
+
+            for pos in range(start_pos, last_pos + 1):
+                # Skip if next token is out of bounds
+                if pos + 1 >= seq_length:
+                    continue
+
+                # Get logits for current position - this is a [vocab_size] tensor
+                if hasattr(outputs, "logits"):
+                    logits = outputs.logits[0, pos, :]
+                else:
+                    logits = outputs[0, pos, :]
+
+                # Get target (next token) - this is a scalar tensor
+                target = input_ids[0, pos + 1]
+
+                # CrossEntropyLoss expects:
+                # - Input shape: [batch_size, num_classes]
+                # - Target shape: [batch_size]
+
+                # Ensure correct shapes
+                # Add batch dimension to logits: [vocab_size] -> [1, vocab_size]
+                logits_batched = logits.unsqueeze(0)
+
+                # Add batch dimension to target: scalar -> [1]
+                target_batched = target.unsqueeze(0)
+
+                # Calculate loss
+                loss = loss_fn(logits_batched, target_batched)
+
+                # Add to total and count valid positions
+                total_loss += loss.item()  # Convert to Python float
+                valid_positions += 1
+
+            # Return average loss, or 0.0 if no valid positions
+            if valid_positions > 0:
+                return total_loss / valid_positions
+            logger.warning("No valid positions for loss calculation")
+            return 0.0
 
     def reflection_hook(self, module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
         """Forward hook to reflect specified neurons across the hyperplane."""
@@ -220,38 +275,11 @@ class SVMHyperplaneReflector:
             # Get the reflected activation for this neuron
 
             reflected_value = self.reflected_activations[neuron_idx]
-
-            # Convert to float if string
-            if isinstance(reflected_value, str):
-                try:
-                    reflected_value = float(reflected_value)
-                except ValueError:
-                    logger.error(f"Cannot convert string '{reflected_value}' for neuron {neuron_idx}")
-                    continue
+            logger.info(reflected_value)
 
             # Make sure neuron_idx is an integer
             neuron_idx = int(neuron_idx)
-
-            # Create a properly shaped tensor for the batch
-            batch_size = modified_output.shape[0]
-            modified_output[:, -1, neuron_idx] = float(reflected_value[neuron_idx])
-
-            # Handle the reflected value based on its type
-            if isinstance(reflected_value, np.ndarray):
-                # If it's a full activation vector, use it directly
-                # Create tensor of the right shape
-                reflected_tensor = torch.tensor(
-                    reflected_value, device=modified_output.device, dtype=modified_output.dtype
-                )
-                # Ensure correct shape for batch broadcasting
-                if len(reflected_tensor.shape) == 1:
-                    # Expand to batch dimension
-                    reflected_tensor = reflected_tensor.expand(batch_size, -1)
-                modified_output[:, -1, neuron_idx] = reflected_tensor[neuron_idx]
-            else:
-                # Scalar value case
-                modified_output[:, -1, neuron_idx] = float(reflected_value)
-
+            modified_output[:, -1, neuron_idx] = 0.27
         return modified_output
 
     def setup_reflection(self, neuron_idx: int, activation: np.ndarray) -> None:
@@ -265,9 +293,7 @@ class SVMHyperplaneReflector:
         # Store reflected activation
         self.reflected_activations[neuron_idx] = reflected
 
-        # Add to target neurons list if not already there
-        if neuron_idx not in self.target_neurons:
-            self.target_neurons.append(neuron_idx)
+        self.target_neurons.append(neuron_idx)
 
         logger.info(
             f"Set up reflection for neuron {neuron_idx}: original shape={activation.shape}, reflected shape={reflected.shape}"
@@ -301,7 +327,7 @@ class SVMHyperplaneReflector:
         # Store the position of the target tokens (start and end position)
         start_pos = last_pos
         end_pos = last_pos + target_len
-
+        logger.info(f"Start and last pos are: {start_pos}, {end_pos}")
         # Log shapes for debugging
         logger.info(f"Neurons length: {len(neurons)}")
 
@@ -369,53 +395,6 @@ class SVMHyperplaneReflector:
             # Disable reflection for the next neuron
             self.disable_reflection()
 
-        return results
-
-    def run_pipeline_single(
-        self, input_string: str, target_string: str, neurons: list[int], activations: list[list], original_loss=None
-    ) -> dict:
-        """Run the reflection analysis pipeline."""
-        # tokenize the string
-        tokenized_input = self.tokenize_input(input_string)
-        target_token_ids = self.tokenize_input(target_string)
-
-        # run analyses
-        return self.run_reflection_analysis(
-            tokenized_input=tokenized_input,
-            target_token_ids=target_token_ids,
-            neurons=neurons,
-            activations=activations,
-            original_loss=original_loss,
-        )
-
-    def run_pipeline_multi(
-        self,
-        input_string_lst: list[str],
-        target_string_lst: list[str],
-        neurons: list[int],
-        activation_lst: list[list],
-        original_loss=None,
-    ) -> list:
-        """Run the reflection analysis pipeline for multiple inputs."""
-        # get the results list
-        results = []
-
-        # Process each input string with its corresponding activation data
-        for i, input_string in enumerate(input_string_lst):
-            input_activations = [sub[i] for sub in activation_lst]
-
-            # Process this input
-            result = self.run_pipeline_single(
-                input_string,
-                target_string_lst[i],
-                neurons,
-                input_activations,
-                original_loss=original_loss,
-            )
-            results.append(result)
-
-        # Save results
-        result_dict = {self.step_num: results}
-        JsonProcessor.save_json(result_dict, self.save_path)
-
+        JsonProcessor.save_json(results, self.save_path)
+        logger.info(f"save results to {self.save_path}")
         return results
