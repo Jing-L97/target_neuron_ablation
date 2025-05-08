@@ -286,10 +286,9 @@ class SVMHyperplaneReflector:
         """Set up reflection for a specific neuron."""
         # Store original activation
         self.original_activations[neuron_idx] = activation
-
         # Calculate reflected activation
         reflected = self.reflect_across_hyperplane(activation)
-
+        logger.info("reflected shape")
         # Store reflected activation
         self.reflected_activations[neuron_idx] = reflected
 
