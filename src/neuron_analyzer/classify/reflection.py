@@ -116,35 +116,33 @@ class SVMHyperplaneReflector:
         # Start from the model and navigate through the hierarchy
         current_module = self.model
         for part in name_parts:
-            if hasattr(current_module, part):
-                current_module = getattr(current_module, part)
-            else:
-                raise AttributeError(f"Cannot find submodule {part} in {current_module}")
-
+            current_module = getattr(current_module, part)
         logger.info(f"Found target layer: {self.layer_name}")
         return current_module
 
     def _setup_hooks(self) -> None:
-        """Set up forward hooks for neuron reflection."""
-        try:
-            target_layer = self._get_layer_module()
+        """Set up forward hooks for neuron ablation."""
 
-            # Register the hook
-            self.hook_handle = target_layer.register_forward_hook(self.reflection_hook)
-            logger.info(f"Registered reflection hook on layer: {self.layer_name}")
+        def ablation_hook(module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
+            """Forward hook to ablate specified neurons using zero, mean, or scaled activation."""
+            if not self.reflection_enabled:
+                return output
+            # Clone the output to avoid modifying the original tensor in-place
+            modified_output = output.clone()
+            # Zero activation - set activations to 0
+            for neuron_idx in self.target_neurons:
+                modified_output[:, :, int(neuron_idx)] = 0
+            return modified_output
 
-        except Exception as e:
-            logger.error(f"Error setting up reflection hook: {e}")
-            # Include more diagnostic information in the error
-            logger.error(f"Layer name: {self.layer_name}")
-            logger.error(f"Model structure keys: {[k for k in self.model._modules.keys()]}")
-            raise
+        # Get the MLP layer
+        layer = dict(self.model.named_modules())[self.layer_name]
+        # Register the forward hook
+        self.hook_handle = layer.register_forward_hook(ablation_hook)
 
     def reflect_across_hyperplane(self, activation: np.ndarray) -> np.ndarray:
         """Reflect an activation vector of multiple tokens across the SVM hyperplane."""
         # Compute signed distance to hyperplane
         dist_to_plane = np.dot(activation - self.hyperplane_point, self.normal_unit)
-
         # Apply reflection formula: x' = x - 2 * ((x - p) · n̂) * n̂
         reflected = activation - 2 * dist_to_plane * self.normal_unit
         return reflected
@@ -182,21 +180,7 @@ class SVMHyperplaneReflector:
         logger.info("Reflector cleaned up")
 
     def compute_loss(self, input_ids, start_pos, end_pos) -> float:
-        """Compute the loss value of the target token or token sequence.
-
-        This function handles the computation of loss for:
-        - Single tokens (when end_pos - start_pos = 1)
-        - Multiple tokens (computing the average loss across the sequence)
-
-        Args:
-            input_ids: Tensor of shape [batch_size, sequence_length] containing input token IDs
-            start_pos: Starting position of the target sequence
-            end_pos: Ending position of the target sequence (exclusive)
-
-        Returns:
-            Loss value as a float
-
-        """
+        """Compute the loss value of the target token or token sequence."""
         with torch.no_grad():
             # Get model outputs
             outputs = self.model(input_ids)
@@ -228,29 +212,18 @@ class SVMHyperplaneReflector:
                 # Skip if next token is out of bounds
                 if pos + 1 >= seq_length:
                     continue
-
+                logits = outputs.logits[0, pos, :]
+                """
                 # Get logits for current position - this is a [vocab_size] tensor
                 if hasattr(outputs, "logits"):
                     logits = outputs.logits[0, pos, :]
                 else:
                     logits = outputs[0, pos, :]
-
+                """
                 # Get target (next token) - this is a scalar tensor
                 target = input_ids[0, pos + 1]
-
-                # CrossEntropyLoss expects:
-                # - Input shape: [batch_size, num_classes]
-                # - Target shape: [batch_size]
-
-                # Ensure correct shapes
-                # Add batch dimension to logits: [vocab_size] -> [1, vocab_size]
-                logits_batched = logits.unsqueeze(0)
-
-                # Add batch dimension to target: scalar -> [1]
-                target_batched = target.unsqueeze(0)
-
                 # Calculate loss
-                loss = loss_fn(logits_batched, target_batched)
+                loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
 
                 # Add to total and count valid positions
                 total_loss += loss.item()  # Convert to Python float
@@ -262,25 +235,14 @@ class SVMHyperplaneReflector:
             logger.warning("No valid positions for loss calculation")
             return 0.0
 
-    def reflection_hook(self, module, input_tensor: tuple[torch.Tensor], output: torch.Tensor) -> torch.Tensor:
-        """Forward hook to reflect specified neurons across the hyperplane."""
-        if not self.reflection_enabled or not self.target_neurons:
-            return output
+    def get_target_positions(self) -> list[int]:
+        """Return positions that correspond to target tokens we want to affect."""
+        # Return the range from start_pos to end_pos if they're set
+        if self.start_pos is not None and self.end_pos is not None:
+            return list(range(self.start_pos, self.end_pos))
 
-        # Clone the output to avoid modifying the original tensor in-place
-        modified_output = output.clone()
-        logger.info(f"reflected activation length: {len(self.reflected_activations)}")
-        # Apply reflection to each target neuron
-        for neuron_idx in self.target_neurons:
-            # Get the reflected activation for this neuron
-
-            reflected_value = self.reflected_activations[neuron_idx]
-            logger.info(reflected_value)
-
-            # Make sure neuron_idx is an integer
-            neuron_idx = int(neuron_idx)
-            modified_output[:, -1, neuron_idx] = 0.27
-        return modified_output
+        # Otherwise return any stored target positions
+        return self.target_positions
 
     def setup_reflection(self, neuron_idx: int, activation: np.ndarray) -> None:
         """Set up reflection for a specific neuron."""
@@ -288,12 +250,9 @@ class SVMHyperplaneReflector:
         self.original_activations[neuron_idx] = activation
         # Calculate reflected activation
         reflected = self.reflect_across_hyperplane(activation)
-        logger.info("reflected shape")
         # Store reflected activation
         self.reflected_activations[neuron_idx] = reflected
-
         self.target_neurons.append(neuron_idx)
-
         logger.info(
             f"Set up reflection for neuron {neuron_idx}: original shape={activation.shape}, reflected shape={reflected.shape}"
         )
@@ -306,7 +265,7 @@ class SVMHyperplaneReflector:
         activations: list[list],  # Activation vectors for each neuron and token
         original_loss: float | None = None,  # Optional pre-computed loss
     ) -> dict[str, t.Any]:
-        """Run comprehensive reflection analysis on a tokenized input."""
+        """Run comprehensive reflection analysis on one tokenized input."""
         # Convert tokenized input to tensor
         input_ids = torch.tensor([tokenized_input], device=self.device)
 
@@ -364,12 +323,11 @@ class SVMHyperplaneReflector:
             # Compute original loss
             self.disable_reflection()
             original_loss = self.compute_loss(input_ids, start_pos, end_pos)
-
-        # Process each neuron
-        for neuron_idx, neuron in enumerate(tqdm(neurons, desc="Processing neurons")):
             # Store original loss
             results["original_loss"].append(original_loss)
 
+        # Process each neuron
+        for neuron_idx, neuron in enumerate(tqdm(neurons, desc="Processing neurons")):
             # Get corresponding activation for this neuron
             neuron_activation = activations[neuron_idx]
 
@@ -379,18 +337,14 @@ class SVMHyperplaneReflector:
 
             # Set up reflection for this neuron
             self.setup_reflection(neuron, neuron_activation)
-
             # Compute reflected loss
             self.enable_reflection()
             reflected_loss = self.compute_loss(input_ids, start_pos, end_pos)
-
             # Compute loss change
             loss_change = reflected_loss - original_loss
-
             # Store results
             results["reflected_loss"].append(reflected_loss)
             results["loss_changes"].append(loss_change)
-
             # Disable reflection for the next neuron
             self.disable_reflection()
 
