@@ -10,7 +10,7 @@ import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.geometry_util import get_group_name, get_last_layer
-from neuron_analyzer.classify.reflection import SVMHyperplaneReflector
+from neuron_analyzer.classify.reflection import SVMHyperplaneReflector, load_svm_model, safe_ttest
 from neuron_analyzer.eval.surprisal import StepSurprisalExtractor
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
 
@@ -51,6 +51,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude_random", type=bool, default=True, help="Include all neuron indices if set True")
     parser.add_argument("--run_baseline", action="store_true", help="Whether to run baseline models")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
+    parser.add_argument("--fea_dim", type=int, default=50, help="Number of tokens as the activation feature")
     parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
@@ -102,51 +103,88 @@ class ReflectionAnalyzer:
     def run_pipeline(self) -> dict[str, Any]:
         """Extract optimal threshold across multiple steps and run classification."""
         for step in self.step_dirs:
-            # try:
-            # configure the save path
-            step_data_path, step_model_path, step_eval_path = self._configure_save_path(step)
-            # Load data
-            neurons, activation_lst, input_string_lst, target_string_lst = self._load_data(step_data_path)
+            try:
+                # configure the save path
+                step_data_path, step_model_path, step_eval_path = self._configure_save_path(step)
+                # Load data
+                self.neurons, self.activation_lst, self.label_lst, input_string_lst, target_string_lst, losses = (
+                    self._load_data(step_data_path)
+                )
+                # load model and tokenize target strings
+                self.model, tokenizer = self._load_model_tokenizer(step[1])
+                self.input_token_ids_list, self.target_token_ids_list = self._tokenize_strings(
+                    tokenizer, input_string_lst, target_string_lst
+                )
+                # load svm model
+                self.normal_vector, self.intercept, self.normal_unit, self.hyperplane_point = load_svm_model(
+                    step_model_path / f"{self.args.classifier_type}.joblib"
+                )
+                # loop over neurons
+                result_df = pd.DataFrame()
 
-            # load model and tokenize target strings
-            model, tokenizer = self._load_model_tokenizer(step[1])
-            input_token_ids_list, target_token_ids_list = self._tokenize_strings(
-                tokenizer, input_string_lst, target_string_lst
-            )
+                for neuron_idx, _ in enumerate(self.neurons):
+                    # loop over string
+                    for string_idx, _ in enumerate(self.input_token_ids_list):
+                        result_row = self._reflect_loss(neuron_idx, string_idx)
+                        result_df = pd.concat([result_df, result_row])
 
-            # intialize the analyzer
-            reflector = SVMHyperplaneReflector(
-                svm_checkpoint_path=step_model_path / f"{self.args.classifier_type}.joblib",
-                model_name=self.args.model,
-                device=self.device,
-                model=model,
-                tokenizer=tokenizer,
-                layer_num=self.layer_num,
-                save_path=step_eval_path / "reflection.json",
-                step_num=step[1],
-            )
+                # compute stat
+                stat = {}
+                stat[step[1]] = self._compute_stat(result_df, losses)
+                # save the results to the eval results
+                result_df.to_csv(step_eval_path / "reflection.csv")
+                JsonProcessor.save_json(stat, step_eval_path / "reflection_stat.json")
+                reflection_stat.update(stat)
+                logger.info(f"Save the result df to {step_eval_path}")
 
-            activations = [sub[1] for sub in activation_lst]
+            except Exception as e:
+                logger.info(f"Error processing step {step[1]}: {e!s}")
 
-            reflector.run_reflection_analysis(
-                tokenized_input=input_token_ids_list[1],
-                target_token_ids=target_token_ids_list[1],
-                neurons=neurons,
-                activations=activations,
-            )
+    def _reflect_loss(self, neuron_idx: int, string_idx: int) -> pd.DataFrame:
+        """Compute the reflected loss for token and neuron."""
+        reflector = SVMHyperplaneReflector(
+            model_name=self.args.model,
+            device=self.device,
+            model=self.model,
+            layer_num=self.layer_num,
+            neuron_idx=self.neurons[neuron_idx],
+            neuron_activation=self.activation_lst[neuron_idx][string_idx],
+            normal_vector=self.normal_vector,
+            intercept=self.intercept,
+            normal_unit=self.normal_unit,
+            hyperplane_point=self.hyperplane_point,
+        )
+        result_row = reflector.run_reflection_analysis(
+            tokenized_input=self.input_token_ids_list[string_idx],
+            target_token_ids=self.target_token_ids_list[string_idx],
+        )
+        result_row["label"] = self._get_label(self.label_lst[neuron_idx])
+        return result_row
 
-        # except Exception as e:
-        # logger.info(f"Error processing step {step[1]}: {e!s}")
+    def _get_label(self, label) -> str:
+        """Get label based on differnt classfication condition."""
+        if self.args.class_num == 2:
+            return -1 if label == -1 else 1
+        return label
 
     def _load_data(self, step_data_path: Path) -> tuple[np.ndarray, np.ndarray, list[str]]:
         """Load and prepare data for reflection test."""
         # Load neuron indices and activations
         data = JsonProcessor.load_json(step_data_path / f"data_{self.args.top_n}.json")
-        neurons, activation_lst = data["neuron_indices"], data["X"]
+        neurons, activation_lst, label_lst = data["neuron_indices"], data["X"], data["y"]
         # load input strings
         df = pd.read_feather(step_data_path / "entropy_df.feather")
-        df = df.head(self.args.top_n)
-        return neurons, activation_lst, df["context"].to_list(), df["str_tokens"].to_list()
+        df = df.head(self.args.fea_dim)
+        # load delta losses
+        losses = JsonProcessor.load_json(step_data_path / "features.json")
+        return (
+            neurons,
+            activation_lst,
+            label_lst,
+            df["context"].to_list(),
+            df["str_tokens"].to_list(),
+            losses["delta_losses"],
+        )
 
     def _load_model_tokenizer(self, step: int):
         """Process a single step with the given configuration."""
@@ -155,7 +193,7 @@ class ReflectionAnalyzer:
         extractor = StepSurprisalExtractor(
             config=[],
             model_name=self.args.model,
-            model_cache_dir=model_cache_dir,  # note here we use the relative path
+            model_cache_dir=model_cache_dir,
             layer_num=self.layer_num,
             device=self.device,
         )
@@ -166,6 +204,33 @@ class ReflectionAnalyzer:
         input_token_ids_list = [tokenizer.encode(text, add_special_tokens=False) for text in input_string_lst]
         target_token_ids_list = [tokenizer.encode(text, add_special_tokens=False) for text in target_string_lst]
         return input_token_ids_list, target_token_ids_list
+
+    def _compute_stat(self, neuron_df: pd.DataFrame, losses: dict) -> dict:
+        """Group by different labels."""
+        result = neuron_df.groupby(["label", "neurons"])["delta_losses"].mean().reset_index()
+        result_grouped = result.groupby("label")
+        # loop different labels
+        delta_dict = {}
+        for label, result_group in result_grouped:
+            neuron_indices = result_group["neurons"].tolist()
+            # select the original delta loss
+            original_delta_loss = list({k: v for k, v in losses.items() if int(k) in neuron_indices}.values())
+            reflected_delta_loss = result_group["delta_losses"].to_list()
+            tstat, pvalue, is_significant, comparison = safe_ttest(original_delta_loss, reflected_delta_loss)
+
+            delta_dict[label] = {
+                "neurons": neuron_indices,
+                "original_delta_loss": original_delta_loss,
+                "reflected_delta_loss": reflected_delta_loss,
+                "delta_loss_diff": reflected_delta_loss - original_delta_loss,
+                "original_mean_delta": sum(original_delta_loss) / len(original_delta_loss),
+                "reflected_mean_delta": sum(reflected_delta_loss) / len(reflected_delta_loss),
+                "ttest_stat": float(tstat),
+                "ttest_p": float(pvalue),
+                "is_significantly_different": bool(is_significant),
+                "comparison": comparison,
+            }
+        return delta_dict
 
     def _configure_save_path(self, step: tuple[str, str]) -> tuple[Path, Path, Path]:
         """Configure dave path based on different conditions."""
