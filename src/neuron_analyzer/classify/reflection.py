@@ -7,8 +7,6 @@ import numpy as np
 import torch
 from tqdm import tqdm
 
-from neuron_analyzer.load_util import JsonProcessor
-
 logger = logging.getLogger(__name__)
 
 
@@ -72,6 +70,7 @@ class SVMHyperplaneReflector:
         self.save_path = save_path
         # Load SVM model and set up hooks
         self._load_svm_model()
+        # set up hook for the model
         self._setup_hooks()
 
     def _load_svm_model(self) -> None:
@@ -129,9 +128,7 @@ class SVMHyperplaneReflector:
                 return output
             # Clone the output to avoid modifying the original tensor in-place
             modified_output = output.clone()
-            # Zero activation - set activations to 0
-            for neuron_idx in self.target_neurons:
-                modified_output[:, :, int(neuron_idx)] = 0
+            modified_output[:, :, self.neuron_idx] = 0
             return modified_output
 
         # Get the MLP layer
@@ -152,8 +149,7 @@ class SVMHyperplaneReflector:
         # check whether the given neuron has the label
         decision_value = np.dot(activation, self.normal_vector) + self.intercept
         logger.info(decision_value)
-        # return "special" if decision_value > 0 else "common"
-        return decision_value
+        return "special" if decision_value > 0 else "common"
 
     def enable_reflection(self) -> None:
         """Enable neuron reflection."""
@@ -190,7 +186,6 @@ class SVMHyperplaneReflector:
             if start_pos < 0 or end_pos > seq_length:
                 logger.warning(f"Invalid position range: {start_pos} to {end_pos}, sequence length: {seq_length}")
                 return 0.0
-
             # Check if we can predict any tokens
             if start_pos >= seq_length - 1 or start_pos >= end_pos:
                 logger.warning(
@@ -204,27 +199,17 @@ class SVMHyperplaneReflector:
             # Calculate loss for each position
             total_loss = 0.0
             valid_positions = 0
-
             # Loop through positions where we can predict the next token
             last_pos = min(end_pos - 1, seq_length - 2)  # We need at least one more token after this position
-
             for pos in range(start_pos, last_pos + 1):
                 # Skip if next token is out of bounds
                 if pos + 1 >= seq_length:
                     continue
                 logits = outputs.logits[0, pos, :]
-                """
-                # Get logits for current position - this is a [vocab_size] tensor
-                if hasattr(outputs, "logits"):
-                    logits = outputs.logits[0, pos, :]
-                else:
-                    logits = outputs[0, pos, :]
-                """
                 # Get target (next token) - this is a scalar tensor
                 target = input_ids[0, pos + 1]
                 # Calculate loss
                 loss = loss_fn(logits.unsqueeze(0), target.unsqueeze(0))
-
                 # Add to total and count valid positions
                 total_loss += loss.item()  # Convert to Python float
                 valid_positions += 1
@@ -262,32 +247,14 @@ class SVMHyperplaneReflector:
         tokenized_input: list[int],  # Token IDs for the input string A
         target_token_ids: list[int],  # Token IDs of the target string B
         neurons: list[int],  # List of neuron indices to reflect
-        activations: list[list],  # Activation vectors for each neuron and token
+        activations: list[float],  # Activation values for each neuron of the given token
         original_loss: float | None = None,  # Optional pre-computed loss
     ) -> dict[str, t.Any]:
         """Run comprehensive reflection analysis on one tokenized input."""
         # Convert tokenized input to tensor
         input_ids = torch.tensor([tokenized_input], device=self.device)
-
-        # Find the last occurrence of target_token_ids in input_ids
-        target_len = len(target_token_ids)
-
-        # Search from the end to find the last occurrence
-        last_pos = -1
-
-        for i in range(len(tokenized_input) - target_len + 1):
-            if tokenized_input[i : i + target_len] == target_token_ids:
-                last_pos = i
-
-        if last_pos == -1:
-            raise ValueError(f"Target token sequence {target_token_ids} not found in input: {tokenized_input}")
-
-        # Store the position of the target tokens (start and end position)
-        start_pos = last_pos
-        end_pos = last_pos + target_len
-        logger.info(f"Start and last pos are: {start_pos}, {end_pos}")
-        # Log shapes for debugging
-        logger.info(f"Neurons length: {len(neurons)}")
+        # get the positions of token
+        start_pos, end_pos = self._compute_pos(target_token_ids, tokenized_input)
 
         # Prepare results structure
         results = {
@@ -302,52 +269,76 @@ class SVMHyperplaneReflector:
             "neuron_types": [],
         }
 
-        # Calculate and store reflected activations for each neuron
-        for i, neuron in enumerate(neurons):
-            neuron_activation = activations[i]
-
-            # Convert to numpy array if it's not already
-            if not isinstance(neuron_activation, np.ndarray):
-                neuron_activation = np.array(neuron_activation)
-
-            # Calculate distance to hyperplane
-            dist = float(np.dot(neuron_activation - self.hyperplane_point, self.normal_unit))
-            results["distances_to_hyperplane"].append(dist)
-
-            # Reflect activation and store
-            reflected = self.reflect_across_hyperplane(neuron_activation)
-            results["reflected_activations"].append(reflected.tolist())
-
-        # Compute or use provided original loss
-        if original_loss is None:
-            # Compute original loss
-            self.disable_reflection()
-            original_loss = self.compute_loss(input_ids, start_pos, end_pos)
-            # Store original loss
-            results["original_loss"].append(original_loss)
+        # Compute original loss
+        results = self._compute_original_loss(original_loss, input_ids, start_pos, end_pos, results)
 
         # Process each neuron
         for neuron_idx, neuron in enumerate(tqdm(neurons, desc="Processing neurons")):
             # Get corresponding activation for this neuron
             neuron_activation = activations[neuron_idx]
-
-            # Make sure it's a numpy array
-            if not isinstance(neuron_activation, np.ndarray):
-                neuron_activation = np.array(neuron_activation)
-
-            # Set up reflection for this neuron
-            self.setup_reflection(neuron, neuron_activation)
-            # Compute reflected loss
-            self.enable_reflection()
-            reflected_loss = self.compute_loss(input_ids, start_pos, end_pos)
-            # Compute loss change
-            loss_change = reflected_loss - original_loss
-            # Store results
-            results["reflected_loss"].append(reflected_loss)
-            results["loss_changes"].append(loss_change)
-            # Disable reflection for the next neuron
-            self.disable_reflection()
-
-        JsonProcessor.save_json(results, self.save_path)
-        logger.info(f"save results to {self.save_path}")
+            results = self._compute_reflected_loss(
+                neuron_activation, neuron, original_loss, input_ids, start_pos, end_pos, results
+            )
+            results = self._compute_distance(neuron_activation, results)
         return results
+
+    def _compute_original_loss(self, original_loss, input_ids, start_pos, end_pos, results) -> dict:
+        """Save the original loss into a dict."""
+        if original_loss is None:
+            self.disable_reflection()
+            original_loss = self.compute_loss(input_ids, start_pos, end_pos)
+        # Store original loss
+        results["original_loss"].append(original_loss)
+        return results
+
+    def _compute_reflected_loss(
+        self,
+        neuron_activation: float,
+        neuron: int,
+        original_loss: float,
+        input_ids,
+        start_pos,
+        end_pos,
+        results,
+    ) -> dict:
+        """Save the reflected loss into a dict."""
+        # Set up reflection for this neuron
+        self.setup_reflection(neuron, neuron_activation)
+        # Compute reflected loss
+        self.enable_reflection()
+        reflected_loss = self.compute_loss(input_ids, start_pos, end_pos)
+        # Compute loss change
+        loss_change = reflected_loss - original_loss
+        # Store results
+        results["reflected_loss"].append(reflected_loss)
+        results["loss_changes"].append(loss_change)
+        # Disable reflection for the next neuron
+        self.disable_reflection()
+        return results
+
+    def _compute_distance(self, neuron_activation: float, results) -> dict:
+        """Save the reflected distance into a dict."""
+        # Calculate distance to hyperplane
+        dist = float(np.dot(neuron_activation - self.hyperplane_point, self.normal_unit))
+        results["distances_to_hyperplane"].append(dist)
+        # Reflect activation and store
+        reflected = self.reflect_across_hyperplane(neuron_activation)
+        results["reflected_activations"].append(reflected.tolist())
+        return results
+
+    def _compute_pos(self, target_token_ids, tokenized_input) -> tuple[int, int]:
+        """Compute pos based on the string length."""
+        # Find the last occurrence of target_token_ids in input_ids
+        target_len = len(target_token_ids)
+
+        # Search from the end to find the last occurrence
+        last_pos = -1
+        for i in range(len(tokenized_input) - target_len + 1):
+            if tokenized_input[i : i + target_len] == target_token_ids:
+                last_pos = i
+        if last_pos == -1:
+            raise ValueError(f"Target token sequence {target_token_ids} not found in input: {tokenized_input}")
+        return last_pos, last_pos + target_len
+
+    def save_results():
+        """Convert resutls into a df."""
