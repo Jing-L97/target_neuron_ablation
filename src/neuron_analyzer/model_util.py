@@ -6,10 +6,8 @@ from pathlib import Path
 from typing import Any
 
 import neel.utils as nutils
-import numpy as np
 import pandas as pd
 from datasets import load_dataset
-from scipy.stats import ttest_ind
 from transformer_lens import utils
 
 from neuron_analyzer import settings
@@ -302,38 +300,3 @@ def get_layer_name(layer_num: int, model_name: str, layer_name: str = None) -> s
             # Generic fallback
             layer_name = f"model.layers.{layer_num}.mlp"
     return layer_name
-
-
-#######################################################
-# Util func to perform stat test
-
-
-def safe_ttest(value: float, comparison_values: list[float]) -> tuple[float, float, bool, str]:
-    """Safely perform a t-test handling edge cases and potential errors."""
-    if not comparison_values:
-        return 0.0, 1.0, False, "unknown"
-
-    # If all values are identical, no statistical test is needed
-    if all(v == comparison_values[0] for v in comparison_values) and value == comparison_values[0]:
-        return 0.0, 1.0, False, "equal"
-
-    try:
-        # Use one-sample t-test against the mean
-        mean_comparison = np.mean(comparison_values)
-        std_comparison = np.std(comparison_values)
-
-        # If standard deviation is zero, we can't perform t-test
-        if std_comparison == 0:
-            return 0.0, 1.0, False, "higher" if value > mean_comparison else "lower"
-
-        # Use independent t-test with proper handling
-        tstat, pvalue = ttest_ind([value], comparison_values, equal_var=False)
-
-        # Determine the direction of the difference
-        comparison = "higher" if value > mean_comparison else "lower"
-
-        return float(tstat), float(pvalue), bool(pvalue < 0.05), comparison
-
-    except Exception as e:
-        logger.warning(f"Error performing t-test: {e}")
-        return 0.0, 1.0, False, "unknown"

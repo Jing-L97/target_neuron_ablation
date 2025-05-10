@@ -129,12 +129,10 @@ class ReflectionAnalyzer:
                         result_df = pd.concat([result_df, result_row])
 
                 # compute stat
-                stat = {}
-                stat[step[1]] = self._compute_stat(result_df, losses)
+                stat = self._compute_stat(result_df, losses)
                 # save the results to the eval results
                 result_df.to_csv(step_eval_path / "reflection.csv")
                 JsonProcessor.save_json(stat, step_eval_path / "reflection_stat.json")
-                reflection_stat.update(stat)
                 logger.info(f"Save the result df to {step_eval_path}")
 
             except Exception as e:
@@ -207,7 +205,8 @@ class ReflectionAnalyzer:
 
     def _compute_stat(self, neuron_df: pd.DataFrame, losses: dict) -> dict:
         """Group by different labels."""
-        result = neuron_df.groupby(["label", "neurons"])["delta_losses"].mean().reset_index()
+        result = neuron_df.groupby(["label", "neurons"])["abs_delta_losses"].mean().reset_index()
+
         result_grouped = result.groupby("label")
         # loop different labels
         delta_dict = {}
@@ -215,16 +214,18 @@ class ReflectionAnalyzer:
             neuron_indices = result_group["neurons"].tolist()
             # select the original delta loss
             original_delta_loss = list({k: v for k, v in losses.items() if int(k) in neuron_indices}.values())
-            reflected_delta_loss = result_group["delta_losses"].to_list()
+            reflected_delta_loss = result_group["abs_delta_losses"].to_list()
+            # run t-test
             tstat, pvalue, is_significant, comparison = safe_ttest(original_delta_loss, reflected_delta_loss)
-
+            original_mean_delta = sum(np.abs(original_delta_loss)) / len(original_delta_loss)
+            reflected_mean_delta = sum(reflected_delta_loss) / len(reflected_delta_loss)
             delta_dict[label] = {
                 "neurons": neuron_indices,
-                "original_delta_loss": original_delta_loss,
-                "reflected_delta_loss": reflected_delta_loss,
-                "delta_loss_diff": reflected_delta_loss - original_delta_loss,
-                "original_mean_delta": sum(original_delta_loss) / len(original_delta_loss),
-                "reflected_mean_delta": sum(reflected_delta_loss) / len(reflected_delta_loss),
+                "original_abs_delta_loss": original_delta_loss,
+                "reflected_abs_delta_loss": reflected_delta_loss,
+                "original_mean_delta": original_mean_delta,
+                "reflected_mean_delta": reflected_mean_delta,
+                "delta_loss_diff": reflected_mean_delta - original_mean_delta,
                 "ttest_stat": float(tstat),
                 "ttest_p": float(pvalue),
                 "is_significantly_different": bool(is_significant),

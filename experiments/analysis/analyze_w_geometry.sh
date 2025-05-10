@@ -6,13 +6,13 @@
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_weight_%a.log
-#SBATCH --array=0-23  # Update if number of combinations changes
+#SBATCH --array=0-11  # Update if number of combinations changes
 
 # Define constants
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/analysis"
 
 # Define parameter arrays
-MODELS=("EleutherAI/pythia-70m-deduped" "EleutherAI/pythia-410m-deduped")
+MODELS=("EleutherAI/pythia-70m-deduped")
 VECTORS=("longtail_50")
 TOP_NS=(10 50 100)
 HEURISTICS=("prob")
@@ -72,7 +72,6 @@ python "$SCRIPT_ROOT/analyze_weight_geometry.py" \
   --group_size "$GROUP_SIZE" \
   --top_n "$TOP_N" \
   --heuristic "$HEURISTIC" \
-  --load_stat \
-  --resume
+  --load_stat 
 
 echo "Analysis complete for combination $SLURM_ARRAY_TASK_ID"

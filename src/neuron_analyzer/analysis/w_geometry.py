@@ -4,7 +4,7 @@ import logging
 import numpy as np
 import pandas as pd
 import torch
-from scipy.linalg import subspace_angles
+from scipy.spatial.distance import cosine
 from scipy.stats import ttest_ind
 
 from neuron_analyzer.selection.neuron import generate_random_indices
@@ -18,6 +18,8 @@ logger = logging.getLogger(__name__)
 
 
 class WeightGeometricAnalyzer:
+    """Analyzer for geometric properties of weight vectors in neural networks."""
+
     def __init__(
         self,
         model,
@@ -27,7 +29,17 @@ class WeightGeometricAnalyzer:
         excluded_neuron_indices: list[int] = None,
         num_random_groups: int = 2,
     ):
-        """Initialize with model and neuron groups."""
+        """Initialize with model and neuron groups.
+
+        Args:
+            model: The neural network model
+            layer_num: Layer number to analyze
+            boost_neuron_indices: Indices of boost neurons
+            suppress_neuron_indices: Indices of suppress neurons
+            excluded_neuron_indices: Additional indices to exclude from random groups
+            num_random_groups: Number of random control groups to create
+
+        """
         self.boost_neuron_indices = boost_neuron_indices
         self.suppress_neuron_indices = suppress_neuron_indices
         self.model = model
@@ -48,8 +60,18 @@ class WeightGeometricAnalyzer:
         for i in range(len(self.random_indices)):
             self.neuron_indices[f"random_{i + 1}"] = self.random_indices[i]
 
-    def _get_common_neurons(self) -> tuple[list[int], list[list[int]]]:
-        """Generate non-overlapping random neuron groups that don't overlap with boost or suppress neurons."""
+        # Initialize results dictionaries
+        self.dimensionality_results: dict = {}
+        self.orthogonality_results: dict = {}
+        self.comparative_results: dict = {}
+
+    def _get_common_neurons(self) -> list[list[int]]:
+        """Generate non-overlapping random neuron groups that don't overlap with boost or suppress neurons.
+
+        Returns:
+            List of lists containing random neuron indices
+
+        """
         # Get layer to determine total neurons
         layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
         layer_dict = dict(self.model.named_modules())
@@ -63,16 +85,24 @@ class WeightGeometricAnalyzer:
         group_size = max(len(self.boost_neuron_indices), len(self.suppress_neuron_indices))
 
         # Define special indices to exclude (boost and suppress)
-        special_indices = set(self.boost_neuron_indices + self.suppress_neuron_indices)
+        special_indices = set(self.boost_neuron_indices + self.suppress_neuron_indices + self.excluded_neuron_indices)
 
-        # Get non-special neurons (those that are neither boost nor suppress)
+        # Get random indices using the helper function
         random_indices = generate_random_indices(
             all_neuron_indices, special_indices, group_size, self.num_random_groups
         )
         return random_indices
 
     def extract_neuron_weights(self, neuron_indices: list[int]) -> np.ndarray:
-        """Extract weight vectors for specified neurons in a layer."""
+        """Extract weight vectors for specified neurons in a layer.
+
+        Args:
+            neuron_indices: Indices of neurons to extract weights for
+
+        Returns:
+            Array of weight vectors for the specified neurons
+
+        """
         layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
         layer_dict = dict(self.model.named_modules())
         layer = layer_dict[layer_path]
@@ -88,7 +118,16 @@ class WeightGeometricAnalyzer:
         return W_neurons
 
     def _safe_ttest(self, value: float, comparison_values: list[float]) -> tuple[float, float, bool, str]:
-        """Safely perform a t-test handling edge cases and potential errors."""
+        """Safely perform a t-test handling edge cases and potential errors.
+
+        Args:
+            value: Single value for comparison
+            comparison_values: List of values to compare against
+
+        Returns:
+            Tuple containing t-statistic, p-value, significance flag, and comparison direction
+
+        """
         if not comparison_values:
             return 0.0, 1.0, False, "unknown"
 
@@ -118,7 +157,15 @@ class WeightGeometricAnalyzer:
             return 0.0, 1.0, False, "unknown"
 
     def analyze_dimensionality(self, variance_threshold: float = 0.95) -> dict:
-        """Analyze the dimensionality of each neuron group's weight space."""
+        """Analyze the dimensionality of each neuron group's weight space.
+
+        Args:
+            variance_threshold: Threshold for explained variance to determine effective dimensionality
+
+        Returns:
+            Dictionary containing dimensionality analysis results
+
+        """
         results = {}
 
         # Analyze each neuron group
@@ -201,199 +248,168 @@ class WeightGeometricAnalyzer:
         self.dimensionality_results = results
         return results
 
-    def _calculate_orthogonality_metrics(self, Vh: np.ndarray, dim: int) -> dict:
-        """Calculate orthogonality metrics within a single group's subspace."""
-        if Vh is None or dim <= 1:
+    def compute_cosine_similarity(self, vec1: np.ndarray, vec2: np.ndarray) -> float:
+        """Compute cosine similarity between two vectors.
+
+        Args:
+            vec1: First vector
+            vec2: Second vector
+
+        Returns:
+            Cosine similarity value (-1 to 1)
+
+        """
+        # Handle zero vectors
+        if np.all(vec1 == 0) or np.all(vec2 == 0):
+            return 0.0
+
+        # Calculate cosine similarity (1 - cosine distance)
+        return 1 - cosine(vec1, vec2)
+
+    def vector_angle_degrees(self, cosine_similarity: float) -> float:
+        """Convert cosine similarity to angle in degrees.
+
+        Args:
+            cosine_similarity: Cosine similarity value (-1 to 1)
+
+        Returns:
+            Angle in degrees (0 to 180)
+
+        """
+        # Clip to handle floating point precision issues
+        sim_clipped = np.clip(cosine_similarity, -1.0, 1.0)
+        return np.degrees(np.arccos(sim_clipped))
+
+    def _calculate_orthogonality_metrics(self, weight_vectors: np.ndarray) -> dict:
+        """Calculate comprehensive orthogonality metrics within a group of weight vectors.
+
+        Args:
+            weight_vectors: Array of weight vectors [n_neurons, n_features]
+
+        Returns:
+            Dictionary containing orthogonality metrics
+
+        """
+        n_vectors = weight_vectors.shape[0]
+        if n_vectors <= 1:
             return {
+                "mean_cosine_similarity": 0.0,
+                "median_cosine_similarity": 0.0,
+                "max_cosine_similarity": 0.0,
+                "min_cosine_similarity": 0.0,
+                "angle_distribution": [],
                 "mean_angle_degrees": 0.0,
-                "median_angle_degrees": 0.0,
-                "min_angle_degrees": 0.0,
-                "max_angle_degrees": 0.0,
                 "pct_near_orthogonal": 0.0,
-                "is_self_pair": True,
             }
 
-        # Make sure we don't exceed available dimensions
-        dim = min(dim, Vh.shape[0])
+        # Calculate all pairwise cosine similarities and angles
+        cosine_similarities = []
+        angles = []
 
-        # Use effective dimensions to define the subspace
-        V = Vh[:dim].T  # Column vectors spanning the subspace
+        for i in range(n_vectors):
+            for j in range(i + 1, n_vectors):
+                cos_sim = self.compute_cosine_similarity(weight_vectors[i], weight_vectors[j])
+                cosine_similarities.append(cos_sim)
+                angles.append(self.vector_angle_degrees(cos_sim))
 
-        # Calculate angles between all pairs of basis vectors within the subspace
-        full_angles_degrees = []
-
-        for i in range(V.shape[1]):
-            v1 = V[:, i]
-            v1_norm = np.linalg.norm(v1)
-
-            for j in range(i + 1, V.shape[1]):  # Only need upper triangle
-                v2 = V[:, j]
-                v2_norm = np.linalg.norm(v2)
-
-                # Avoid division by zero
-                if v1_norm > 0 and v2_norm > 0:
-                    # Calculate dot product
-                    dot_product = np.dot(v1, v2) / (v1_norm * v2_norm)
-                    # Clamp to avoid numerical errors
-                    dot_product = max(min(dot_product, 1.0), -1.0)
-                    # Calculate angle in degrees
-                    angle_degrees = np.degrees(np.arccos(dot_product))
-                    full_angles_degrees.append(angle_degrees)
-
-        if not full_angles_degrees:
-            return {
-                "mean_angle_degrees": 0.0,
-                "median_angle_degrees": 0.0,
-                "min_angle_degrees": 0.0,
-                "max_angle_degrees": 0.0,
-                "pct_near_orthogonal": 0.0,
-                "is_self_pair": True,
-            }
-
-        full_angles_degrees = np.array(full_angles_degrees)
+        # Convert to numpy arrays for easier calculations
+        cosine_similarities = np.array(cosine_similarities)
+        angles = np.array(angles)
 
         # Calculate metrics
         result = {
-            "mean_angle_degrees": float(np.mean(full_angles_degrees)),
-            "median_angle_degrees": float(np.median(full_angles_degrees)),
-            "min_angle_degrees": float(np.min(full_angles_degrees)),
-            "max_angle_degrees": float(np.max(full_angles_degrees)),
-            "pct_near_orthogonal": float(((full_angles_degrees >= 80) & (full_angles_degrees <= 100)).mean() * 100),
-            "pct_obtuse_angles": float((full_angles_degrees > 90).mean() * 100),
-            "pct_acute_angles": float((full_angles_degrees < 90).mean() * 100),
-            "is_self_pair": True,
+            "mean_cosine_similarity": float(np.mean(cosine_similarities)),
+            "median_cosine_similarity": float(np.median(cosine_similarities)),
+            "max_cosine_similarity": float(np.max(cosine_similarities)),
+            "min_cosine_similarity": float(np.min(cosine_similarities)),
+            "angle_distribution": angles.tolist(),
+            "mean_angle_degrees": float(np.mean(angles)),
+            "pct_near_orthogonal": float(((angles >= 80) & (angles <= 100)).mean()),
         }
 
         return result
 
     def _calculate_between_orthogonality_metrics(
-        self, Vh_1: np.ndarray, Vh_2: np.ndarray, dim_1: int, dim_2: int
+        self, weight_vectors_1: np.ndarray, weight_vectors_2: np.ndarray
     ) -> dict:
-        """Calculate orthogonality metrics between two different groups of neurons."""
-        if Vh_1 is None or Vh_2 is None:
+        """Calculate orthogonality metrics between two groups of weight vectors.
+
+        Args:
+            weight_vectors_1: Array of weight vectors for first group [n1_neurons, n_features]
+            weight_vectors_2: Array of weight vectors for second group [n2_neurons, n_features]
+
+        Returns:
+            Dictionary containing cross-group orthogonality metrics
+
+        """
+        if weight_vectors_1.shape[0] == 0 or weight_vectors_2.shape[0] == 0:
             return {
+                "mean_cross_cosine_similarity": 0.0,
+                "median_cross_cosine_similarity": 0.0,
+                "max_cross_cosine_similarity": 0.0,
+                "min_cross_cosine_similarity": 0.0,
+                "cross_angle_distribution": [],
                 "mean_cross_angle_degrees": 0.0,
-                "median_cross_angle_degrees": 0.0,
-                "min_cross_angle_degrees": 0.0,
-                "max_cross_angle_degrees": 0.0,
                 "pct_cross_near_orthogonal": 0.0,
             }
 
-        # Make sure we don't exceed available dimensions
-        dim_1 = min(dim_1, Vh_1.shape[0])
-        dim_2 = min(dim_2, Vh_2.shape[0])
+        # Calculate all pairwise cosine similarities and angles between the groups
+        cross_cosine_similarities = []
+        cross_angles = []
 
-        # Use effective dimensions to define subspaces
-        V_1 = Vh_1[:dim_1].T  # Column vectors spanning subspace 1
-        V_2 = Vh_2[:dim_2].T  # Column vectors spanning subspace 2
+        for i in range(weight_vectors_1.shape[0]):
+            for j in range(weight_vectors_2.shape[0]):
+                cos_sim = self.compute_cosine_similarity(weight_vectors_1[i], weight_vectors_2[j])
+                cross_cosine_similarities.append(cos_sim)
+                cross_angles.append(self.vector_angle_degrees(cos_sim))
 
-        # Compute principal angles between subspaces (these are always ≤ 90°)
-        try:
-            principal_angles = subspace_angles(V_1, V_2)
-            principal_angles_degrees = np.degrees(principal_angles)
-        except Exception as e:
-            print(f"Error calculating subspace angles: {e}")
-            principal_angles_degrees = np.array([])
-
-        # Calculate full directional angles between all pairs of basis vectors
-        full_angles_degrees = []
-
-        for i in range(V_1.shape[1]):
-            v1 = V_1[:, i]
-            v1_norm = np.linalg.norm(v1)
-
-            for j in range(V_2.shape[1]):
-                v2 = V_2[:, j]
-                v2_norm = np.linalg.norm(v2)
-
-                # Avoid division by zero
-                if v1_norm > 0 and v2_norm > 0:
-                    # Calculate dot product
-                    dot_product = np.dot(v1, v2) / (v1_norm * v2_norm)
-                    # Clamp to avoid numerical errors
-                    dot_product = max(min(dot_product, 1.0), -1.0)
-                    # Calculate angle in degrees
-                    angle_degrees = np.degrees(np.arccos(dot_product))
-                    full_angles_degrees.append(angle_degrees)
-
-        if not full_angles_degrees:
-            return {
-                "mean_cross_angle_degrees": 0.0,
-                "median_cross_angle_degrees": 0.0,
-                "min_cross_angle_degrees": 0.0,
-                "max_cross_angle_degrees": 0.0,
-                "pct_cross_near_orthogonal": 0.0,
-            }
-
-        full_angles_degrees = np.array(full_angles_degrees)
+        # Convert to numpy arrays
+        cross_cosine_similarities = np.array(cross_cosine_similarities)
+        cross_angles = np.array(cross_angles)
 
         # Calculate metrics
         result = {
-            # Principal angles metrics (if available)
-            "principal_mean_angle_degrees": float(np.mean(principal_angles_degrees))
-            if len(principal_angles_degrees) > 0
-            else 0.0,
-            "principal_median_angle_degrees": float(np.median(principal_angles_degrees))
-            if len(principal_angles_degrees) > 0
-            else 0.0,
-            "principal_min_angle_degrees": float(np.min(principal_angles_degrees))
-            if len(principal_angles_degrees) > 0
-            else 0.0,
-            "principal_max_angle_degrees": float(np.max(principal_angles_degrees))
-            if len(principal_angles_degrees) > 0
-            else 0.0,
-            # Full directional angles
-            "mean_cross_angle_degrees": float(np.mean(full_angles_degrees)),
-            "median_cross_angle_degrees": float(np.median(full_angles_degrees)),
-            "min_cross_angle_degrees": float(np.min(full_angles_degrees)),
-            "max_cross_angle_degrees": float(np.max(full_angles_degrees)),
-            # Percentage of angles in different ranges
-            "pct_cross_near_orthogonal": float(
-                ((full_angles_degrees >= 80) & (full_angles_degrees <= 100)).mean() * 100
-            ),
-            "pct_cross_obtuse_angles": float((full_angles_degrees > 90).mean() * 100),
-            "pct_cross_acute_angles": float((full_angles_degrees < 90).mean() * 100),
-            # Flag for pair type
-            "is_self_pair": False,
+            "mean_cross_cosine_similarity": float(np.mean(cross_cosine_similarities)),
+            "median_cross_cosine_similarity": float(np.median(cross_cosine_similarities)),
+            "max_cross_cosine_similarity": float(np.max(cross_cosine_similarities)),
+            "min_cross_cosine_similarity": float(np.min(cross_cosine_similarities)),
+            "cross_angle_distribution": cross_angles.tolist(),
+            "mean_cross_angle_degrees": float(np.mean(cross_angles)),
+            "pct_cross_near_orthogonal": float(((cross_angles >= 80) & (cross_angles <= 100)).mean()),
         }
 
         return result
 
     def analyze_orthogonality(self) -> dict:
-        """Analyze orthogonality within and between neuron groups."""
+        """Analyze orthogonality within and between neuron groups.
+
+        Returns:
+            Dictionary containing orthogonality analysis results
+
+        """
         results = {"within": {}, "between": {}}
 
-        # Within-group orthogonality
-        for group_name, result in self.dimensionality_results.items():
-            if group_name in self.neuron_indices:  # Skip comparison results like "boost_vs_random_1"
-                Vh = result.get("right_singular_vectors")
-                effective_dim = result.get("effective_dim")
+        # Extract weights for all groups first
+        group_weights = {}
+        for group_name, indices in self.neuron_indices.items():
+            group_weights[group_name] = self.extract_neuron_weights(indices)
 
-                if Vh is not None and effective_dim is not None:
-                    results["within"][group_name] = self._calculate_orthogonality_metrics(Vh, effective_dim)
+        # Within-group orthogonality
+        for group_name, weight_vectors in group_weights.items():
+            results["within"][group_name] = self._calculate_orthogonality_metrics(weight_vectors)
 
         # Between-group orthogonality
         # Define the pairs to analyze
         pairs = [("boost", "random_1"), ("suppress", "random_1"), ("boost", "suppress"), ("random_1", "random_2")]
 
         for group1, group2 in pairs:
-            if (
-                group1 in self.dimensionality_results
-                and group2 in self.dimensionality_results
-                and "right_singular_vectors" in self.dimensionality_results[group1]
-                and "right_singular_vectors" in self.dimensionality_results[group2]
-            ):
-                Vh_1 = self.dimensionality_results[group1]["right_singular_vectors"]
-                Vh_2 = self.dimensionality_results[group2]["right_singular_vectors"]
-                dim_1 = self.dimensionality_results[group1]["effective_dim"]
-                dim_2 = self.dimensionality_results[group2]["effective_dim"]
-
-                results["between"][f"{group1}_vs_{group2}"] = self._calculate_between_orthogonality_metrics(
-                    Vh_1, Vh_2, dim_1, dim_2
+            if group1 in group_weights and group2 in group_weights:
+                pair_name = f"{group1}_vs_{group2}"
+                results["between"][pair_name] = self._calculate_between_orthogonality_metrics(
+                    group_weights[group1], group_weights[group2]
                 )
 
-        # Statistical comparisons
-        # Compare within-group metrics
+        # Statistical comparisons for within-group metrics
         comparisons = [("boost", "random_1"), ("suppress", "random_1"), ("boost", "suppress"), ("random_1", "random_2")]
 
         statistical_results = {}
@@ -430,7 +446,15 @@ class WeightGeometricAnalyzer:
         return results
 
     def _filter_large_arrays(self, results: dict) -> dict:
-        """Filter out large arrays from results dict to make it more manageable."""
+        """Filter out large arrays from results dict to make it more manageable.
+
+        Args:
+            results: Dictionary containing analysis results
+
+        Returns:
+            Filtered dictionary with large arrays removed
+
+        """
         if isinstance(results, dict):
             filtered = {}
             for k, v in results.items():
@@ -446,7 +470,12 @@ class WeightGeometricAnalyzer:
         return results
 
     def run_all_analyses(self) -> dict:
-        """Run all geometric analyses and compile comprehensive results."""
+        """Run all geometric analyses and compile comprehensive results.
+
+        Returns:
+            Dictionary containing all analysis results
+
+        """
         dimensionality_results = self.analyze_dimensionality()
         orthogonality_results = self.analyze_orthogonality()
 

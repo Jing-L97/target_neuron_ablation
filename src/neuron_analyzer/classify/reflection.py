@@ -288,6 +288,7 @@ class SVMHyperplaneReflector:
         dist, reflected = self._compute_distance()
         results["reflected_loss"] = reflected_loss
         results["delta_losses"] = loss_change
+        results["abs_delta_losses"] = np.abs(loss_change)
         results["distances_to_hyperplane"] = dist
         results["reflected_activations"] = reflected
         results["original_loss"] = original_loss

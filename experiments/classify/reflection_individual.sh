@@ -3,8 +3,8 @@
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=8
-#SBATCH --mem=70G
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=40G
 #SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/classify/ind_ref_%a.log
 #SBATCH --array=0-5 # Updated to match total combinations
