@@ -1,23 +1,25 @@
 #!/bin/bash
-#SBATCH --job-name=ind_410
+#SBATCH --job-name=classify_500
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
 #SBATCH --mem=40G
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/classify/ind_410_%a.log
-#SBATCH --array=0-23 # Updated to match total combinations including index_type
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/classify/classify_500_%a.log
+#SBATCH --array=0-35 # Updated to match total combinations including index_type
 
 # Script root path
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/classify"
 GROUP_TYPE="individual"
 LABEL_TYPE="fixed"
-
+FEA_DIM=500
 # Define configuration arrays
 MODELS=(
+"EleutherAI/pythia-70m-deduped"
 "EleutherAI/pythia-410m-deduped"
 )
 INDEX_TYPES=(
+"baseline"
 "random"
 "extreme"
 )
@@ -69,6 +71,7 @@ python "$SCRIPT_ROOT/train.py" \
     --group_type "$GROUP_TYPE" \
     --label_type "$LABEL_TYPE" \
     --class_num "$CLASS_NUM" \
+    --fea_dim "$FEA_DIM" \
     --resume \
     --top_n "$TOP_N" \
     --index_type "$INDEX_TYPE"

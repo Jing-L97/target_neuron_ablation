@@ -83,7 +83,7 @@ def parse_args() -> argparse.Namespace:
         help="the index type labels",
     )
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
-    parser.add_argument("--fea_dim", type=int, default=50, help="Number of tokens as the activation feature")
+    parser.add_argument("--fea_dim", type=int, default=500, help="Number of tokens as the activation feature")
     parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
     parser.add_argument("--resume", action="store_true", help="Whether to resume from exisitng file")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
@@ -103,11 +103,13 @@ def parse_args() -> argparse.Namespace:
 def configure_path(args):
     """Configure save path based on the setting."""
     save_heuristic = f"{args.heuristic}_med" if args.sel_by_med else args.heuristic
-    data_path = settings.PATH.classify_dir / "data" / args.sel_freq / args.model / save_heuristic
-    model_path = settings.PATH.classify_dir / "model" / args.sel_freq / args.model / save_heuristic
-    eval_path = settings.PATH.classify_dir / "eval" / args.sel_freq / args.model / save_heuristic
+    path_suffix = Path(args.sel_freq) / args.model / str(args.fea_dim)
+    data_path = settings.PATH.classify_dir / "data" / path_suffix
+    model_path = settings.PATH.classify_dir / "model" / path_suffix
+    eval_path = settings.PATH.classify_dir / "eval" / path_suffix
     feather_path = settings.PATH.result_dir / "ablations" / "mean" / args.model
     entropy_path = settings.PATH.result_dir / "ablations" / "longtail_50" / args.model
+    data_path.mkdir(parents=True, exist_ok=True)
     model_path.mkdir(parents=True, exist_ok=True)
     eval_path.mkdir(parents=True, exist_ok=True)
     return data_path, model_path, eval_path, feather_path, entropy_path
