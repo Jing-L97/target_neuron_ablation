@@ -208,10 +208,11 @@ class NeuronLoader:
         # Extract the decimal part as integer; Converts '5.2021' format to 2021.
         neurons = [self.parse_neurons(str(neuron)) for neuron in float_neurons]
         # Limit to top_n if requested
-        # if self.top_n > 0 and len(neurons) > self.top_n:
+        if self.top_n > 0 and len(neurons) > self.top_n:
+            neurons = neurons[: self.top_n]
         if self.top_n < 0:
-            raise ValueError("The neuron number must be non-negative")
-        neurons = neurons[: self.top_n]
+            logger.info("Selecting all neurons")
+
         # Get layer number from the first neuron (assuming all neurons are from the same layer)
         layer_num = int(str(float(float_neurons[0])).split(".")[0])
         return neurons, layer_num

@@ -1,18 +1,18 @@
 #!/bin/bash
-#SBATCH --job-name=ind_exp
+#SBATCH --job-name=ind_random
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
 #SBATCH --mem=40G
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=4
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/classify/ind_exp_%a.log
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/classify/ind_random_%a.log
 #SBATCH --array=0-11 # Updated to match total combinations
 
 # Script root path
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/classify"
 GROUP_TYPE="individual"
 LABEL_TYPE="fixed"
-
+INDEX_TYPE="random"
 
 # Define configuration arrays
 MODELS=(
@@ -67,6 +67,7 @@ python "$SCRIPT_ROOT/train.py" \
     --label_type "$LABEL_TYPE" \
     --class_num "$CLASS_NUM" \
     --resume \
-    --top_n "$TOP_N" 
+    --top_n "$TOP_N" \
+    --index_type "$INDEX_TYPE"
 
 echo "Analysis complete for configuration: Model=$MODEL, Class_Num=$CLASS_NUM, Top_N=$TOP_N"

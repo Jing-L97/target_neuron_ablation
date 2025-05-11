@@ -57,7 +57,7 @@ class NeuronClassifier:
         neuron_indices: list[str],
         model_path: Path,
         eval_path: Path,
-        run_baseline: bool = True,
+        index_type: str,
         resume: bool = True,
         class_num: int = 2,
         test_size: float = 0.2,
@@ -73,7 +73,7 @@ class NeuronClassifier:
         self.model_path = model_path
         self.eval_path = eval_path
         self.resume = resume
-        self.run_baseline = run_baseline
+        self.index_type = index_type
         self.model_path.mkdir(parents=True, exist_ok=True)
         self.eval_path.mkdir(parents=True, exist_ok=True)
         # Transform labels if using two-class mode
@@ -779,11 +779,11 @@ class NeuronClassifier:
 
         # Save models
         for name, clf in self.classifiers.items():
-            modelname = f"{name}_baseline.joblib" if self.run_baseline else f"{name}.joblib"
+            modelname = f"{name}_{self.index_type}.joblib"
             joblib.dump(clf, self.model_path / modelname)
         logger.info(f"Models saved to {self.model_path}")
 
         # Save results as JSON
-        filename = "classification_baseline.json" if self.run_baseline else "classification.json"
+        filename = f"classification_{self.index_type}.json"
         JsonProcessor.save_json(results_copy, self.eval_path / filename)
         logger.info(f"Results saved to {self.eval_path}")

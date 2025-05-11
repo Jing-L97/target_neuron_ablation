@@ -238,10 +238,3 @@ def generate_random_indices(
                 # If we don't have enough neurons, just use what's left
                 random_indices.append(non_special_indices[start_idx:])
     return random_indices
-
-
-def get_neutral_neuron_indices(neuron_df:pd.DataFrame,step:str,top_n:int) -> list[int]:
-    """Extract neuron indices that are least sensitive to the delta loss."""
-    # load file
-    neuron_df[]
-    return non_special_indices

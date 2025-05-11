@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
+import pandas as pd
 
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.freq import UnigramAnalyzer
@@ -21,6 +22,7 @@ from neuron_analyzer.classify.preprocess import (
     get_threshold,
 )
 from neuron_analyzer.load_util import StepPathProcessor, load_unigram
+from neuron_analyzer.model_util import NeuronLoader
 from neuron_analyzer.selection.neuron import generate_random_indices
 
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # Only show errors, not warnings
@@ -73,7 +75,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--load_stat", type=bool, default=True, help="Whether to load from existing index")
     parser.add_argument("--exclude_random", type=bool, default=True, help="Include all neuron indices if set True")
-    parser.add_argument("--index_type", type=str, choices=["baseline", "extreme","random"], help="the index type labels")
+    parser.add_argument(
+        "--index_type",
+        type=str,
+        default="extreme",
+        choices=["baseline", "extreme", "random"],
+        help="the index type labels",
+    )
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--fea_dim", type=int, default=50, help="Number of tokens as the activation feature")
     parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
@@ -126,27 +134,30 @@ class Trainer:
         self.step_dirs = step_dirs
         self.feather_path = feather_path
         self.entropy_path = entropy_path
-        self.run_baseline=True if self.args.index_type.split("_")[1] == "baseline" else False
+        self.run_baseline = True if self.args.index_type == "baseline" else False
 
     def run_pipeline(self) -> dict[str, Any]:
         """Extract optimal threshold across multiple steps and run classification."""
         threshold = self._load_threshold()
         classification_condition = self._get_classification_condition()
+        # load neuron index file if needed
+        if self.args.index_type == "extreme":
+            self.neuron_file = self._load_neuron_file()
 
         for step in self.step_dirs:
-            try:
-                # Load data
-                logger.info("----------Stage 1: Loading training data---------------------------")
-                X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
-                # configure the save path
-                step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
-                # Train classifier
-                logger.info("----------Stage 2: Training data for hyperplanes-------------------")
-                _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
-                logger.info(f"############################################ Finished step {step[1]}")
+            # try:
+            # Load data
+            logger.info("----------Stage 1: Loading training data---------------------------")
+            X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
+            # configure the save path
+            step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
+            # Train classifier
+            logger.info("----------Stage 2: Training data for hyperplanes-------------------")
+            _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
+            logger.info(f"############################################ Finished step {step[1]}")
 
-            except Exception as e:
-                logger.info(f"Error processing step {step[1]}: {e!s}")
+        # except Exception as e:
+        # logger.info(f"Error processing step {step[1]}: {e!s}")
 
     def _load_data(
         self, step: tuple[str, str], threshold: float | None, classification_condition: str
@@ -166,7 +177,7 @@ class Trainer:
             fixed_labeler = FixedLabeler(
                 data=data,
                 run_baseline=self.run_baseline,
-                class_indices=self._load_neuron_indices(data=data, step_path=step[0]),
+                class_indices=self._load_neuron_indices(data=data, step_path=step[0], step=step[1]),
             )
             fea, labels, neuron_indices = fixed_labeler.run_pipeline()
         else:
@@ -175,10 +186,11 @@ class Trainer:
         # Integrate features and labels
         logger.info("--Step 3: Building dataset for training")
         filename = (
-            f"data_{classification_condition}_baseline.json"
-            if self.run_baseline
+            f"data_{classification_condition}_{self.args.index_type}.json"
+            if self.args.label_type == "fixed"
             else f"data_{classification_condition}.json"
         )
+
         data_loader = DataLoader(
             X=fea,
             y=labels,
@@ -199,7 +211,11 @@ class Trainer:
     ) -> dict[str, Any]:
         """Train and evaluate classifier from single step."""
         # configure save path
-        filename = "separation_analysis_baseline.json" if self.run_baseline else "separation_analysis.json"
+        filename = (
+            f"separation_analysis_{self.args.index_type}.json"
+            if self.args.label_type == "fixed"
+            else "separation_analysis.json"
+        )
         # Train and evaluate the classifiers
         classifier = NeuronClassifier(
             X=X,
@@ -209,7 +225,7 @@ class Trainer:
             neuron_indices=neuron_indices,
             class_num=self.args.class_num,
             test_size=0.2,
-            run_baseline=self.run_baseline,
+            index_type=self.args.index_type,
         )
         classifier_results = classifier.run_pipeline()
 
@@ -223,16 +239,18 @@ class Trainer:
 
         return summary
 
-    def _load_neuron_indices(self, data: dict, step_path: str) -> dict[str, list[int]]:
+    def _load_neuron_indices(self, data: dict, step_path: str, step: str) -> dict[str, list[int]]:
         """Load neuron indices from the existing file."""
         neuron_analyzer = NeuronGroupAnalyzer(args=self.args, device="cpu", step_path=step_path)
         boost_neuron_indices, suppress_neuron_indices, random_indices = neuron_analyzer.load_neurons()
         group_size = max(len(boost_neuron_indices), len(suppress_neuron_indices))
         special_indices = set(boost_neuron_indices + suppress_neuron_indices + random_indices)
-        
-        if 
-        
-        if self.run_baseline:
+
+        if self.args.index_type == "extreme":
+            baseline_indices = self._load_extreme_neurons(step)
+            return {"boost": boost_neuron_indices, "suppress": suppress_neuron_indices, "random": baseline_indices}
+
+        if self.args.index_type == "baseline":
             baseline_indices = generate_random_indices(
                 all_neuron_indices=data["neuron_features"].keys(),
                 special_indices=special_indices,
@@ -257,7 +275,7 @@ class Trainer:
         )
         # initilize the selector class
         data_path = self.data_path / str(step[1]) / str(self.args.data_range_end) / "features.json"
-
+        logger.info(f"Target data path is {data_path}")
         if data_path.is_file() and self.args.resume:
             logger.info(f"--Step 1: Resuming feature data from {data_path}")
 
@@ -320,6 +338,31 @@ class Trainer:
             group_name = get_group_name(self.args)
             return step_model_path / group_name, step_eval_path / group_name
         return step_model_path, step_eval_path
+
+    def _load_neuron_file(self) -> pd.DataFrame:
+        """Load neuron file based on different config."""
+        neuron_path = (
+            settings.PATH.result_dir
+            / "selection"
+            / "neuron"
+            / self.args.sel_freq
+            / self.args.model
+            / self.args.heuristic
+            / "boost"
+            / f"{self.args.data_range_end}_all.csv"
+        )
+        logger.info(f"Loading the extreme neuron indices from {neuron_path}.")
+        return pd.read_csv(neuron_path)
+
+    def _load_extreme_neurons(self, step: str) -> list[int]:
+        """Load extreme neurons."""
+        # initilize neuron class
+        neuron_loader = NeuronLoader(top_n=-1)
+        frame = self.neuron_file[self.neuron_file["step"] == int(step)]
+        # convert neuron index format
+        neuron_value = frame.head(1)["top_neurons"].item()
+        special_neuron_indices, _ = neuron_loader.extract_neurons(neuron_value)
+        return special_neuron_indices[(len(special_neuron_indices) - 2 * (self.args.top_n)) :]
 
 
 #######################################################################################################
