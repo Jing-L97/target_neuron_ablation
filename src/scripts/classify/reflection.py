@@ -47,6 +47,13 @@ def parse_args() -> argparse.Namespace:
         default=2,
         help="how many classes to classify",
     )
+    parser.add_argument(
+        "--index_type",
+        type=str,
+        default="extreme",
+        choices=["baseline", "extreme", "random"],
+        help="the index type labels",
+    )
     parser.add_argument("--load_stat", type=bool, default=True, help="Whether to load from existing index")
     parser.add_argument("--exclude_random", type=bool, default=True, help="Include all neuron indices if set True")
     parser.add_argument("--run_baseline", action="store_true", help="Whether to run baseline models")
@@ -117,7 +124,7 @@ class ReflectionAnalyzer:
                 )
                 # load svm model
                 self.normal_vector, self.intercept, self.normal_unit, self.hyperplane_point = load_svm_model(
-                    step_model_path / f"{self.args.classifier_type}.joblib"
+                    step_model_path / f"{self.args.classifier_type}_{self.args.index_type}.joblib"
                 )
                 # loop over neurons
                 result_df = pd.DataFrame()
@@ -131,8 +138,9 @@ class ReflectionAnalyzer:
                 # compute stat
                 stat = self._compute_stat(result_df, losses)
                 # save the results to the eval results
-                result_df.to_csv(step_eval_path / "reflection.csv")
-                JsonProcessor.save_json(stat, step_eval_path / "reflection_stat.json")
+                file_prefix = f"ref_{self.args.classifier_type}_{self.args.index_type}"
+                result_df.to_csv(step_eval_path / f"{file_prefix}.csv")
+                JsonProcessor.save_json(stat, step_eval_path / f"{file_prefix}.json")
                 logger.info(f"Save the result df to {step_eval_path}")
 
             except Exception as e:
@@ -168,7 +176,7 @@ class ReflectionAnalyzer:
     def _load_data(self, step_data_path: Path) -> tuple[np.ndarray, np.ndarray, list[str]]:
         """Load and prepare data for reflection test."""
         # Load neuron indices and activations
-        data = JsonProcessor.load_json(step_data_path / f"data_{self.args.top_n}.json")
+        data = JsonProcessor.load_json(step_data_path / f"data_{self.args.top_n}_{self.args.index_type}.json")
         neurons, activation_lst, label_lst = data["neuron_indices"], data["X"], data["y"]
         # load input strings
         df = pd.read_feather(step_data_path / "entropy_df.feather")

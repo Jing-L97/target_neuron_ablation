@@ -145,19 +145,19 @@ class Trainer:
             self.neuron_file = self._load_neuron_file()
 
         for step in self.step_dirs:
-            # try:
-            # Load data
-            logger.info("----------Stage 1: Loading training data---------------------------")
-            X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
-            # configure the save path
-            step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
-            # Train classifier
-            logger.info("----------Stage 2: Training data for hyperplanes-------------------")
-            _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
-            logger.info(f"############################################ Finished step {step[1]}")
+            try:
+                # Load data
+                logger.info("----------Stage 1: Loading training data---------------------------")
+                X, y, neuron_indices = self._load_data(step, threshold, classification_condition)
+                # configure the save path
+                step_model_path, step_eval_path = self._configure_save_path(step, classification_condition)
+                # Train classifier
+                logger.info("----------Stage 2: Training data for hyperplanes-------------------")
+                _ = self._classify_neuron(X, y, neuron_indices, step_model_path, step_eval_path)
+                logger.info(f"############################################ Finished step {step[1]}")
 
-        # except Exception as e:
-        # logger.info(f"Error processing step {step[1]}: {e!s}")
+            except Exception as e:
+                logger.info(f"Error processing step {step[1]}: {e!s}")
 
     def _load_data(
         self, step: tuple[str, str], threshold: float | None, classification_condition: str
