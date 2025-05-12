@@ -772,7 +772,8 @@ def tl_name_to_hf_name(model_name):
     return hf_model_name
 
 
-def load_model_from_tl_name1(model_name, device="cuda", cache_dir=None, hf_token=None):
+def load_model_from_tl_name_single(model_name, device="cuda", cache_dir=None, hf_token=None):
+    """Load single models from transformer lens."""
     hf_model_name = tl_name_to_hf_name(model_name)
 
     # loading tokenizer
@@ -802,7 +803,7 @@ def load_model_from_tl_name1(model_name, device="cuda", cache_dir=None, hf_token
     return model, tokenizer
 
 
-def load_model_from_tl_name(
+def load_pythia_steps(
     model_name, device="cuda", step=None, cache_dir=None, hf_token=None
 ) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:
     """Load model and tokenizer for a specific step."""
@@ -825,6 +826,14 @@ def load_model_from_tl_name(
         logger.info(f"import hooked model from {cache_dir}/{model_name}/step{step}")
         return model, tokenizer
     return None
+
+
+def load_model_from_tl_name(model_name, device="cuda", step=None, cache_dir=None, hf_token=None):
+    """Load models for for ablation experiments."""
+    if "pythia" in model_name.lower():
+        return load_pythia_steps(model_name, device=device, step=step, cache_dir=cache_dir, hf_token=hf_token)
+
+    return load_model_from_tl_name_single(model_name, device=device, cache_dir=cache_dir, hf_token=hf_token)
 
 
 # Induction functions

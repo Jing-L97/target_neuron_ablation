@@ -1,14 +1,27 @@
+import os
 import sys
 
 sys.path.append("../")
 import logging
 import typing as t
+from pathlib import Path
 from warnings import simplefilter
 
 import numpy as np
 import pandas as pd
 import torch
+from omegaconf import DictConfig
 from transformer_lens import utils
+
+from neuron_analyzer import settings
+from neuron_analyzer.ablation.abl_util import (
+    filter_entropy_activation_df,
+    get_entropy_activation_df,
+)
+from neuron_analyzer.ablation.ablation import ModelAblationAnalyzer
+from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
+from neuron_analyzer.load_util import JsonProcessor
+from neuron_analyzer.model_util import ModelHandler
 
 simplefilter(action="ignore", category=pd.errors.PerformanceWarning)
 
@@ -17,11 +30,184 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 
 # Type variable for generic typing
 T = t.TypeVar("T")
-"""
-Note this is the untested version to tackle the length mismatch between tokenized sequences and entropy df
-compared with the backup verion, this version modifies: 
-process_batch_results; mean_ablate_components
-"""
+
+
+######################################################
+# Configure altogether
+
+
+class NeuronAblationProcessor:
+    """Class to handle neural network ablation processing."""
+
+    def __init__(self, args: DictConfig, device: str, logger: logging.Logger | None = None):
+        """Initialize the ablation processor with configuration."""
+        # Set up logger
+        self.logger = logger or logging.getLogger(__name__)
+
+        # Initialize parameters from args
+        self.args = args
+        self.seed: int = args.seed
+        self.device: str = device
+
+        # Initialize random seeds
+        torch.manual_seed(self.seed)
+        np.random.seed(self.seed)
+        torch.set_grad_enabled(False)
+
+        # Change directory if specified
+        if hasattr(args, "chdir") and args.chdir:
+            os.chdir(args.chdir)
+
+    def get_tail_threshold_stat(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
+        """Calculate threshold for long-tail ablation mode."""
+        if self.args.ablation_mode == "longtail":
+            analyzer = ZipfThresholdAnalyzer(
+                unigram_distrib=unigram_distrib,
+                window_size=self.args.window_size,
+                tail_threshold=self.args.tail_threshold,
+                apply_elbow=self.args.apply_elbow,
+            )
+            longtail_threshold, threshold_stats = analyzer.get_tail_threshold()
+            JsonProcessor.save_json(threshold_stats, save_path / "zipf_threshold_stats.json")
+            self.logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.json")
+            return longtail_threshold
+        # Not in longtail mode, use default threshold
+        return None
+
+    def load_entropy_df(self, step) -> pd.DataFrame:
+        """Load entropy df if needed."""
+        h_path = self._config_entropy_path(step)
+        # load hte exisitng file
+        if h_path.is_file():
+            return pd.read_csv(h_path)
+
+        token_df = get_entropy_activation_df(
+            self.all_neurons,
+            self.tokenized_data,
+            self.token_df,
+            self.model,
+            batch_size=self.args.batch_size,
+            device=self.device,
+            cache_residuals=False,
+            cache_pre_activations=False,
+            compute_kl_from_bu=False,
+            residuals_layer=self.entropy_dim_layer,
+            residuals_dict={},
+        )
+        token_df.to_csv(h_path)
+        return token_df
+
+    def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
+        """Process a single step with the given configuration."""
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        self.logger.info("Finished loading model and tokenizer")
+        # initlize the model handler class
+        model_handler = ModelHandler()
+
+        # Load model and tokenizer for specific step
+        self.model, self.tokenizer = model_handler.load_model_and_tokenizer(
+            step=step,
+            model_name=self.args.model,
+            hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",
+            device=self.device,
+        )
+
+        # Load and process dataset
+        self.tokenized_data, self.token_df = model_handler.tokenize_data(
+            dataset=self.args.dataset,
+            data_range_start=self.args.data_range_start,
+            data_range_end=self.args.data_range_end,
+            seed=self.args.seed,
+            get_df=True,
+        )
+
+        self.logger.info("Finished tokenizing data")
+
+        # Setup neuron indices
+        entropy_neuron_layer = self.model.cfg.n_layers - 1
+        if self.args.neuron_range is not None:
+            start, end = map(int, self.args.neuron_range.split("-"))
+            all_neuron_indices = list(range(start, end))
+        else:
+            all_neuron_indices = list(range(self.model.cfg.d_mlp))
+
+        self.all_neurons = [f"{entropy_neuron_layer}.{i}" for i in all_neuron_indices]
+        self.logger.info("Loaded all the neurons")
+
+        if self.args.dry_run:
+            self.all_neurons = self.all_neurons[:10]
+
+        # Compute entropy and activation for each neuron
+        self.entropy_dim_layer = self.model.cfg.n_layers - 1
+
+        self.entropy_df = self.load_entropy_df(step)
+        self.logger.info("Finished computing all the entropy")
+        if self.args.debug:
+            row_num = 1_000_000
+            self.entropy_df = self.entropy_df.head(row_num)
+            logger.info(f"Enter debugging mode. Apply {row_num} rows.")
+
+        # Ablate the dimensions
+        self.model.set_use_attn_result(False)
+
+        analyzer = ModelAblationAnalyzer(
+            components_to_ablate=self.all_neurons,
+            model=self.model,
+            device=self.device,
+            unigram_distrib=unigram_distrib,
+            tokenized_data=self.tokenized_data,
+            entropy_df=self.entropy_df,
+            k=self.args.k,
+            ablation_mode=self.args.ablation_mode,
+            longtail_threshold=longtail_threshold,
+        )
+
+        results = analyzer.mean_ablate_components()
+        self.logger.info("Finished ablations!")
+        # Process and save results
+        self._save_results(results, self.tokenizer, step, save_path)
+
+    def _save_results(
+        self,
+        results: dict,
+        tokenizer,
+        step: int,
+        save_path: Path,
+    ) -> None:
+        """Process and save ablation results."""
+        final_df = pd.concat(results.values())
+        final_df = filter_entropy_activation_df(
+            final_df.reset_index(), model_name=self.args.model, tokenizer=tokenizer, start_pos=3, end_pos=-1
+        )
+
+        # Save results
+        final_df = final_df.reset_index(drop=True)
+        output_path = save_path / f"k{self.args.k}.feather"
+        final_df.to_feather(output_path)
+        self.logger.info(f"Saved results for step {step} to {output_path}")
+
+    def get_save_dir(self):
+        """Get the savepath based on current configurations."""
+        if self.args.ablation_mode == "longtail" and self.args.apply_elbow:
+            ablation_name = "longtail_elbow"
+        if self.args.ablation_mode == "longtail" and not self.args.apply_elbow:
+            ablation_name = f"longtail_{self.args.tail_threshold}"
+        else:
+            ablation_name = self.args.ablation_mode
+        base_save_dir = settings.PATH.result_dir / self.args.output_dir / ablation_name / self.args.model
+        base_save_dir.mkdir(parents=True, exist_ok=True)
+        return base_save_dir
+
+    def _config_entropy_path(self, step) -> Path:
+        """Configure entorpy df path based on current settings."""
+        path_prefix = settings.PATH.ablation_dir / self.args.ablation_mode / self.args.model
+        if step is None:
+            return path_prefix / str(self.args.data_range_end) / "entropy_df.csv"
+        return path_prefix / str(step) / str(self.args.data_range_end) / "entropy_df.csv"
+
+
+######################################################
+# Run ablation experiments
 
 
 class ModelAblationAnalyzer:

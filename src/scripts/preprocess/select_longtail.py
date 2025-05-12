@@ -130,6 +130,7 @@ class TokenSelector:
         """Get the savepath based on current configurations."""
         ablation_name = "longtail_elbow.csv" if self.apply_elbow else f"longtail_{self.tail_threshold}.csv"
         out_path = settings.PATH.dataset_root / "freq" / self.model / ablation_name
+        out_path.parent.mkdir(parents=True, exist_ok=True)
         word_df.to_csv(out_path)
         logger.info(f"Results saved to {out_path}")
 

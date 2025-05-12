@@ -14,7 +14,6 @@ import torch
 
 from neuron_analyzer.ablation.ablation import NeuronAblationProcessor
 from neuron_analyzer.load_util import load_unigram
-from neuron_analyzer.model_util import StepConfig
 
 T = t.TypeVar("T")
 
@@ -27,17 +26,14 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments for step range."""
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
-    parser.add_argument("--interval", type=int, default=10, help="Checkpoint interval sampling")
     parser.add_argument("--layer_num", type=int, default=1, help="Last n MLP layer")
     parser.add_argument(
         "--config_name",
         type=str,
-        default="config_unigram_ablations_70.yaml",
+        default="config_unigram_ablations_gpt2.yaml",
         help="Name of the configuration file to use",
     )
     parser.add_argument("--config_path", type=str, default="conf", help="Relative dir to config file")
-    parser.add_argument("--start", type=int, default=14, help="Start index of step range")
-    parser.add_argument("--end", type=int, default=142, help="End index of step range")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
@@ -60,34 +56,24 @@ def main():
         hydra_args = hydra.compose(config_name=cli_args.config_name)
         logger.info(f"Using configuration: {cli_args.config_name}")
 
-        # Initialize step configurations
-        steps_config = StepConfig(
-            debug=cli_args.debug,
-            interval=cli_args.interval,
-            start_idx=cli_args.start,
-            end_idx=cli_args.end,
-        )
-        # intialize the process class
         abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
         base_save_dir = abalation_processor.get_save_dir()
         unigram_distrib, _ = load_unigram(model_name=hydra_args.model, device=device)
         longtail_threshold = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
 
         # Process each step in range
-        for step in steps_config.steps:
-            # Create save_path as a directory
-            save_path = base_save_dir / str(step) / str(hydra_args.data_range_end)
-            save_path.mkdir(parents=True, exist_ok=True)
-            # Check for existing files with pattern matching expected output
-            if cli_args.resume and (save_path / f"k{hydra_args.k}.feather").is_file():
-                logger.info(f"Files for step {step} already exist. Skip!")
-                continue
-            logger.info(f"Processing step {step}")
-            try:
-                abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
-            except Exception as e:
-                logger.error(f"Error processing step {step}: {e!s}")
-                continue
+        # Create save_path as a directory
+        save_path = base_save_dir / str(hydra_args.data_range_end)
+        save_path.mkdir(parents=True, exist_ok=True)
+        # Check for existing files with pattern matching expected output
+        if cli_args.resume and (save_path / f"k{hydra_args.k}.feather").is_file():
+            logger.info("Files already exist. Skip!")
+            sys.exit(0)
+
+        else:
+            abalation_processor.process_single_step(
+                step=None, unigram_distrib=unigram_distrib, longtail_threshold=longtail_threshold, save_path=save_path
+            )
 
 
 if __name__ == "__main__":

@@ -258,15 +258,16 @@ class NeuronLoader:
 
 class ModelHandler:
     def load_model_and_tokenizer(
-        self, step: int, model_name: str, hf_token_path: str | Path, device: str
+        self,
+        model_name: str,
+        hf_token_path: str | Path,
+        device: str,
+        step=None,
     ) -> tuple[Any, Any]:
         """Load model and tokenizer for processing."""
         # Load HF token
-        with open(settings.PATH.unigram_dir / hf_token_path) as f:
-            hf_token = f.read()
-
         model, self.tokenizer = load_model_from_tl_name(
-            model_name, device, step=step, cache_dir=settings.PATH.model_dir, hf_token=hf_token
+            model_name, device, step=step, cache_dir=settings.PATH.model_dir, hf_token=None
         )
         self.model = model.to(device)
         self.model.eval()

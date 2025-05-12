@@ -253,20 +253,22 @@ class SVMHyperplaneReflector:
             logger.warning("No valid positions for loss calculation")
             return 0.0
 
-    def compute_loss(self, input_ids, start_pos, end_pos, batch_df=None) -> float:
+    def compute_loss1(self, input_ids, start_pos, end_pos, batch_df=None) -> float:
         """Compute the loss value using the whole batch context."""
         with torch.no_grad():
             # Determine positions to analyze
             if batch_df is not None:
                 positions = sorted(batch_df["pos"].unique())
+                logger.info(f"ALL pos: {positions}")
                 positions = [p for p in positions if start_pos <= p < end_pos]
             else:
                 positions = list(range(start_pos, min(end_pos, input_ids.shape[1] - 1)))
 
+            """
             if not positions:
                 logger.warning("No valid positions for loss calculation")
                 return 0.0
-
+            """
             # Run the model on the full sequence with caching to get full context
             logits, cache = self.model.run_with_cache(input_ids)
 
@@ -381,7 +383,6 @@ class SVMHyperplaneReflector:
         """Compute pos based on the string length."""
         # Find the last occurrence of target_token_ids in input_ids
         target_len = len(target_token_ids)
-
         # Search from the end to find the last occurrence
         last_pos = -1
         for i in range(len(tokenized_input) - target_len + 1):

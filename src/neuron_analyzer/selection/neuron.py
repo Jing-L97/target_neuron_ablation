@@ -180,8 +180,10 @@ class NeuronSelector:
             header_dict = {
                 "component_name": "top_neurons",
                 "delta_loss_post_ablation": "delta_loss_post",
+                "abs_delta_loss_post_ablation": "abs_delta_loss_post_ablation",
                 "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
             }
+
         return self._create_stats_dataframe(ranked_neurons, header_dict)
 
     def _create_stats_dataframe(self, ranked_neurons: pd.DataFrame, header_dict: dict[str, str]) -> pd.DataFrame:

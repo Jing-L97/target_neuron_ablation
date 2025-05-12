@@ -6,7 +6,7 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=70G
 #SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/gorup_rare_%a.log
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/group_rare_%a.log
 #SBATCH --array=0-15
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"

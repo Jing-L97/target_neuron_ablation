@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         "--sel_freq",
         type=str,
         choices=["longtail_50", "common", None],
-        default="common",
+        default="longtail_50",
         help="freq by common or not",
     )
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")

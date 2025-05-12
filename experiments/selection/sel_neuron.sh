@@ -2,16 +2,15 @@
 #SBATCH --job-name=sel_tail
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=10
-#SBATCH --mem=70G
+#SBATCH --cpus-per-task=2
+#SBATCH --mem=20G
 #SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_tail_%a.log
 #SBATCH --array=0-15
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
-SEL_FREQ="longtail_50"
+SEL_FREQ="common"
 # Define the input arrays
 EFFECTS=(
     "suppress"
@@ -20,6 +19,7 @@ EFFECTS=(
 
 VECTORS=(
     "longtail_50"
+    
 )
 
 TOP_NS=(

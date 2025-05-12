@@ -7,7 +7,7 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/classify/ref_%a.log
-#SBATCH --array=0-35 # Updated to match total combinations including all variables
+#SBATCH --array=0-5 # Updated to match total combinations including all variables
 
 # Script root path
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/classify"
@@ -20,9 +20,7 @@ MODELS=(
 "EleutherAI/pythia-410m-deduped"
 )
 INDEX_TYPES=(
-"random"
 "extreme"
-"baseline"
 )
 CLASS_NUMS=(
 2
@@ -34,7 +32,6 @@ TOP_NS=(
 )
 CLASSIFIER_TYPES=(
 "svm_linear"
-"linear_svc"
 )
 
 # Calculate total combinations

@@ -77,13 +77,10 @@ def configure_path(args):
     data_path = settings.PATH.classify_dir / "data" / args.vector / args.model / save_heuristic
     model_path = settings.PATH.classify_dir / "model" / args.vector / args.model / save_heuristic
     eval_path = settings.PATH.classify_dir / "eval" / args.vector / args.model / save_heuristic
+    abl_path = settings.PATH.ablation_dir / "longtail_50" / args.model
     model_path.mkdir(parents=True, exist_ok=True)
     eval_path.mkdir(parents=True, exist_ok=True)
-    return (
-        data_path,
-        model_path,
-        eval_path,
-    )
+    return data_path, model_path, eval_path, abl_path
 
 
 class ReflectionAnalyzer:
@@ -96,6 +93,7 @@ class ReflectionAnalyzer:
         data_path: Path,
         model_path: Path,
         eval_path: Path,
+        abl_path: Path,
         step_dirs: list[tuple[str, str]],
     ):
         """Initialize the pipeline with all necessary parameters."""
@@ -105,6 +103,7 @@ class ReflectionAnalyzer:
         self.model_path = model_path
         self.eval_path = eval_path
         self.step_dirs = step_dirs
+        self.abl_path = abl_path
         self.layer_num = get_last_layer(self.args.model)
 
     def run_pipeline(self) -> dict[str, Any]:
@@ -112,27 +111,25 @@ class ReflectionAnalyzer:
         for step in self.step_dirs:
             try:
                 # configure the save path
-                step_data_path, step_model_path, step_eval_path = self._configure_save_path(step)
+                step_data_path, step_model_path, step_eval_path, step_abl_path = self._configure_save_path(step)
                 # Load data
-                self.neurons, self.activation_lst, self.label_lst, input_string_lst, target_string_lst, losses = (
-                    self._load_data(step_data_path)
-                )
+                self.neurons, self.activation_lst, self.label_lst, losses = self._load_data(step_data_path)
                 # load model and tokenize target strings
-
-                self.model, tokenizer = self._load_model_tokenizer(step[1])
-                """
-                self.input_token_ids_list, self.target_token_ids_list = self._tokenize_strings(
-                    tokenizer, input_string_lst, target_string_lst
+                self.model, _ = self._load_model_tokenizer(step[1])
+                # filter the context df
+                df, df_filtered = self._filter_entropy_df(step_data_path, step_abl_path)
+                # load the tokenized (context) tokens
+                self.input_token_ids_list, self.target_token_ids_list = self._extract_context(df, df_filtered)
+                logger.info(
+                    f"Context num: {len(self.input_token_ids_list)}; token num: {len(self.target_token_ids_list)}"
                 )
-                """
-                self.input_token_ids_list, self.target_token_ids_list = 
                 # load svm model
                 self.normal_vector, self.intercept, self.normal_unit, self.hyperplane_point = load_svm_model(
                     step_model_path / f"{self.args.classifier_type}_{self.args.index_type}.joblib"
                 )
-                # loop over neurons
+                # compute the reflection data
                 result_df = pd.DataFrame()
-                # loop over batch to get the same context
+                # loop over neurons
                 for neuron_idx, _ in enumerate(self.neurons):
                     # loop over string
                     for string_idx, _ in enumerate(self.input_token_ids_list):
@@ -166,7 +163,7 @@ class ReflectionAnalyzer:
         )
         result_row = reflector.run_reflection_analysis(
             tokenized_input=self.input_token_ids_list[string_idx],
-            target_token_ids=self.target_token_ids_list[string_idx],
+            target_token_ids=[self.target_token_ids_list[string_idx]],
         )
         result_row["label"] = self._get_label(self.label_lst[neuron_idx])
         return result_row
@@ -182,17 +179,12 @@ class ReflectionAnalyzer:
         # Load neuron indices and activations
         data = JsonProcessor.load_json(step_data_path / f"data_{self.args.top_n}_{self.args.index_type}.json")
         neurons, activation_lst, label_lst = data["neuron_indices"], data["X"], data["y"]
-        # load input strings
-        df = pd.read_feather(step_data_path / "entropy_df.feather")
-        df = df.head(self.args.fea_dim)
         # load delta losses
         losses = JsonProcessor.load_json(step_data_path / "features.json")
         return (
             neurons,
             activation_lst,
             label_lst,
-            df["context"].to_list(),
-            df["str_tokens"].to_list(),
             losses["delta_losses"],
         )
 
@@ -208,12 +200,6 @@ class ReflectionAnalyzer:
             device=self.device,
         )
         return extractor.load_model_for_step(step)
-
-    def _tokenize_strings(self, tokenizer, input_string_lst: list[str], target_string_lst: list[str]):
-        """Tokenize the target strings and token."""
-        input_token_ids_list = [tokenizer.encode(text, add_special_tokens=False) for text in input_string_lst]
-        target_token_ids_list = [tokenizer.encode(text, add_special_tokens=False) for text in target_string_lst]
-        return input_token_ids_list, target_token_ids_list
 
     def _compute_stat(self, neuron_df: pd.DataFrame, losses: dict) -> dict:
         """Group by different labels."""
@@ -257,45 +243,29 @@ class ReflectionAnalyzer:
         )
         step_model_path = self.model_path / suffix_path
         step_eval_path = self.eval_path / suffix_path
-        step_data_path = self.data_path / str(step[1]) / str(self.args.data_range_end)
-        return step_data_path, step_model_path, step_eval_path
 
-    def _filter_entropy_df(self, step_data_path: Path, all_data_path: Path) -> pd.DataFrame:
+        step_suffix_path = Path(str(step[1])) / str(self.args.data_range_end)
+        step_data_path = self.data_path / step_suffix_path
+        step_abl_path = self.abl_path / step_suffix_path
+        return step_data_path, step_model_path, step_eval_path, step_abl_path
+
+    def _filter_entropy_df(self, step_data_path: Path, step_abl_path: Path) -> pd.DataFrame:
         """Filter the entropy df from vector database."""
-        out_path = step_data_path / f"entropy_{self.args.fea_dim}.feather"
-        if out_path.is_file():
-            return pd.read_feather(out_path)
         # select the target batch from the batch df based on fea dim
         df = pd.read_feather(step_data_path / "entropy_df.feather")
         df = df.head(self.args.fea_dim)
+        out_path = step_data_path / f"entropy_{self.args.fea_dim}.feather"
+        if out_path.is_file():
+            logger.info(f"Resume entropy batch file from {out_path}")
+            return df, pd.read_feather(out_path)
         # get distinct batch
-        data = pd.read_csv(all_data_path / "entropy_df.csv")
+        data = pd.read_csv(step_abl_path / "entropy_df.csv")
         df_filtered = data[data["batch"].isin(set(df["batch"]))]
         # save the result df
+        df_filtered = df_filtered.reset_index(drop=True)
         df_filtered.to_feather(out_path)
-        return df_filtered
+        return df, df_filtered
 
-    def _extract_context(self, df: pd.DataFrame, data: pd.DataFrame) -> tuple[list]:
-        """Extract contexts for each token in the given batch."""
-        # filter and loop the target tokens
-        df_batched = df.groupby("batch")
-        input_token_ids_dict = {}
-        for batch, batched_df in df_batched:
-            df_filtered = data[data["batch"] == batch].reset_index(drop=True)
-            # loop over different positions
-            n = 0
-            while n < batched_df.shape[0]:
-                # select the target position
-                df_sel_index = df_filtered[df_filtered["pos"] == batched_df["pos"].tolist()[n]].index[0]
-                # 
-                result_df = df_filtered.iloc[: df_sel_index + 1]
-                input_token_ids_dict[batched_df["token_id"].tolist()[n]] = result_df["token_id"].tolist()
-                n += 1
-        # map back to the original order to align with losses and activation list
-        target_token_ids_list = df["token_id"].tolist()
-        sorted_input_token_ids_dict = {k: input_token_ids_dict[k] for k in target_token_ids_list if k in input_token_ids_dict}
-        return sorted_input_token_ids_dict.keys(), target_token_ids_list
-    
     def _extract_context(self, df: pd.DataFrame, data: pd.DataFrame) -> tuple[list]:
         """Extract contexts for each token in the given batch."""
         input_token_ids_dict = {}
@@ -307,13 +277,13 @@ class ReflectionAnalyzer:
                 token_id = row["token_id"]
                 match = df_filtered[df_filtered["pos"] == target_pos]
                 sel_idx = match.index[0]
-                context_ids = df_filtered.iloc[:sel_idx + 1]["token_id"].tolist()
+                # note here we add one mode token to compute cross-entropy loss
+                context_ids = df_filtered.iloc[: sel_idx + 2]["token_id"].tolist()
                 input_token_ids_dict[token_id] = context_ids
 
         target_token_ids_list = df["token_id"].tolist()
         sorted_input_token_ids = [input_token_ids_dict.get(k, []) for k in target_token_ids_list]
         return sorted_input_token_ids, target_token_ids_list
-
 
 
 #######################################################################################################
@@ -326,13 +296,19 @@ def main() -> None:
     args = parse_args()
     device = "cuda" if torch.cuda.is_available() else "cpu"
     # loop over different steps
-    data_path, model_path, eval_path = configure_path(args)
+    data_path, model_path, eval_path, abl_path = configure_path(args)
     # initilize with the step dir
     step_processor = StepPathProcessor(data_path)
     step_dirs = step_processor.sort_paths()
-    data_path, model_path, eval_path = configure_path(args)
+
     trainer = ReflectionAnalyzer(
-        args=args, device=device, data_path=data_path, model_path=model_path, eval_path=eval_path, step_dirs=step_dirs
+        args=args,
+        device=device,
+        data_path=data_path,
+        model_path=model_path,
+        eval_path=eval_path,
+        step_dirs=step_dirs,
+        abl_path=abl_path,
     )
     trainer.run_pipeline()
 
