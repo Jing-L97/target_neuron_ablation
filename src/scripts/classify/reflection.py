@@ -118,17 +118,21 @@ class ReflectionAnalyzer:
                     self._load_data(step_data_path)
                 )
                 # load model and tokenize target strings
+
                 self.model, tokenizer = self._load_model_tokenizer(step[1])
+                """
                 self.input_token_ids_list, self.target_token_ids_list = self._tokenize_strings(
                     tokenizer, input_string_lst, target_string_lst
                 )
+                """
+                self.input_token_ids_list, self.target_token_ids_list = 
                 # load svm model
                 self.normal_vector, self.intercept, self.normal_unit, self.hyperplane_point = load_svm_model(
                     step_model_path / f"{self.args.classifier_type}_{self.args.index_type}.joblib"
                 )
                 # loop over neurons
                 result_df = pd.DataFrame()
-
+                # loop over batch to get the same context
                 for neuron_idx, _ in enumerate(self.neurons):
                     # loop over string
                     for string_idx, _ in enumerate(self.input_token_ids_list):
@@ -255,6 +259,61 @@ class ReflectionAnalyzer:
         step_eval_path = self.eval_path / suffix_path
         step_data_path = self.data_path / str(step[1]) / str(self.args.data_range_end)
         return step_data_path, step_model_path, step_eval_path
+
+    def _filter_entropy_df(self, step_data_path: Path, all_data_path: Path) -> pd.DataFrame:
+        """Filter the entropy df from vector database."""
+        out_path = step_data_path / f"entropy_{self.args.fea_dim}.feather"
+        if out_path.is_file():
+            return pd.read_feather(out_path)
+        # select the target batch from the batch df based on fea dim
+        df = pd.read_feather(step_data_path / "entropy_df.feather")
+        df = df.head(self.args.fea_dim)
+        # get distinct batch
+        data = pd.read_csv(all_data_path / "entropy_df.csv")
+        df_filtered = data[data["batch"].isin(set(df["batch"]))]
+        # save the result df
+        df_filtered.to_feather(out_path)
+        return df_filtered
+
+    def _extract_context(self, df: pd.DataFrame, data: pd.DataFrame) -> tuple[list]:
+        """Extract contexts for each token in the given batch."""
+        # filter and loop the target tokens
+        df_batched = df.groupby("batch")
+        input_token_ids_dict = {}
+        for batch, batched_df in df_batched:
+            df_filtered = data[data["batch"] == batch].reset_index(drop=True)
+            # loop over different positions
+            n = 0
+            while n < batched_df.shape[0]:
+                # select the target position
+                df_sel_index = df_filtered[df_filtered["pos"] == batched_df["pos"].tolist()[n]].index[0]
+                # 
+                result_df = df_filtered.iloc[: df_sel_index + 1]
+                input_token_ids_dict[batched_df["token_id"].tolist()[n]] = result_df["token_id"].tolist()
+                n += 1
+        # map back to the original order to align with losses and activation list
+        target_token_ids_list = df["token_id"].tolist()
+        sorted_input_token_ids_dict = {k: input_token_ids_dict[k] for k in target_token_ids_list if k in input_token_ids_dict}
+        return sorted_input_token_ids_dict.keys(), target_token_ids_list
+    
+    def _extract_context(self, df: pd.DataFrame, data: pd.DataFrame) -> tuple[list]:
+        """Extract contexts for each token in the given batch."""
+        input_token_ids_dict = {}
+
+        for batch, batched_df in df.groupby("batch"):
+            df_filtered = data[data["batch"] == batch].reset_index(drop=True)
+            for _, row in batched_df.iterrows():
+                target_pos = row["pos"]
+                token_id = row["token_id"]
+                match = df_filtered[df_filtered["pos"] == target_pos]
+                sel_idx = match.index[0]
+                context_ids = df_filtered.iloc[:sel_idx + 1]["token_id"].tolist()
+                input_token_ids_dict[token_id] = context_ids
+
+        target_token_ids_list = df["token_id"].tolist()
+        sorted_input_token_ids = [input_token_ids_dict.get(k, []) for k in target_token_ids_list]
+        return sorted_input_token_ids, target_token_ids_list
+
 
 
 #######################################################################################################

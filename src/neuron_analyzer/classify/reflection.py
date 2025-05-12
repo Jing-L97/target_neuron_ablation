@@ -253,6 +253,63 @@ class SVMHyperplaneReflector:
             logger.warning("No valid positions for loss calculation")
             return 0.0
 
+    def compute_loss(self, input_ids, start_pos, end_pos, batch_df=None) -> float:
+        """Compute the loss value using the whole batch context."""
+        with torch.no_grad():
+            # Determine positions to analyze
+            if batch_df is not None:
+                positions = sorted(batch_df["pos"].unique())
+                positions = [p for p in positions if start_pos <= p < end_pos]
+            else:
+                positions = list(range(start_pos, min(end_pos, input_ids.shape[1] - 1)))
+
+            if not positions:
+                logger.warning("No valid positions for loss calculation")
+                return 0.0
+
+            # Run the model on the full sequence with caching to get full context
+            logits, cache = self.model.run_with_cache(input_ids)
+
+            # If reflection is enabled, we need to apply the reflection
+            if self.reflection_enabled:
+                # Get the residual stream from cache
+                res_stream_full = cache[f"blocks.{self.layer_num}.hook_resid_post"][0]
+                # Extract residual stream only for positions we care about
+                res_stream = res_stream_full[positions]
+                # Get neuron activations for our positions
+                previous_activation_full = cache[f"blocks.{self.layer_num}.hook_mlp_out"][0]
+                previous_activation = previous_activation_full[positions, self.neuron_idx]
+                # Calculate activation deltas to reach reflected activation
+                # Use the scalar reflected activation from setup_reflection
+                reflected_activation = self.reflected_activations[self.neuron_idx]
+                activation_deltas = reflected_activation - previous_activation
+                # Get the W_out weights for this neuron
+                w_out = self.model.blocks[self.layer_num].mlp.W_out[:, self.neuron_idx]
+                # Multiple deltas by W_out to get residual stream deltas
+                res_deltas = activation_deltas.unsqueeze(-1) * w_out
+                # Update residual stream with deltas
+                updated_res_stream = res_stream + res_deltas
+                # Apply layer normalization (as original method)
+                updated_res_stream = self.model.ln_final(updated_res_stream.unsqueeze(0))[0]
+                # Project to logit space
+                modified_logits = updated_res_stream @ self.model.W_U + self.model.b_U
+                # Use these modified logits for positions we care about
+                position_logits = modified_logits.unsqueeze(0)
+            else:
+                # Use original logits if reflection is not enabled
+                position_logits = logits[:, positions, :]
+            # Create filtered input for target tokens
+            target_positions = [min(p + 1, input_ids.shape[1] - 1) for p in positions]
+            filtered_targets = input_ids[0, target_positions].unsqueeze(0)
+            # Compute loss using model's loss function
+            losses = self.model.loss_fn(position_logits, filtered_targets, per_token=True).cpu().numpy()
+            # Return average loss across all positions
+            if len(losses) > 0:
+                return float(np.mean(losses))
+
+            logger.warning("Loss calculation returned empty result")
+            return 0.0
+
     def get_target_positions(self) -> list[int]:
         """Return positions that correspond to target tokens we want to affect."""
         # Return the range from start_pos to end_pos if they're set
