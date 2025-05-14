@@ -18,7 +18,6 @@ from neuron_analyzer.ablation.abl_util import (
     filter_entropy_activation_df,
     get_entropy_activation_df,
 )
-from neuron_analyzer.ablation.ablation import ModelAblationAnalyzer
 from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
 from neuron_analyzer.load_util import JsonProcessor
 from neuron_analyzer.model_util import ModelHandler
@@ -60,7 +59,7 @@ class NeuronAblationProcessor:
 
     def get_tail_threshold_stat(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
         """Calculate threshold for long-tail ablation mode."""
-        if self.args.ablation_mode == "longtail":
+        if "longtail" in self.args.ablation_mode:
             analyzer = ZipfThresholdAnalyzer(
                 unigram_distrib=unigram_distrib,
                 window_size=self.args.window_size,
@@ -188,9 +187,9 @@ class NeuronAblationProcessor:
 
     def get_save_dir(self):
         """Get the savepath based on current configurations."""
-        if self.args.ablation_mode == "longtail" and self.args.apply_elbow:
+        if "longtail" in self.args.ablation_mode and self.args.apply_elbow:
             ablation_name = "longtail_elbow"
-        if self.args.ablation_mode == "longtail" and not self.args.apply_elbow:
+        if "longtail" in self.args.ablation_mode and not self.args.apply_elbow:
             ablation_name = f"longtail_{self.args.tail_threshold}"
         else:
             ablation_name = self.args.ablation_mode

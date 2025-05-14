@@ -22,7 +22,7 @@ tail_threshold: 50   # proportion of tail in distribution
 window_size: 2000
 apply_elbow: False
 
-
+debug: False
 k: 10
 neuron_range: null
 hf_token_path: hf_token.txt
