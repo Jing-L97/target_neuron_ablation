@@ -83,11 +83,17 @@ def main():
                 logger.info(f"Files for step {step} already exist. Skip!")
                 continue
             logger.info(f"Processing step {step}")
+
+            abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
+
+
+"""
             try:
                 abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
             except Exception as e:
                 logger.error(f"Error processing step {step}: {e!s}")
                 continue
+"""
 
 
 if __name__ == "__main__":

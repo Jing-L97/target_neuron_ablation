@@ -441,9 +441,8 @@ class ModelAblationAnalyzer:
             for pos in positions:
                 # Get the corresponding index for tensors
                 idx = pos_to_idx[pos]
-
                 # Skip if the index is out of range
-                if idx >= loss_post_ablation[i].shape[1]:
+                if idx >= loss_post_ablation[i].shape[0]:
                     logger.warning(f"Position {pos} (idx {idx}) is out of range for tensors. Skipping.")
                     continue
 
@@ -454,13 +453,13 @@ class ModelAblationAnalyzer:
                     continue
 
                 # Set values for this position
-                df_to_append.loc[pos_mask, "loss_post_ablation"] = loss_post_ablation[i][0, idx]
+                df_to_append.loc[pos_mask, "loss_post_ablation"] = loss_post_ablation[i][idx]
                 df_to_append.loc[pos_mask, "loss_post_ablation_with_frozen_unigram"] = (
-                    loss_post_ablation_with_frozen_unigram[i][0, idx]
+                    loss_post_ablation_with_frozen_unigram[i][idx]
                 )
-                df_to_append.loc[pos_mask, "entropy_post_ablation"] = entropy_post_ablation[i][0, idx]
+                df_to_append.loc[pos_mask, "entropy_post_ablation"] = entropy_post_ablation[i][idx]
                 df_to_append.loc[pos_mask, "entropy_post_ablation_with_frozen_unigram"] = (
-                    entropy_post_ablation_with_frozen_unigram[i][0, idx]
+                    entropy_post_ablation_with_frozen_unigram[i][idx]
                 )
 
                 # KL divergence values
@@ -510,16 +509,18 @@ class ModelAblationAnalyzer:
             self.entropy_df[[f"{component_name}_activation" for component_name in self.components_to_ablate]].mean()
         )
 
+        """
         # Add diagnostic logging for first few batches
         for batch_idx, batch_n in enumerate(list(filtered_entropy_df.batch.unique())[:3]):
             batch_df = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
             tok_seq = self.tokenized_data["tokens"][batch_n]
             positions = sorted(batch_df["pos"].unique())
-
+            
             logger.info(f"Diagnostic for batch {batch_n}:")
             logger.info(f"  DataFrame rows: {len(batch_df)}")
             logger.info(f"  Unique positions: {len(positions)}")
             logger.info(f"  Token sequence length: {len(tok_seq)}")
+            
             if positions:
                 logger.info(f"  Position range: {min(positions)} to {max(positions)}")
 
@@ -531,13 +532,12 @@ class ModelAblationAnalyzer:
                     if not all_sequential:
                         gap_counts = sum(1 for gap in gaps if gap > 1)
                         logger.info(f"  Number of gaps: {gap_counts}")
+        """
 
         # Build frequency vectors
         self.build_vector()
-
         # Get neuron indices
         self.neuron_indices = [int(neuron_name.split(".")[1]) for neuron_name in self.components_to_ablate]
-
         # Get layer indices
         layer_indices = [int(neuron_name.split(".")[0]) for neuron_name in self.components_to_ablate]
         self.layer_idx = layer_indices[0]

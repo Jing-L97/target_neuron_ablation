@@ -37,6 +37,7 @@ class NeuronGroupAnalyzer:
         step_path: Path = None,
         abl_path: Path = None,
         neuron_dir: Path = None,
+        threshold_path: Path = None,
     ):
         self.args = args
         self.device = device
@@ -44,6 +45,7 @@ class NeuronGroupAnalyzer:
         self.feather_path = feather_path
         self.step = step_path
         self.abl_path = abl_path
+        self.threshold_path = abl_path if threshold_path is None else threshold_path
         self.neuron_dir = neuron_dir  # optional: only apply this when loading group neurons
 
     def run_pipeline(self) -> tuple[pd.DataFrame, list[int], list[int]]:
@@ -82,7 +84,7 @@ class NeuronGroupAnalyzer:
             top_n=self.args.top_n,
             step=self.step.name,
             unigram_analyzer=self.unigram_analyzer,
-            threshold_path=Path(self.abl_path) / self.args.stat_file,
+            threshold_path=Path(self.threshold_path) / self.args.stat_file,
             sel_by_med=self.args.sel_by_med,
             sel_freq=self.args.sel_freq,
         )
@@ -167,7 +169,9 @@ class NeuronGroupAnalyzer:
 # Function to integrate loading
 
 
-def load_activation_indices(args, abl_path: Path, step_path: Path, step_num: str, neuron_dir: Path, device: str):
+def load_activation_indices(
+    args, abl_path: Path, step_path: Path, step_num: str, neuron_dir: Path, threshold_path: Path, device: str
+):
     """Initialize NeuronGroupAnalyzer class."""
     feather_path = abl_path / step_num / str(args.data_range_end) / f"k{args.k}.feather"
     if feather_path.is_file():
@@ -178,6 +182,7 @@ def load_activation_indices(args, abl_path: Path, step_path: Path, step_num: str
             abl_path=abl_path,
             neuron_dir=neuron_dir,
             device=device,
+            threshold_path=threshold_path,
         )
         activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices = group_analyzer.run_pipeline()
         return activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, True

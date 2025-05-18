@@ -15,9 +15,16 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Analyze geometric features in activation space.")
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-410m-deduped", help="Target model name")
+    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument("--heuristic", type=str, choices=["KL", "prob"], default="prob", help="selection heuristic")
+    parser.add_argument(
+        "--sel_freq",
+        type=str,
+        choices=["longtail_50", "common", None],
+        default="common",
+        help="freq by common or not",
+    )
     parser.add_argument(
         "--group_type", type=str, choices=["individual", "group"], default="group", help="different neuron groups"
     )
@@ -53,15 +60,27 @@ def configure_path(args):
         if args.exclude_random
         else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
     )
-
+    # note that we revise this part for baseline experiment
+    """  
     save_path = (
         settings.PATH.direction_dir / group_name / "activation" / args.vector / args.model / save_heuristic / filename
     )
+    """
+    save_path = (
+        settings.PATH.direction_dir / group_name / "activation" / args.sel_freq / args.model / save_heuristic / filename
+    )
+
     save_path.parent.mkdir(parents=True, exist_ok=True)
-    abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
+
+    if args.sel_freq == "common":  # select from all of the tokens
+        threshold_path = settings.PATH.ablation_dir / "longtail_50" / args.model
+        abl_path = settings.PATH.ablation_dir / "mean" / args.model
+    else:
+        threshold_path = None
+        abl_path = settings.PATH.ablation_dir / args.vector / args.model
     # only set the path when loading the group neurons
     neuron_dir = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic
-    return save_path, abl_path, neuron_dir
+    return save_path, abl_path, neuron_dir, threshold_path
 
 
 #######################################################################################################
@@ -76,40 +95,40 @@ def main() -> None:
     if args.exclude_random:
         logger.info("Exclude the existing random neurons")
     # loop over different steps
-    save_path, abl_path, neuron_dir = configure_path(args)
+    save_path, abl_path, neuron_dir, threshold_path = configure_path(args)
 
     # load and update result json
     step_processor = StepPathProcessor(abl_path)
     final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)
 
     for step in step_dirs:
-        try:
-            activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
-                load_activation_indices(args, abl_path, step[0], str(step[1]), neuron_dir, device)
+        # try:
+        activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
+            load_activation_indices(args, abl_path, step[0], str(step[1]), neuron_dir, threshold_path, device)
+        )
+        if do_analysis:
+            # initilize the class
+            geometry_analyzer = ActivationGeometricAnalyzer(
+                activation_data=activation_data,
+                boost_neuron_indices=boost_neuron_indices,
+                suppress_neuron_indices=suppress_neuron_indices,
+                excluded_neuron_indices=random_indices,
+                activation_column="activation",
+                token_column="str_tokens",
+                context_column="context",
+                component_column="component_name",
+                num_random_groups=2,
+                device=device,
+                use_mixed_precision=use_mixed_precision,
             )
-            if do_analysis:
-                # initilize the class
-                geometry_analyzer = ActivationGeometricAnalyzer(
-                    activation_data=activation_data,
-                    boost_neuron_indices=boost_neuron_indices,
-                    suppress_neuron_indices=suppress_neuron_indices,
-                    excluded_neuron_indices=random_indices,
-                    activation_column="activation",
-                    token_column="str_tokens",
-                    context_column="context",
-                    component_column="component_name",
-                    num_random_groups=2,
-                    device=device,
-                    use_mixed_precision=use_mixed_precision,
-                )
-                results = geometry_analyzer.run_all_analyses()
-                final_results[str(step[1])] = results
-                # assign col headers
-                JsonProcessor.save_json(final_results, save_path)
-                logger.info(f"Save file to {save_path}")
+            results = geometry_analyzer.run_all_analyses()
+            final_results[str(step[1])] = results
+            # assign col headers
+            JsonProcessor.save_json(final_results, save_path)
+            logger.info(f"Save file to {save_path}")
 
-        except:
-            logger.info(f"Something wrong with {step[1]}")
+    # except:
+    # logger.info(f"Something wrong with {step[1]}")
 
 
 if __name__ == "__main__":

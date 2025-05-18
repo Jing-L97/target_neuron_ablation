@@ -17,11 +17,11 @@ memory_efficient: true  # Enable memory efficient processing
 process_neurons_in_chunks: 50  # Process neurons in smaller groups
 
 # longtail thredhold parameters
-ablation_mode: longtail
+ablation_mode: longtail_50
 tail_threshold: 50   # proportion of tail in distribution
 window_size: 2000
 apply_elbow: False
-
+debug: False
 k: 10
 neuron_range: null
 hf_token_path: hf_token.txt

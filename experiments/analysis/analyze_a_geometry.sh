@@ -1,24 +1,24 @@
 #!/bin/bash
-#SBATCH --job-name=geometry_410
+#SBATCH --job-name=geometry_baseline
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --mem=70G
 #SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=10
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_410_%a.log
-#SBATCH --array=0-11  # Update if number of combinations changes
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_baseline_%a.log
+#SBATCH --array=0-2  # Update if number of combinations changes
 
 # Define constants
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/analysis"
-
+SEL_FREQ="common"
 # Define parameter arrays
-MODELS=("EleutherAI/pythia-410m-deduped")
+MODELS=("EleutherAI/pythia-70m-deduped")
 VECTORS=("longtail_50")
-TOP_NS=(10 50 100)
+TOP_NS=(100 50 10)
 HEURISTICS=("prob")
-GROUP_SIZES=("best" "target_size")
-GROUP_TYPES=("individual" "group")
+GROUP_SIZES=("best") #"target_size"
+GROUP_TYPES=("individual") #"group"
 
 # Calculate total number of combinations
 TOTAL_COMBINATIONS=$((${#MODELS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#HEURISTICS[@]} * ${#GROUP_SIZES[@]} * ${#GROUP_TYPES[@]}))
@@ -73,8 +73,8 @@ python "$SCRIPT_ROOT/analyze_activation_geometry.py" \
   --group_size "$GROUP_SIZE" \
   --top_n "$TOP_N" \
   --heuristic "$HEURISTIC" \
+  --sel_longtail "$SEL_FREQ" \
   --load_stat \
-  --exclude_random \
   --resume
 
 echo "Analysis complete for combination $SLURM_ARRAY_TASK_ID"

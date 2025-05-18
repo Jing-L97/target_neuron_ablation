@@ -56,10 +56,10 @@ def main():
         hydra_args = hydra.compose(config_name=cli_args.config_name)
         logger.info(f"Using configuration: {cli_args.config_name}")
 
-        abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
-        base_save_dir = abalation_processor.get_save_dir()
+        ablation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
+        base_save_dir = ablation_processor.get_save_dir()
         unigram_distrib, _ = load_unigram(model_name=hydra_args.model, device=device)
-        longtail_threshold = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
+        longtail_threshold = ablation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
 
         # Process each step in range
         # Create save_path as a directory
@@ -71,7 +71,7 @@ def main():
             sys.exit(0)
 
         else:
-            abalation_processor.process_single_step(
+            ablation_processor.process_single_step(
                 step=None, unigram_distrib=unigram_distrib, longtail_threshold=longtail_threshold, save_path=save_path
             )
 
