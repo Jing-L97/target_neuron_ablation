@@ -4,7 +4,6 @@ import logging
 from pathlib import Path
 
 import pandas as pd
-import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.selection.neuron import NeuronSelector
@@ -16,7 +15,9 @@ logger = logging.getLogger(__name__)
 
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
-    parser = argparse.ArgumentParser(description="Select neurons based on single neuron heuristics.")
+    parser = argparse.ArgumentParser(
+        description="Select neurons based on single neuron heuristics only on ceonverged step."
+    )
 
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
     parser.add_argument(
@@ -38,6 +39,9 @@ def parse_args() -> argparse.Namespace:
         choices=["longtail_50", "common", None],
         default="longtail_50",
         help="freq by common or not",
+    )
+    parser.add_argument(
+        "--step_mode", type=str, choices=["single", "multi"], default="multi", help="whether to compute multi steps"
     )
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
@@ -72,6 +76,44 @@ def set_path(args) -> Path:
     return save_path
 
 
+def filter_single(args, abl_path, save_path) -> None:
+    """Sort results of single ckpt."""
+    feather_path = abl_path / str(args.data_range_end) / f"k{args.k}.feather"
+    # initilize the class
+    neuron_selector = NeuronSelector(
+        feather_path=feather_path,
+        debug=args.debug,
+        top_n=args.top_n,
+        step="last",
+        threshold_path=abl_path / args.stat_file,
+        sel_freq=args.sel_freq,
+        sel_by_med=args.sel_by_med,
+    )
+    neuron_df = neuron_selector.run_pipeline(heuristic=args.heuristic, effect=args.effect)
+    # assign col headers
+    neuron_df.to_csv(save_path)
+    logger.info(f"Save file to {save_path}")
+
+
+def filter_multi(args, neuron_df: pd.DataFrame, step: Path, abl_path: Path) -> pd.DataFrame:
+    """Sort results of single ckpt."""
+    feather_path = abl_path / str(step.name) / str(args.data_range_end) / f"k{args.k}.feather"
+    if feather_path.is_file():
+        # initilize the class
+        neuron_selector = NeuronSelector(
+            feather_path=feather_path,
+            debug=args.debug,
+            top_n=args.top_n,
+            step=step.name,
+            threshold_path=abl_path / args.stat_file,
+            sel_freq=args.sel_freq,
+            sel_by_med=args.sel_by_med,
+        )
+        frame = neuron_selector.run_pipeline(heuristic=args.heuristic, effect=args.effect)
+        neuron_df = pd.concat([neuron_df, frame])
+    return neuron_df
+
+
 #######################################################################################################
 # Entry point of the script
 #######################################################################################################
@@ -80,31 +122,19 @@ def set_path(args) -> Path:
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
     # loop over different steps
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
     save_path = set_path(args)
     if save_path.is_file():
         logger.info(f"{save_path} already exists, skip!")
-    else:
+    if args.step_mode == "single":
+        filter_single(args, abl_path, save_path)
+
+    if args.step_mode == "multi":
         neuron_df = pd.DataFrame()
         # check whether the target file has been created
         for step in abl_path.iterdir():
-            feather_path = abl_path / str(step) / str(args.data_range_end) / f"k{args.k}.feather"
-            if feather_path.is_file():
-                # initilize the class
-                # TODO: add unigram analyzer for intilization
-                neuron_selector = NeuronSelector(
-                    feather_path=feather_path,
-                    debug=args.debug,
-                    top_n=args.top_n,
-                    step=step.name,
-                    threshold_path=abl_path / args.stat_file,
-                    sel_freq=args.sel_freq,
-                    sel_by_med=args.sel_by_med,
-                )
-                frame = neuron_selector.run_pipeline(heuristic=args.heuristic, effect=args.effect)
-                neuron_df = pd.concat([neuron_df, frame])
+            neuron_df = filter_multi(args, neuron_df, step, abl_path)
         # assign col headers
         neuron_df.to_csv(save_path)
         logger.info(f"Save file to {save_path}")

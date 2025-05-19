@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
 
+# TODO: check whether to integrate into multi-step conditions
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments for step range."""
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
