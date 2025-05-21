@@ -1,24 +1,25 @@
 #!/bin/bash
-#SBATCH --job-name=geometry_gpt2
+#SBATCH --job-name=geometry_gpt2L
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --mem=70G
 #SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=10
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_baseline_%a.log
-#SBATCH --array=0-2  # Update if number of combinations changes
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_gpt2L_%a.log
+#SBATCH --array=0-1  # Update if number of combinations changes
 
 # Define constants
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/analysis"
 SEL_FREQ="longtail_50"
 # Define parameter arrays
-MODELS=("gpt2")
+MODELS=("gpt2-large")
 VECTORS=("longtail_50")
-TOP_NS=(50 100 10)
+TOP_NS=(50 100)
 HEURISTICS=("prob")
 GROUP_SIZES=("best") #"target_size"
 GROUP_TYPES=("individual") #"group"
+STEP_MODE="single"
 
 # Calculate total number of combinations
 TOTAL_COMBINATIONS=$((${#MODELS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#HEURISTICS[@]} * ${#GROUP_SIZES[@]} * ${#GROUP_TYPES[@]}))
@@ -66,7 +67,7 @@ echo " Group Type: $GROUP_TYPE"
 echo " Combination Index: $SLURM_ARRAY_TASK_ID of $TOTAL_COMBINATIONS"
 
 # Run the analysis script
-python "$SCRIPT_ROOT/activation_geometry_model.py" \
+python "$SCRIPT_ROOT/activation_geometry.py" \
   -m "$MODEL" \
   --vector "$VECTOR" \
   --group_type "$GROUP_TYPE" \
@@ -74,6 +75,7 @@ python "$SCRIPT_ROOT/activation_geometry_model.py" \
   --top_n "$TOP_N" \
   --heuristic "$HEURISTIC" \
   --sel_longtail "$SEL_FREQ" \
+  --step_mode "$STEP_MODE" \
   --resume
 
 echo "Analysis complete for combination $SLURM_ARRAY_TASK_ID"

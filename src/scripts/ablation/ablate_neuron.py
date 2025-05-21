@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments for step range."""
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
-    parser.add_argument("--interval", type=int, default=10, help="Checkpoint interval sampling")
+    parser.add_argument("--interval", type=int, default=20, help="Checkpoint interval sampling")
     parser.add_argument("--layer_num", type=int, default=1, help="Last n MLP layer")
     parser.add_argument(
         "--config_name",
@@ -36,7 +36,7 @@ def parse_args() -> argparse.Namespace:
         help="Name of the configuration file to use",
     )
     parser.add_argument("--config_path", type=str, default="conf", help="Relative dir to config file")
-    parser.add_argument("--start", type=int, default=28, help="Start index of step range")
+    parser.add_argument("--start", type=int, default=14, help="Start index of step range")
     parser.add_argument("--end", type=int, default=142, help="End index of step range")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
@@ -83,8 +83,6 @@ def main():
                 logger.info(f"Files for step {step} already exist. Skip!")
                 continue
             logger.info(f"Processing step {step}")
-
-            abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
 
             try:
                 abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)

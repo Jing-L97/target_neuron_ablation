@@ -27,7 +27,7 @@ def parse_args() -> argparse.Namespace:
         help="freq by common or not",
     )
     parser.add_argument(
-        "--group_type", type=str, choices=["individual", "group"], default="group", help="different neuron groups"
+        "--group_type", type=str, choices=["individual", "group"], default="individual", help="different neuron groups"
     )
     parser.add_argument(
         "--group_size", type=str, choices=["best", "target_size"], default="best", help="different group size"
@@ -135,7 +135,7 @@ def analyze_multi(
     device: str,
     use_mixed_precision: bool,
 ) -> None:
-    """Analze the activation space of the single step."""
+    """Analze the activation space of multiple steps."""
     # load and update result json
     step_processor = StepPathProcessor(abl_path)
     final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)

@@ -6,7 +6,6 @@
 #SBATCH --cpus-per-task=10
 #SBATCH --time=24:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/group_%a.log
-
 #SBATCH --array=0-1
 
 # Script and config paths

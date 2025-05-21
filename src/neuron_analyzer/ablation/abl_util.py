@@ -825,6 +825,7 @@ def load_pythia_steps(
             tokenizer=tokenizer,
             device=device,
             cache_dir=cache_dir / model_name / f"step{step}",
+            torch_dtype=torch.float16,
         )
         logger.info(f"import hooked model from {cache_dir}/{model_name}/step{step}")
         return model, tokenizer
