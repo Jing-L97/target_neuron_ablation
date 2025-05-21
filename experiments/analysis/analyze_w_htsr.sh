@@ -6,18 +6,18 @@
 #SBATCH --time=10:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/htsr_weight_%a.log
-#SBATCH --array=0-23  # Update if number of combinations changes
+#SBATCH --array=0-1  # Update if number of combinations changes
 
 # Define constants
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/analysis"
 
 # Define parameter arrays
-MODELS=("EleutherAI/pythia-70m-deduped" "EleutherAI/pythia-410m-deduped")
+MODELS=("gpt2")
 VECTORS=("longtail_50")
-TOP_NS=(10 50 100)
+TOP_NS=(50 100)
 HEURISTICS=("prob")
-GROUP_SIZES=("best" "target_size")
-GROUP_TYPES=("individual" "group")
+GROUP_SIZES=("best")
+GROUP_TYPES=("individual")
 
 # Calculate total number of combinations
 TOTAL_COMBINATIONS=$((${#MODELS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#HEURISTICS[@]} * ${#GROUP_SIZES[@]} * ${#GROUP_TYPES[@]}))
@@ -65,13 +65,12 @@ echo " Group Type: $GROUP_TYPE"
 echo " Combination Index: $SLURM_ARRAY_TASK_ID of $TOTAL_COMBINATIONS"
 
 # Run the analysis script
-python "$SCRIPT_ROOT/analyze_weight_htsr.py" \
+python "$SCRIPT_ROOT/weight_htsr_model.py" \
   -m "$MODEL" \
   --vector "$VECTOR" \
   --group_type "$GROUP_TYPE" \
   --group_size "$GROUP_SIZE" \
   --top_n "$TOP_N" \
-  --heuristic "$HEURISTIC" \
-  --load_stat 
+  --heuristic "$HEURISTIC" 
 
 echo "Analysis complete for combination $SLURM_ARRAY_TASK_ID"

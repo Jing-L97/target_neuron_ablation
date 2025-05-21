@@ -1,4 +1,5 @@
 #!/usr/bin/env python
+import ast
 import logging
 from pathlib import Path
 
@@ -18,9 +19,14 @@ logger = logging.getLogger(__name__)
 # Load last layer
 
 
-def get_last_layer(model_name) -> int:
+def get_last_layer(sel_dir: Path) -> int:
     """Get the last layer of the model name."""
-    return 5 if "70" in model_name else 23
+    # load the neuron
+    csv_files = list(sel_dir.glob("*.csv"))
+    neuron_loader = NeuronLoader()
+    # load from the first row
+    data = pd.read_csv(csv_files[0])
+    return neuron_loader.parse_layer_num(ast.literal_eval(data.head(1)["top_neurons"].item())[0])
 
 
 #######################################################
@@ -33,8 +39,8 @@ class NeuronGroupAnalyzer:
         args,
         device: str,
         unigram_analyzer=None,
+        step_num: str = None,
         feather_path: Path = None,
-        step_path: Path = None,
         abl_path: Path = None,
         neuron_dir: Path = None,
         threshold_path: Path = None,
@@ -43,10 +49,20 @@ class NeuronGroupAnalyzer:
         self.device = device
         self.unigram_analyzer = unigram_analyzer
         self.feather_path = feather_path
-        self.step = step_path
+        self.step = step_num
         self.abl_path = abl_path
         self.threshold_path = abl_path if threshold_path is None else threshold_path
         self.neuron_dir = neuron_dir  # optional: only apply this when loading group neurons
+        self.neuron_selector = NeuronSelector(
+            feather_path=self.feather_path,
+            debug=self.args.debug,
+            top_n=self.args.top_n,
+            step=self.step,
+            unigram_analyzer=self.unigram_analyzer,
+            threshold_path=Path(self.threshold_path) / self.args.stat_file,
+            sel_by_med=self.args.sel_by_med,
+            sel_freq=self.args.sel_freq,
+        )
 
     def run_pipeline(self) -> tuple[pd.DataFrame, list[int], list[int]]:
         """Run pipeline of the neuron selection."""
@@ -68,26 +84,28 @@ class NeuronGroupAnalyzer:
                 return boost_neuron_indices, suppress_neuron_indices, random_neuron_indices
         else:
             if self.args.group_type == "group":
-                boost_neuron_indices, suppress_neuron_indices = self.load_group_neuron()
                 logger.info("Selecting from the group neurons")
+                boost_neuron_indices, suppress_neuron_indices = self.load_group_neuron()
             if self.args.group_type == "individual":
-                boost_neuron_indices, suppress_neuron_indices = self.load_individual_neuron(activation_data)
                 logger.info("Selecting from the individual neurons")
+                boost_neuron_indices, suppress_neuron_indices = self.load_individual_neuron(activation_data)
         return boost_neuron_indices, suppress_neuron_indices, []
 
     def load_activation_df(self) -> pd.DataFrame:
         """Filter neuron index for different interventions and return the grouped data."""
         # load selector
+        """
         self.neuron_selector = NeuronSelector(
             feather_path=self.feather_path,
             debug=self.args.debug,
             top_n=self.args.top_n,
-            step=self.step.name,
+            step=self.step,
             unigram_analyzer=self.unigram_analyzer,
             threshold_path=Path(self.threshold_path) / self.args.stat_file,
             sel_by_med=self.args.sel_by_med,
             sel_freq=self.args.sel_freq,
         )
+        """
         # load feather dataframe
         activation_data = self.neuron_selector.load_and_filter_df()
         # intilize neuron loader
@@ -101,14 +119,14 @@ class NeuronGroupAnalyzer:
         neuron_dict = self._get_stat_file()
         if self.args.exclude_random:
             return (
-                neuron_dict[self.step.name]["neuron_indices"]["boost"],
-                neuron_dict[self.step.name]["neuron_indices"]["suppress"],
-                neuron_dict[self.step.name]["neuron_indices"]["random_1"]
-                + neuron_dict[self.step.name]["neuron_indices"]["random_2"],
+                neuron_dict[self.step]["neuron_indices"]["boost"],
+                neuron_dict[self.step]["neuron_indices"]["suppress"],
+                neuron_dict[self.step]["neuron_indices"]["random_1"]
+                + neuron_dict[self.step]["neuron_indices"]["random_2"],
             )
         return (
-            neuron_dict[self.step.name]["neuron_indices"]["boost"],
-            neuron_dict[self.step.name]["neuron_indices"]["suppress"],
+            neuron_dict[self.step]["neuron_indices"]["boost"],
+            neuron_dict[self.step]["neuron_indices"]["suppress"],
             [],
         )
 
@@ -122,8 +140,8 @@ class NeuronGroupAnalyzer:
         """Filter neuron index for different interventions and return the grouped data."""
         final_df = self.neuron_selector._prepare_dataframe(activation_data)
         # select neurons
-        boost_neuron_indices, _ = self._get_individual_neuron_index(final_df, "boost")
-        suppress_neuron_indices, _ = self._get_individual_neuron_index(final_df, "suppress")
+        boost_neuron_indices = self._get_individual_neuron_index(final_df, "boost")
+        suppress_neuron_indices = self._get_individual_neuron_index(final_df, "suppress")
         return boost_neuron_indices, suppress_neuron_indices
 
     def _get_stat_file(self):
@@ -146,7 +164,7 @@ class NeuronGroupAnalyzer:
         neuron_dict = JsonProcessor.load_json(
             neuron_dir / effect / f"{self.args.data_range_end}_{self.args.top_n}.json"
         )
-        return neuron_dict[self.step.name][self.args.group_size]["neurons"]
+        return neuron_dict[self.step][self.args.group_size]["neurons"]
 
     def _get_individual_neuron_index(self, activation_data, effect: str):
         """Filter neuron index for different interventions."""
@@ -161,24 +179,26 @@ class NeuronGroupAnalyzer:
         # convert neuron index format
         neuron_value = frame.head(1)["top_neurons"].item()
         logger.info(f"The filtered neuron values are: {neuron_value}")
-        special_neuron_indices, _ = self.neuron_loader.extract_neurons(neuron_value)
-        return special_neuron_indices
+        return neuron_value
+        # special_neuron_indices, _ = self.neuron_loader.extract_neurons(neuron_value)
+        # return special_neuron_indices
 
 
 #######################################################
 # Function to integrate loading
 
 
-def load_activation_indices(
-    args, abl_path: Path, step_path: Path, step_num: str, neuron_dir: Path, threshold_path: Path, device: str
-):
+def load_activation_indices(args, abl_path: Path, step_num: str, neuron_dir: Path, threshold_path: Path, device: str):
     """Initialize NeuronGroupAnalyzer class."""
-    feather_path = abl_path / step_num / str(args.data_range_end) / f"k{args.k}.feather"
+    if step_num == "-1":
+        feather_path = abl_path / str(args.data_range_end) / f"k{args.k}.feather"
+    else:
+        feather_path = abl_path / step_num / str(args.data_range_end) / f"k{args.k}.feather"
     if feather_path.is_file():
         group_analyzer = NeuronGroupAnalyzer(
             args=args,
             feather_path=feather_path,
-            step_path=step_path,
+            step_num=step_num,
             abl_path=abl_path,
             neuron_dir=neuron_dir,
             device=device,

@@ -225,6 +225,10 @@ class NeuronLoader:
         """Parse neuron index."""
         return int(str(float(neuron)).split(".")[1])
 
+    def parse_layer_num(self, neuron: str) -> int:
+        """Parse layer number."""
+        return int(neuron.split(".")[0])
+
     def generate_neurons(self, exclude_list: list[int]) -> list[int]:
         """Generate a list of non-repeating random neuron indices with the same size as the input list."""
         # Convert to set for faster lookups

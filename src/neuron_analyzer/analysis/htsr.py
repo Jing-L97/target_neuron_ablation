@@ -401,6 +401,7 @@ class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
     def __init__(
         self,
         model,
+        model_name: str,
         layer_num: int,
         boost_neuron_indices: list[int],
         suppress_neuron_indices: list[int],
@@ -428,7 +429,9 @@ class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
         self.excluded_neuron_indices = excluded_neuron_indices or []
         self.num_random_groups = num_random_groups
         self.use_mixed_precision = use_mixed_precision
-
+        self.model_name = model_name
+        self.layer_path = self._get_layer_path()
+        self.layer = self._get_layer()
         # Get common neurons and create random groups
         self.common_neurons, self.random_indices = self._get_common_neurons()
 
@@ -458,6 +461,20 @@ class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
         # Initialize weight matrices cache
         self.weight_matrices = {}
 
+    def _get_layer_path(self) -> str:
+        """Get layer path from model family."""
+        if "pythia" in self.model_name.lower():
+            return f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
+        if "gpt" in self.model_name.lower():
+            # return f"transformer.h.{self.layer_num}.mlp.c_fc"
+            return f"transformer.h.{self.layer_num}.mlp.c_proj"
+        return None
+
+    def _get_layer(self):
+        """Get layer path from layer num and family."""
+        layer_dict = dict(self.model.named_modules())
+        return layer_dict[self.layer_path]
+
     def _get_common_neurons(self) -> tuple[list[int], list[list[int]]]:
         """Generate non-overlapping random neuron groups that don't overlap with boost or suppress neurons.
 
@@ -468,10 +485,7 @@ class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
 
         """
         # Get layer to determine total neurons
-        layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
-        layer_dict = dict(self.model.named_modules())
-        layer = layer_dict[layer_path]
-        total_neurons = layer.weight.shape[0]
+        total_neurons = self.layer.weight.shape[0]
 
         # Get all neuron indices
         all_neuron_indices = list(range(total_neurons))
@@ -536,13 +550,8 @@ class WeightSpaceHeavyTailedAnalyzer(BaseHeavyTailedAnalyzer):
         if cache_key in self.weight_matrices:
             return self.weight_matrices[cache_key]
 
-        # Get layer weights
-        layer_path = f"gpt_neox.layers.{self.layer_num}.mlp.dense_h_to_4h"
-        layer_dict = dict(self.model.named_modules())
-        layer = layer_dict[layer_path]
-
         # Get weight matrix
-        W = layer.weight.detach().cpu().numpy()
+        W = self.layer.weight.detach().cpu().numpy()
 
         # Extract weights for specific neurons
         W_neurons = W[neuron_indices]

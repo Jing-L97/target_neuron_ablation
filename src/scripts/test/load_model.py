@@ -96,6 +96,32 @@ def load_model_from_tl_name(model_name, device="cuda", step=None, cache_dir=None
     return load_model_from_tl_name_single(model_name, device=device, cache_dir=cache_dir, hf_token=hf_token)
 
 
+from hf_olmo import OLMoForCausalLM, OLMoTokenizerFast
+
+model_name = "allenai/OLMo-1B"
+step = 20000
+cache_dir = settings.PATH.model_dir / model_name / f"step{step}" / "converted"
+
+
+tokenizer = OLMoTokenizerFast.from_pretrained(str(cache_dir))
+olmo = OLMoForCausalLM.from_pretrained(str(cache_dir))
+
+
+model = HookedTransformer.from_pretrained(
+    model_name="allenai/OLMoE-1B-7B-0924-Instruct",
+    hf_model=olmo,
+    tokenizer=tokenizer,
+    device="cuda",
+    cache_dir=cache_dir,
+)
+
+
+# convert the olmo ckpts into hf format
+
+convert.maybe_unshard(local_checkpoint_dir)
+
+
+"""
 model_name = "gpt2"
 
 load_model_from_tl_name(model_name, device="cuda", cache_dir=None, hf_token=None, step=None)
@@ -109,7 +135,7 @@ class ModelHandler:
         device: str,
         step=None,
     ):
-        """Load model and tokenizer for processing."""
+        # Load model and tokenizer for processing
         # Load HF token
 
         model, self.tokenizer = load_model_from_tl_name(
@@ -130,5 +156,9 @@ model, tokenizer = model_handler.load_model_and_tokenizer(
     hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",
     device="cuda",
 )
+
+"""
+
+
 logger.info("######################")
 logger.info("Model has been loaded")

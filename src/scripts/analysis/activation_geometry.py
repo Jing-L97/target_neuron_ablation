@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
         "--sel_freq",
         type=str,
         choices=["longtail_50", "common", None],
-        default="common",
+        default="longtail_50",
         help="freq by common or not",
     )
     parser.add_argument(
@@ -61,7 +61,7 @@ def configure_path(args):
         else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
     )
     # note that we revise this part for baseline experiment
-    """  
+
     save_path = (
         settings.PATH.direction_dir / group_name / "activation" / args.vector / args.model / save_heuristic / filename
     )
@@ -69,6 +69,7 @@ def configure_path(args):
     save_path = (
         settings.PATH.direction_dir / group_name / "activation" / args.sel_freq / args.model / save_heuristic / filename
     )
+    """
 
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -104,7 +105,7 @@ def main() -> None:
     for step in step_dirs:
         # try:
         activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
-            load_activation_indices(args, abl_path, step[0], str(step[1]), neuron_dir, threshold_path, device)
+            load_activation_indices(args, abl_path, str(step[1]), neuron_dir, threshold_path, device)
         )
         if do_analysis:
             # initilize the class

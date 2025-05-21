@@ -1,5 +1,5 @@
 #!/bin/bash
-#SBATCH --job-name=geometry_baseline
+#SBATCH --job-name=geometry_gpt2
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --mem=70G
@@ -11,11 +11,11 @@
 
 # Define constants
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/analysis"
-SEL_FREQ="common"
+SEL_FREQ="longtail_50"
 # Define parameter arrays
-MODELS=("EleutherAI/pythia-70m-deduped")
+MODELS=("gpt2")
 VECTORS=("longtail_50")
-TOP_NS=(100 50 10)
+TOP_NS=(50 100 10)
 HEURISTICS=("prob")
 GROUP_SIZES=("best") #"target_size"
 GROUP_TYPES=("individual") #"group"
@@ -66,7 +66,7 @@ echo " Group Type: $GROUP_TYPE"
 echo " Combination Index: $SLURM_ARRAY_TASK_ID of $TOTAL_COMBINATIONS"
 
 # Run the analysis script
-python "$SCRIPT_ROOT/analyze_activation_geometry.py" \
+python "$SCRIPT_ROOT/activation_geometry_model.py" \
   -m "$MODEL" \
   --vector "$VECTOR" \
   --group_type "$GROUP_TYPE" \
@@ -74,7 +74,6 @@ python "$SCRIPT_ROOT/analyze_activation_geometry.py" \
   --top_n "$TOP_N" \
   --heuristic "$HEURISTIC" \
   --sel_longtail "$SEL_FREQ" \
-  --load_stat \
   --resume
 
 echo "Analysis complete for combination $SLURM_ARRAY_TASK_ID"

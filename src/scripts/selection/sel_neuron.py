@@ -84,7 +84,7 @@ def filter_single(args, abl_path, save_path) -> None:
         feather_path=feather_path,
         debug=args.debug,
         top_n=args.top_n,
-        step="last",
+        step=-1,
         threshold_path=abl_path / args.stat_file,
         sel_freq=args.sel_freq,
         sel_by_med=args.sel_by_med,
