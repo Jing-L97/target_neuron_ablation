@@ -1,7 +1,6 @@
 #!/usr/bin/env python
 import argparse
 import logging
-from pathlib import Path
 
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.a_geometry import ActivationGeometricAnalyzer
@@ -32,9 +31,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--group_size", type=str, choices=["best", "target_size"], default="best", help="different group size"
     )
-    parser.add_argument(
-        "--step_mode", type=str, choices=["single", "multi"], default="multi", help="whether to compute multi steps"
-    )
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--load_stat", action="store_true", help="Whether to load from existing index")
@@ -64,7 +60,7 @@ def configure_path(args):
         if args.exclude_random
         else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
     )
-    # TODO: we revise this part for baseline experiment
+    # note that we revise this part for baseline experiment
 
     save_path = (
         settings.PATH.direction_dir / group_name / "activation" / args.vector / args.model / save_heuristic / filename
@@ -82,94 +78,6 @@ def configure_path(args):
     return save_path, abl_path, neuron_dir, threshold_path
 
 
-def analyze_single(
-    args,
-    abl_path: Path,
-    save_path: Path,
-    neuron_dir: Path,
-    threshold_path: Path,
-    device: str,
-    use_mixed_precision: bool,
-) -> None:
-    """Analze the activation space of the single step."""
-    activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
-        load_activation_indices(
-            args=args,
-            abl_path=abl_path,
-            step_num="-1",
-            neuron_dir=neuron_dir,
-            threshold_path=threshold_path,
-            device=device,
-        )
-    )
-
-    if do_analysis:
-        # initilize the class
-        geometry_analyzer = ActivationGeometricAnalyzer(
-            activation_data=activation_data,
-            boost_neuron_indices=boost_neuron_indices,
-            suppress_neuron_indices=suppress_neuron_indices,
-            excluded_neuron_indices=random_indices,
-            activation_column="activation",
-            token_column="str_tokens",
-            context_column="context",
-            component_column="component_name",
-            num_random_groups=2,
-            device=device,
-            use_mixed_precision=use_mixed_precision,
-        )
-        results = geometry_analyzer.run_all_analyses()
-        final_results = {}
-        final_results[str(-1)] = results
-        # assign col headers
-        JsonProcessor.save_json(final_results, save_path)
-        logger.info(f"Save file to {save_path}")
-
-
-def analyze_multi(
-    args,
-    abl_path: Path,
-    save_path: Path,
-    neuron_dir: Path,
-    threshold_path: Path,
-    device: str,
-    use_mixed_precision: bool,
-) -> None:
-    """Analze the activation space of the single step."""
-    # load and update result json
-    step_processor = StepPathProcessor(abl_path)
-    final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)
-
-    for step in step_dirs:
-        try:
-            activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
-                load_activation_indices(args, abl_path, str(step[1]), neuron_dir, threshold_path, device)
-            )
-            if do_analysis:
-                # initilize the class
-                geometry_analyzer = ActivationGeometricAnalyzer(
-                    activation_data=activation_data,
-                    boost_neuron_indices=boost_neuron_indices,
-                    suppress_neuron_indices=suppress_neuron_indices,
-                    excluded_neuron_indices=random_indices,
-                    activation_column="activation",
-                    token_column="str_tokens",
-                    context_column="context",
-                    component_column="component_name",
-                    num_random_groups=2,
-                    device=device,
-                    use_mixed_precision=use_mixed_precision,
-                )
-                results = geometry_analyzer.run_all_analyses()
-                final_results[str(step[1])] = results
-                # assign col headers
-                JsonProcessor.save_json(final_results, save_path)
-                logger.info(f"Save file to {save_path}")
-
-        except:
-            logger.info(f"Something wrong with {step[1]}")
-
-
 #######################################################################################################
 # Entry point of the script
 #######################################################################################################
@@ -184,26 +92,38 @@ def main() -> None:
     # loop over different steps
     save_path, abl_path, neuron_dir, threshold_path = configure_path(args)
 
-    if args.step_mode == "single":
-        analyze_single(
-            args=args,
-            abl_path=abl_path,
-            save_path=save_path,
-            neuron_dir=neuron_dir,
-            threshold_path=threshold_path,
-            device=device,
-            use_mixed_precision=use_mixed_precision,
+    # load and update result json
+    step_processor = StepPathProcessor(abl_path)
+    final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)
+
+    for step in step_dirs:
+        # try:
+        activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
+            load_activation_indices(args, abl_path, str(step[1]), neuron_dir, threshold_path, device)
         )
-    if args.step_mode == "multi":
-        analyze_multi(
-            args=args,
-            abl_path=abl_path,
-            save_path=save_path,
-            neuron_dir=neuron_dir,
-            threshold_path=threshold_path,
-            device=device,
-            use_mixed_precision=use_mixed_precision,
-        )
+        if do_analysis:
+            # initilize the class
+            geometry_analyzer = ActivationGeometricAnalyzer(
+                activation_data=activation_data,
+                boost_neuron_indices=boost_neuron_indices,
+                suppress_neuron_indices=suppress_neuron_indices,
+                excluded_neuron_indices=random_indices,
+                activation_column="activation",
+                token_column="str_tokens",
+                context_column="context",
+                component_column="component_name",
+                num_random_groups=2,
+                device=device,
+                use_mixed_precision=use_mixed_precision,
+            )
+            results = geometry_analyzer.run_all_analyses()
+            final_results[str(step[1])] = results
+            # assign col headers
+            JsonProcessor.save_json(final_results, save_path)
+            logger.info(f"Save file to {save_path}")
+
+    # except:
+    # logger.info(f"Something wrong with {step[1]}")
 
 
 if __name__ == "__main__":

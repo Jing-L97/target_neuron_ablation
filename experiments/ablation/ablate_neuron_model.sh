@@ -1,13 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=abl_gpt2
+#SBATCH --job-name=abl_gpt2xl
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
-#SBATCH --exclude=puck5
 #SBATCH --mem=70G
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=10
-#SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/gpt2.log
+#SBATCH --cpus-per-task=8
+#SBATCH --time=24:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/gpt2xl.log
 
 
 # Script and config paths
@@ -15,7 +14,7 @@ SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/
 
 # Define the configuration files
 CONFIG_NAMES=(
-  "config_unigram_ablations_gpt2.yaml"
+  "config_unigram_ablations_gpt2-xl.yaml"
 )
 
 # Map array task ID to configuration file

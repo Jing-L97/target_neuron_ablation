@@ -49,7 +49,7 @@ def get_entropy_activation_df(
     tokenized_data,
     token_df,
     model,
-    batch_size=32,
+    batch_size=16,
     device="mps",
     cache_residuals=False,
     cache_pre_activations=False,
@@ -813,7 +813,10 @@ def load_pythia_steps(
         )
 
         hf_model = GPTNeoXForCausalLM.from_pretrained(
-            model_name, revision=f"step{step}", cache_dir=cache_dir / model_name / f"step{step}"
+            model_name,
+            revision=f"step{step}",
+            cache_dir=cache_dir / model_name / f"step{step}",
+            torch_dtype=torch.float16,
         )
         logger.info(f"import HF model from {cache_dir}/{model_name}/step{step}")
         model = HookedTransformer.from_pretrained(

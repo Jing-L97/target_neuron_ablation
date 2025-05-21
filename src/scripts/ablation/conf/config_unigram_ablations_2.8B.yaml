@@ -1,0 +1,48 @@
+device: cuda
+dry_run: false
+seed: 42
+chdir: "."
+model: EleutherAI/pythia-2.8B-deduped
+dataset: stas/c4-en-10k
+use_log2_entropy: false
+data_range_start: 0
+data_range_end: 500
+
+# Memory optimization parameters
+batch_size: 1  # Keep at 1
+chunk_size: 1  # Add small chunk size for processing
+micro_batch_size: 1  # Add micro-batch processing
+max_gpu_memory: 0.7  # Limit GPU memory usage to 70%
+memory_efficient: true  # Enable memory efficient processing
+process_neurons_in_chunks: 50  # Process neurons in smaller groups
+
+# longtail thredhold parameters
+ablation_mode: longtail_50
+tail_threshold: 50   # proportion of tail in distribution
+vector: longtail_50
+window_size: 2000
+apply_elbow: False
+
+debug: False
+k: 10
+neuron_range: null
+hf_token_path: hf_token.txt
+output_dir: ablations
+transformers_cache_dir: null
+
+# Processing control
+cpu_offload: true  # Enable CPU offloading for some operations
+gradient_checkpointing: true  # Enable gradient checkpointing
+
+
+defaults:
+  - _self_
+  - override hydra/hydra_logging: disabled
+  - override hydra/job_logging: disabled
+
+hydra:
+  output_subdir: null
+  run:
+    dir: .
+
+

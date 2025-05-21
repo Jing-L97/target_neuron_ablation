@@ -76,7 +76,7 @@ def set_path(args) -> Path:
     return save_path
 
 
-def filter_single(args, abl_path, save_path) -> None:
+def filter_single(args, abl_path: Path, save_path: Path) -> None:
     """Sort results of single ckpt."""
     feather_path = abl_path / str(args.data_range_end) / f"k{args.k}.feather"
     # initilize the class
