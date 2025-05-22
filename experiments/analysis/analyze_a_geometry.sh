@@ -7,15 +7,15 @@
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=10
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_gpt2L_%a.log
-#SBATCH --array=0-1  # Update if number of combinations changes
+#SBATCH --array=0-5  # Update if number of combinations changes
 
 # Define constants
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/analysis"
 SEL_FREQ="longtail_50"
 # Define parameter arrays
-MODELS=("gpt2-large")
+MODELS=("gpt2-large" "gpt2-xl")
 VECTORS=("longtail_50")
-TOP_NS=(50 100)
+TOP_NS=(10 50 100)
 HEURISTICS=("prob")
 GROUP_SIZES=("best") #"target_size"
 GROUP_TYPES=("individual") #"group"

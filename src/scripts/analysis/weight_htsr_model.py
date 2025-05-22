@@ -81,7 +81,7 @@ def configure_path(args):
 
 def load_model(model_dir: Path, device: str):
     """Load model from the given path."""
-    model = AutoModelForCausalLM.from_pretrained(model_dir).to(device)
+    model = AutoModelForCausalLM.from_pretrained(str(model_dir)).to(device)
     return model.eval()
 
 

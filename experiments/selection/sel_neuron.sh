@@ -2,11 +2,11 @@
 #SBATCH --job-name=sel_tail
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=1
-#SBATCH --mem=10G
+#SBATCH --cpus-per-task=6
+#SBATCH --mem=60G
 #SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_tail_%a.log
-#SBATCH --array=0-7
+#SBATCH --array=0-15
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
@@ -31,7 +31,8 @@ TOP_NS=(
 )
 
 MODELS=(
-    "gpt2"
+    "gpt2-large"
+    "gpt2-xl"
 )
 
 # Calculate total combinations for validation
