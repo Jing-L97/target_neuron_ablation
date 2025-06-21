@@ -6,7 +6,7 @@
 #SBATCH --gres=gpu:1
 #SBATCH --time=48:00:00
 #SBATCH --cpus-per-task=10
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/geometry_gpt2L_%a.log
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/MI_gpt2_%a.log
 #SBATCH --array=0-5  # Update if number of combinations changes
 
 # Define constants
@@ -67,7 +67,7 @@ echo " Group Type: $GROUP_TYPE"
 echo " Combination Index: $SLURM_ARRAY_TASK_ID of $TOTAL_COMBINATIONS"
 
 # Run the analysis script
-python "$SCRIPT_ROOT/activation_geometry.py" \
+python "$SCRIPT_ROOT/activation_MI.py" \
   -m "$MODEL" \
   --vector "$VECTOR" \
   --group_type "$GROUP_TYPE" \
