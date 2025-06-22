@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.a_graph import GraphCoordinationAnalyzer
+from neuron_analyzer.analysis.a_graph import GraphCoordinationAnalyzer, ThresholdSelector
 from neuron_analyzer.analysis.geometry_util import get_device, get_group_name, load_activation_indices
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
 
@@ -59,17 +59,22 @@ def configure_path(args):
     save_heuristic = f"{args.heuristic}_med" if args.sel_by_med else args.heuristic
     filename_suffix = ".debug" if args.debug else ".json"
     group_name = get_group_name(args)
-    filename = (
+    stat_filename = (
         f"{args.data_range_end}_{args.top_n}_check_random{filename_suffix}"
         if args.exclude_random
         else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
     )
-    # TODO: we revise this part for baseline experiment
-
-    save_path = (
-        settings.PATH.direction_dir / group_name / "graph" / args.vector / args.model / save_heuristic / filename
+    threshold_filename = (
+        f"{args.data_range_end}_{args.top_n}_check_random{filename_suffix}"
+        if args.exclude_random
+        else f"{args.data_range_end}_{args.top_n}_threshold{filename_suffix}"
     )
-    save_path.parent.mkdir(parents=True, exist_ok=True)
+    # TODO: we revise this part for baseline experiment
+    save_path = settings.PATH.direction_dir / group_name / "graph" / args.vector / args.model / save_heuristic
+    save_path.mkdir(parents=True, exist_ok=True)
+
+    save_stat_path = save_path / stat_filename
+    save_threshold_path = save_path / threshold_filename
 
     if args.sel_freq == "common":  # select from all of the tokens
         threshold_path = settings.PATH.ablation_dir / "longtail_50" / args.model
@@ -79,13 +84,14 @@ def configure_path(args):
         abl_path = settings.PATH.ablation_dir / args.vector / args.model
     # only set the path when loading the group neurons
     neuron_dir = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic
-    return save_path, abl_path, neuron_dir, threshold_path
+    return save_stat_path, save_threshold_path, abl_path, neuron_dir, threshold_path
 
 
 def analyze_single(
     args,
     abl_path: Path,
-    save_path: Path,
+    save_stat_path: Path,
+    save_threshold_path: Path,
     neuron_dir: Path,
     threshold_path: Path,
     device: str,
@@ -104,6 +110,26 @@ def analyze_single(
     )
 
     if do_analysis:
+        # select the threshold
+        threshold_selector = ThresholdSelector(
+            activation_data=activation_data,
+            boost_neuron_indices=boost_neuron_indices,
+            suppress_neuron_indices=suppress_neuron_indices,
+            excluded_neuron_indices=random_indices,
+            activation_column="activation",
+            token_column="str_tokens",
+            context_column="context",
+            component_column="component_name",
+            device=device,
+        )
+        threshold_results = threshold_selector.run_all_analyses()
+        results = threshold_selector.summarize_results(threshold_results)
+        final_results = {}
+        final_results[str(-1)] = results
+        # assign col headers
+        JsonProcessor.save_json(final_results, save_threshold_path)
+        logger.info(f"Save threshold file to {save_threshold_path}")
+
         # initilize the class
         geometry_analyzer = GraphCoordinationAnalyzer(
             activation_data=activation_data,
@@ -122,14 +148,15 @@ def analyze_single(
         final_results = {}
         final_results[str(-1)] = results
         # assign col headers
-        JsonProcessor.save_json(final_results, save_path)
-        logger.info(f"Save file to {save_path}")
+        JsonProcessor.save_json(final_results, save_stat_path)
+        logger.info(f"Save stat file to {save_stat_path}")
 
 
 def analyze_multi(
     args,
     abl_path: Path,
-    save_path: Path,
+    save_stat_path: Path,
+    save_threshold_path: Path,
     neuron_dir: Path,
     threshold_path: Path,
     device: str,
@@ -138,7 +165,7 @@ def analyze_multi(
     """Analze the activation space of multiple steps."""
     # load and update result json
     step_processor = StepPathProcessor(abl_path)
-    final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)
+    final_results, step_dirs = step_processor.resume_results(args.resume, save_stat_path, neuron_dir)
 
     for step in step_dirs:
         # try:
@@ -163,8 +190,8 @@ def analyze_multi(
             results = geometry_analyzer.run_all_analyses()
             final_results[str(step[1])] = results
             # assign col headers
-            JsonProcessor.save_json(final_results, save_path)
-            logger.info(f"Save file to {save_path}")
+            JsonProcessor.save_json(final_results, save_stat_path)
+            logger.info(f"Save file to {save_stat_path}")
 
     # except:
     #     logger.info(f"Something wrong with {step[1]}")
@@ -182,13 +209,14 @@ def main() -> None:
     if args.exclude_random:
         logger.info("Exclude the existing random neurons")
     # loop over different steps
-    save_path, abl_path, neuron_dir, threshold_path = configure_path(args)
+    save_stat_path, save_threshold_path, abl_path, neuron_dir, threshold_path = configure_path(args)
 
     if args.step_mode == "single":
         analyze_single(
             args=args,
             abl_path=abl_path,
-            save_path=save_path,
+            save_stat_path=save_stat_path,
+            save_threshold_path=save_threshold_path,
             neuron_dir=neuron_dir,
             threshold_path=threshold_path,
             device=device,
@@ -198,7 +226,8 @@ def main() -> None:
         analyze_multi(
             args=args,
             abl_path=abl_path,
-            save_path=save_path,
+            save_stat_path=save_stat_path,
+            save_threshold_path=save_threshold_path,
             neuron_dir=neuron_dir,
             threshold_path=threshold_path,
             device=device,

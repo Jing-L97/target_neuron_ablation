@@ -1,4 +1,3 @@
-import json
 import logging
 import warnings
 from collections import Counter, defaultdict
@@ -23,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Threshold selection
 
 
-class AutomaticThresholdSelector:
+class ThresholdSelector:
     """Step 1: Automatic threshold selection for graph-based neural coordination analysis.
     Determines optimal correlation and MI thresholds using statistical and data-driven methods.
     """
@@ -51,7 +50,6 @@ class AutomaticThresholdSelector:
         random_state: int = 42,
     ):
         """Initialize automatic threshold selector."""
-        self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.random_state = random_state
         np.random.seed(random_state)
 
@@ -67,7 +65,7 @@ class AutomaticThresholdSelector:
         self.max_threshold_mi = max_threshold_mi
         self.n_permutations = n_permutations
         self.significance_levels = significance_levels
-
+        self.device = device
         # Store all neuron indices for representative threshold selection
         self.all_analysis_indices = list(
             set(
@@ -714,16 +712,8 @@ class AutomaticThresholdSelector:
             permuted_data[:, i] = np.random.permutation(data[:, i])
         return permuted_data
 
-    def run_threshold_selection(self, method: str = "comprehensive") -> dict[str, Any]:
-        """Main method to run threshold selection.
-
-        Args:
-            method: "statistical", "mixture", "topology", or "comprehensive"
-
-        Returns:
-            Dictionary with selected thresholds and analysis results
-
-        """
+    def run_all_analyses(self, method: str = "comprehensive") -> dict[str, Any]:
+        """Main method to run threshold selection."""
         logger.info(f"Starting threshold selection using {method} method...")
 
         start_time = pd.Timestamp.now()
@@ -804,36 +794,7 @@ class AutomaticThresholdSelector:
                 },
             }
 
-    def save_threshold_selection_results(
-        self, results: dict[str, Any], filepath: str = "threshold_selection_results.json"
-    ) -> None:
-        """Save threshold selection results to JSON file."""
-        try:
-            # Convert numpy arrays to lists for JSON serialization
-            def convert_for_json(obj):
-                if isinstance(obj, np.ndarray):
-                    return obj.tolist()
-                if isinstance(obj, np.integer):
-                    return int(obj)
-                if isinstance(obj, np.floating):
-                    return float(obj)
-                if isinstance(obj, dict):
-                    return {key: convert_for_json(value) for key, value in obj.items()}
-                if isinstance(obj, list):
-                    return [convert_for_json(item) for item in obj]
-                return obj
-
-            json_results = convert_for_json(results)
-
-            with open(filepath, "w") as f:
-                json.dump(json_results, f, indent=2)
-
-            logger.info(f"Threshold selection results saved to {filepath}")
-
-        except Exception as e:
-            logger.error(f"Failed to save results: {e}")
-
-    def create_threshold_summary_report(self, results: dict[str, Any]) -> str:
+    def summarize_results(self, results: dict[str, Any]) -> str:
         """Create a human-readable summary report of threshold selection."""
         report = []
         report.append("=" * 70)
