@@ -178,7 +178,6 @@ class NeuronGroupAnalyzer:
 
         # convert neuron index format
         neuron_value = frame.head(1)["top_neurons"].item()
-        logger.info(f"The filtered neuron values are: {neuron_value}")
         return neuron_value
         # special_neuron_indices, _ = self.neuron_loader.extract_neurons(neuron_value)
         # return special_neuron_indices

@@ -38,7 +38,24 @@ class BaseHypothesisTester(ABC):
     def _compute_evidence_strength(self, metrics: dict[str, float], thresholds: dict[str, float]) -> float:
         """Compute overall evidence strength from multiple metrics."""
         if not metrics or not thresholds:
-            return metrics
+            return 0.0  # Return float instead of metrics dict
+
+        # Compute evidence strength as average of normalized metric scores
+        evidence_scores = []
+
+        for metric_name, metric_value in metrics.items():
+            if metric_name in thresholds:
+                threshold = thresholds[metric_name]
+                if threshold > 0:
+                    # Normalize score: metric/threshold, capped at 1.0
+                    normalized_score = min(metric_value / threshold, 1.0)
+                else:
+                    # For zero threshold, use binary scoring
+                    normalized_score = 1.0 if metric_value > 0 else 0.0
+                evidence_scores.append(normalized_score)
+
+        # Return average evidence strength, or 0.0 if no valid scores
+        return float(np.mean(evidence_scores)) if evidence_scores else 0.0
 
     def _generate_optimization_summary(self, evidence: dict[str, float], supported: bool) -> str:
         """Generate human-readable summary of optimization evidence."""
@@ -466,6 +483,9 @@ class HierarchyTester(BaseHypothesisTester):
 
         # Determine support
         supported = evidence_strength > 0.6
+
+        logger.info("The evidence metrics are ")
+        logger.info(evidence_metrics)
 
         # Generate summary
         summary = self._generate_hierarchy_summary(evidence_metrics, supported)

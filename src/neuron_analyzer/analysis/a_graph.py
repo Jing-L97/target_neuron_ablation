@@ -41,6 +41,7 @@ class AnalysisConfig:
     mi_threshold: float = 0.1
     edge_construction_method: str = "correlation"  # "correlation", "mi", "hybrid"
     preserve_edge_signs: bool = True
+    apply_abs: bool = True
 
     # Analysis parameters
     num_random_groups: int = 2
@@ -139,6 +140,7 @@ def run_all_analyses(
             correlation_threshold=config.correlation_threshold,
             mi_threshold=config.mi_threshold,
             preserve_edge_signs=config.preserve_edge_signs,
+            apply_abs=config.apply_abs,
         )
 
         graph_builder = GraphBuilder(method=config.edge_construction_method, config=graph_config)

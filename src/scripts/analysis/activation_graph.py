@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.a_graph import run_all_analyses
+from neuron_analyzer.analysis.a_graph import AnalysisConfig, run_all_analyses
 from neuron_analyzer.analysis.geometry_util import get_device, get_group_name, load_activation_indices
 from neuron_analyzer.load_util import JsonProcessor
 
@@ -35,13 +35,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step_mode", type=str, choices=["single", "multi"], default="single", help="whether to compute multi steps"
     )
+    parser.add_argument("--edge_type", type=str, choices=["correlation", "mi", "hybrid"], default="correlation")
+    parser.add_argument("--edge_threshold", type=float, default=0.1)
+    parser.add_argument("--apply_abs", action="store_true", help="whether to use absoluta value threshold")
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--load_stat", action="store_true", help="Whether to load from existing index")
     parser.add_argument("--exclude_random", action="store_true", help="Whether to exclude existing random")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Check existing file and resume when setting this")
-    parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
+    parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
     parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
     parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
@@ -70,7 +73,13 @@ def configure_path(args):
         else f"{args.data_range_end}_{args.top_n}_threshold{filename_suffix}"
     )
     # TODO: we revise this part for baseline experiment
-    save_path = settings.PATH.direction_dir / group_name / "graph" / args.vector / args.model / save_heuristic
+    if args.apply_abs:
+        edge_dir = f"{args.edge_type}_{args.edge_threshold}_abs"
+    else:
+        edge_dir = f"{args.edge_type}_{args.edge_threshold}"
+    save_path = (
+        settings.PATH.direction_dir / group_name / "graph" / args.vector / args.model / save_heuristic / edge_dir
+    )
     save_path.mkdir(parents=True, exist_ok=True)
 
     save_stat_path = save_path / stat_filename
@@ -87,38 +96,17 @@ def configure_path(args):
     return save_stat_path, save_threshold_path, abl_path, neuron_dir, threshold_path
 
 
-class AnalysisConfig:
-    """Configuration for the complete analysis pipeline."""
-
-    # Data parameters
-    activation_column: str = "activation"
-    token_column: str = "str_tokens"
-    context_column: str = "context"
-    component_column: str = "component_name"
-
-    # Graph construction
-    correlation_threshold: float = 0.3
-    mi_threshold: float = 0.1
-    edge_construction_method: str = "correlation"  # "correlation", "mi", "hybrid"
-    preserve_edge_signs: bool = True
-
-    # Analysis parameters
-    num_random_groups: int = 2
-    min_graph_size: int = 10
-    random_seed: int = 42
-
-    # Statistical validation
-    null_model_type: str = "permutation"  # "permutation", "configuration", "signed"
-    n_null_samples: int = 1000
-    n_bootstrap: int = 1000
-    significance_level: float = 0.05
-    multiple_testing_correction: str = "bonferroni"
-
-    # Hypothesis testing
-    hierarchy_threshold: float = 0.1
-    modularity_threshold: float = 0.3
-    adaptivity_threshold: float = 0.1
-    optimization_threshold: float = 0.5
+def overdrive_class(args) -> AnalysisConfig:
+    """Overdrive the class with new parameters."""
+    if args.edge_type == "correlation":
+        return AnalysisConfig(
+            edge_construction_method=args.edge_type, correlation_threshold=args.edge_threshold, apply_abs=args.apply_abs
+        )
+    if args.edge_type == "mi":
+        return AnalysisConfig(
+            edge_construction_method=args.edge_type, mi_threshold=args.edge_threshold, apply_abs=args.apply_abs
+        )
+    return AnalysisConfig
 
 
 def analyze_single(
@@ -128,7 +116,6 @@ def analyze_single(
     neuron_dir: Path,
     threshold_path: Path,
     device: str,
-    analysis_config: AnalysisConfig,
     **kwargs,
 ) -> None:
     """Analze the activation space of the single step."""
@@ -142,6 +129,8 @@ def analyze_single(
             device=device,
         )
     )
+
+    analysis_config = overdrive_class(args)
 
     if do_analysis:
         # initilize the class
@@ -172,7 +161,6 @@ def analyze_multi(
     neuron_dir: Path,
     threshold_path: Path,
     device: str,
-    analysis_config: AnalysisConfig,
     **kwargs,
 ) -> None:
     """Analze the activation space of the single step."""
@@ -186,6 +174,8 @@ def analyze_multi(
             device=device,
         )
     )
+
+    analysis_config = overdrive_class(args)
 
     if do_analysis:
         # initilize the class

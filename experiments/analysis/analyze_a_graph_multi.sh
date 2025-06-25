@@ -1,25 +1,24 @@
 #!/bin/bash
-#SBATCH --job-name=graph_gpt2
+#SBATCH --job-name=graph_pythia
 #SBATCH --export=ALL
 #SBATCH --partition=gpu
 #SBATCH --mem=70G
-#SBATCH --gres=gpu:1
-#SBATCH --time=24:00:00
-#SBATCH --cpus-per-task=10
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/graph_gpt2_%a.log
-#SBATCH --array=0-8  # Update if number of combinations changes
+#SBATCH --time=10:00:00
+#SBATCH --cpus-per-task=6
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/graph_pythia_%a.log
+#SBATCH --array=0-5  # Update if number of combinations changes
 
 # Define constants
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/analysis"
 SEL_FREQ="longtail_50"
 # Define parameter arrays
-MODELS=("gpt2" "gpt2-large" "gpt2-xl")
+MODELS=("EleutherAI/pythia-70m-deduped" "EleutherAI/pythia-410m-deduped")
 VECTORS=("longtail_50")
 TOP_NS=(10 50 100)
 HEURISTICS=("prob")
 GROUP_SIZES=("best") #"target_size"
 GROUP_TYPES=("individual") #"group"
-STEP_MODE="single"
+STEP_MODE="multi"
 
 # Calculate total number of combinations
 TOTAL_COMBINATIONS=$((${#MODELS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#HEURISTICS[@]} * ${#GROUP_SIZES[@]} * ${#GROUP_TYPES[@]}))

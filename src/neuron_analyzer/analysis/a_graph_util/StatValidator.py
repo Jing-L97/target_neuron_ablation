@@ -529,11 +529,7 @@ class SignificanceTester:
 
 
 class StatisticalValidator:
-    """Comprehensive statistical validation framework for network analysis results.
-
-    Orchestrates null model generation, bootstrap estimation, and significance testing
-    to provide rigorous statistical validation of network metrics.
-    """
+    """Comprehensive statistical validation framework for network analysis results."""
 
     def __init__(
         self,

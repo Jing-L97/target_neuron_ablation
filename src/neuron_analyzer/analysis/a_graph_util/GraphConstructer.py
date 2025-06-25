@@ -26,6 +26,7 @@ class GraphConfig:
     correlation_threshold: float = 0.3
     mi_threshold: float = 0.1
     preserve_edge_signs: bool = True
+    apply_abs: bool = True
     min_edge_weight: float = 0.0
     max_edges_per_node: int | None = None
 
@@ -36,6 +37,7 @@ class BaseGraphBuilder(ABC):
     def __init__(self, config: GraphConfig):
         self.config = config
         self.preserve_signs = config.preserve_edge_signs
+        self.apply_abs = config.apply_abs
 
     @abstractmethod
     def compute_edge_weights(self, data: np.ndarray) -> np.ndarray:
@@ -66,7 +68,10 @@ class BaseGraphBuilder(ABC):
         """Apply thresholding and filtering to edge matrix."""
         # Apply minimum weight threshold
         if self.config.min_edge_weight > 0:
-            edge_matrix[np.abs(edge_matrix) < self.config.min_edge_weight] = 0.0
+            if self.config.apply_abs:
+                edge_matrix[np.abs(edge_matrix) < self.config.min_edge_weight] = 0.0
+            else:
+                edge_matrix[edge_matrix < self.config.min_edge_weight] = 0.0
 
         # Limit edges per node if specified
         if self.config.max_edges_per_node is not None:
@@ -84,8 +89,7 @@ class BaseGraphBuilder(ABC):
 
         for i in range(n_nodes):
             # Get edge strengths for this node
-            edge_strengths = np.abs(edge_matrix[i])
-
+            edge_strengths = np.abs(edge_matrix[i]) if self.config.apply_abs else edge_matrix[i]
             # Find indices of strongest edges
             top_indices = np.argpartition(edge_strengths, -self.config.max_edges_per_node)[
                 -self.config.max_edges_per_node :
@@ -155,11 +159,14 @@ class CorrelationGraphBuilder(BaseGraphBuilder):
             # Apply threshold
             if self.preserve_signs:
                 # Keep signs but threshold by absolute value
-                threshold_mask = np.abs(corr_matrix) >= self.config.correlation_threshold
+                if self.apply_abs:
+                    threshold_mask = np.abs(corr_matrix) >= self.config.correlation_threshold
+                else:
+                    threshold_mask = corr_matrix >= self.config.correlation_threshold
                 edge_matrix = corr_matrix * threshold_mask
             else:
                 # Use absolute values
-                edge_matrix = np.abs(corr_matrix)
+                edge_matrix = np.abs(corr_matrix) if self.apply_abs else corr_matrix
                 edge_matrix[edge_matrix < self.config.correlation_threshold] = 0.0
 
             return edge_matrix
@@ -261,7 +268,10 @@ class HybridGraphBuilder(BaseGraphBuilder):
 
                 if self.require_both:
                     # Require both correlation and MI thresholds
-                    corr_mask = np.abs(corr_matrix) >= self.config.correlation_threshold
+                    if self.apply_abs:
+                        corr_mask = np.abs(corr_matrix) >= self.config.correlation_threshold
+                    else:
+                        corr_mask = corr_matrix >= self.config.correlation_threshold
                     mi_mask = mi_matrix >= self.config.mi_threshold
                     combined_mask = corr_mask & mi_mask
 
@@ -273,10 +283,15 @@ class HybridGraphBuilder(BaseGraphBuilder):
                     )
             else:
                 # Standard weighted combination for unsigned graphs
-                edge_matrix = self.correlation_weight * np.abs(corr_matrix) + self.mi_weight * mi_matrix
-
+                if self.apply_abs:
+                    edge_matrix = self.correlation_weight * np.abs(corr_matrix) + self.mi_weight * mi_matrix
+                else:
+                    edge_matrix = self.correlation_weight * corr_matrix + self.mi_weight * mi_matrix
                 if self.require_both:
-                    corr_mask = np.abs(corr_matrix) >= self.config.correlation_threshold
+                    if self.apply_abs:
+                        corr_mask = np.abs(corr_matrix) >= self.config.correlation_threshold
+                    else:
+                        corr_mask = corr_matrix >= self.config.correlation_threshold
                     mi_mask = mi_matrix >= self.config.mi_threshold
                     edge_matrix *= corr_mask & mi_mask
 
@@ -396,17 +411,23 @@ class GraphBuilder:
     @staticmethod
     def create_binary_graph_builder(threshold: float = 0.3) -> "GraphBuilder":
         """Create builder for binary graphs."""
-        config = GraphConfig(correlation_threshold=threshold, preserve_edge_signs=False, min_edge_weight=threshold)
+        config = GraphConfig(
+            correlation_threshold=threshold, preserve_edge_signs=False, apply_abs=True, min_edge_weight=threshold
+        )
         return GraphBuilder("correlation", config)
 
     @staticmethod
     def create_signed_graph_builder(threshold: float = 0.3) -> "GraphBuilder":
         """Create builder for signed weighted graphs."""
-        config = GraphConfig(correlation_threshold=threshold, preserve_edge_signs=True, min_edge_weight=0.0)
+        config = GraphConfig(
+            correlation_threshold=threshold, preserve_edge_signs=True, apply_abs=True, min_edge_weight=0.0
+        )
         return GraphBuilder("correlation", config)
 
     @staticmethod
     def create_sparse_graph_builder(max_edges_per_node: int = 10) -> "GraphBuilder":
         """Create builder for sparse graphs with limited connectivity."""
-        config = GraphConfig(correlation_threshold=0.1, preserve_edge_signs=True, max_edges_per_node=max_edges_per_node)
+        config = GraphConfig(
+            correlation_threshold=0.1, preserve_edge_signs=True, apply_abs=True, max_edges_per_node=max_edges_per_node
+        )
         return GraphBuilder("hybrid", config)
