@@ -4,9 +4,9 @@ import logging
 from pathlib import Path
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.a_graph import run_all_analyses
+from neuron_analyzer.analysis.a_graph_util import GraphCoordinationAnalyzer, ThresholdSelector
 from neuron_analyzer.analysis.geometry_util import get_device, get_group_name, load_activation_indices
-from neuron_analyzer.load_util import JsonProcessor
+from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -87,49 +87,15 @@ def configure_path(args):
     return save_stat_path, save_threshold_path, abl_path, neuron_dir, threshold_path
 
 
-class AnalysisConfig:
-    """Configuration for the complete analysis pipeline."""
-
-    # Data parameters
-    activation_column: str = "activation"
-    token_column: str = "str_tokens"
-    context_column: str = "context"
-    component_column: str = "component_name"
-
-    # Graph construction
-    correlation_threshold: float = 0.3
-    mi_threshold: float = 0.1
-    edge_construction_method: str = "correlation"  # "correlation", "mi", "hybrid"
-    preserve_edge_signs: bool = True
-
-    # Analysis parameters
-    num_random_groups: int = 2
-    min_graph_size: int = 10
-    random_seed: int = 42
-
-    # Statistical validation
-    null_model_type: str = "permutation"  # "permutation", "configuration", "signed"
-    n_null_samples: int = 1000
-    n_bootstrap: int = 1000
-    significance_level: float = 0.05
-    multiple_testing_correction: str = "bonferroni"
-
-    # Hypothesis testing
-    hierarchy_threshold: float = 0.1
-    modularity_threshold: float = 0.3
-    adaptivity_threshold: float = 0.1
-    optimization_threshold: float = 0.5
-
-
 def analyze_single(
     args,
     abl_path: Path,
     save_stat_path: Path,
+    save_threshold_path: Path,
     neuron_dir: Path,
     threshold_path: Path,
     device: str,
-    analysis_config: AnalysisConfig,
-    **kwargs,
+    use_mixed_precision: bool,
 ) -> None:
     """Analze the activation space of the single step."""
     activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
@@ -144,20 +110,41 @@ def analyze_single(
     )
 
     if do_analysis:
-        # initilize the class
-        # Override with any provided kwargs
-        for key, value in kwargs.items():
-            if hasattr(analysis_config, key):
-                setattr(analysis_config, key, value)
-
-        # Run analysis
-        results = run_all_analyses(
+        # select the threshold
+        threshold_selector = ThresholdSelector(
             activation_data=activation_data,
             boost_neuron_indices=boost_neuron_indices,
             suppress_neuron_indices=suppress_neuron_indices,
-            config=analysis_config,
+            excluded_neuron_indices=random_indices,
+            activation_column="activation",
+            token_column="str_tokens",
+            context_column="context",
+            component_column="component_name",
+            device=device,
         )
+        threshold_results = threshold_selector.run_all_analyses()
+        results = threshold_selector.summarize_results(threshold_results)
+        final_results = {}
+        final_results[str(-1)] = results
+        # assign col headers
+        JsonProcessor.save_json(final_results, save_threshold_path)
+        logger.info(f"Save threshold file to {save_threshold_path}")
 
+        # initilize the class
+        geometry_analyzer = GraphCoordinationAnalyzer(
+            activation_data=activation_data,
+            boost_neuron_indices=boost_neuron_indices,
+            suppress_neuron_indices=suppress_neuron_indices,
+            excluded_neuron_indices=random_indices,
+            activation_column="activation",
+            token_column="str_tokens",
+            context_column="context",
+            component_column="component_name",
+            num_random_groups=2,
+            device=device,
+            use_mixed_precision=use_mixed_precision,
+        )
+        results = geometry_analyzer.run_all_analyses()
         final_results = {}
         final_results[str(-1)] = results
         # assign col headers
@@ -169,44 +156,45 @@ def analyze_multi(
     args,
     abl_path: Path,
     save_stat_path: Path,
+    save_threshold_path: Path,
     neuron_dir: Path,
     threshold_path: Path,
     device: str,
-    analysis_config: AnalysisConfig,
-    **kwargs,
+    use_mixed_precision: bool,
 ) -> None:
-    """Analze the activation space of the single step."""
-    activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
-        load_activation_indices(
-            args=args,
-            abl_path=abl_path,
-            step_num="-1",
-            neuron_dir=neuron_dir,
-            threshold_path=threshold_path,
-            device=device,
+    """Analze the activation space of multiple steps."""
+    # load and update result json
+    step_processor = StepPathProcessor(abl_path)
+    final_results, step_dirs = step_processor.resume_results(args.resume, save_stat_path, neuron_dir)
+
+    for step in step_dirs:
+        # try:
+        activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
+            load_activation_indices(args, abl_path, str(step[1]), neuron_dir, threshold_path, device)
         )
-    )
+        if do_analysis:
+            # initilize the class
+            geometry_analyzer = GraphCoordinationAnalyzer(
+                activation_data=activation_data,
+                boost_neuron_indices=boost_neuron_indices,
+                suppress_neuron_indices=suppress_neuron_indices,
+                excluded_neuron_indices=random_indices,
+                activation_column="activation",
+                token_column="str_tokens",
+                context_column="context",
+                component_column="component_name",
+                num_random_groups=2,
+                device=device,
+                use_mixed_precision=use_mixed_precision,
+            )
+            results = geometry_analyzer.run_all_analyses()
+            final_results[str(step[1])] = results
+            # assign col headers
+            JsonProcessor.save_json(final_results, save_stat_path)
+            logger.info(f"Save file to {save_stat_path}")
 
-    if do_analysis:
-        # initilize the class
-        # Override with any provided kwargs
-        for key, value in kwargs.items():
-            if hasattr(analysis_config, key):
-                setattr(analysis_config, key, value)
-
-        # Run analysis
-        results = run_all_analyses(
-            activation_data=activation_data,
-            boost_neuron_indices=boost_neuron_indices,
-            suppress_neuron_indices=suppress_neuron_indices,
-            config=analysis_config,
-        )
-
-        final_results = {}
-        final_results[str(-1)] = results
-        # assign col headers
-        JsonProcessor.save_json(final_results, save_stat_path)
-        logger.info(f"Save stat file to {save_stat_path}")
+    # except:
+    #     logger.info(f"Something wrong with {step[1]}")
 
 
 #######################################################################################################
@@ -222,7 +210,6 @@ def main() -> None:
         logger.info("Exclude the existing random neurons")
     # loop over different steps
     save_stat_path, save_threshold_path, abl_path, neuron_dir, threshold_path = configure_path(args)
-    analysis_config = AnalysisConfig()
 
     if args.step_mode == "single":
         analyze_single(
@@ -233,7 +220,7 @@ def main() -> None:
             neuron_dir=neuron_dir,
             threshold_path=threshold_path,
             device=device,
-            analysis_config=analysis_config,
+            use_mixed_precision=use_mixed_precision,
         )
     if args.step_mode == "multi":
         analyze_multi(
