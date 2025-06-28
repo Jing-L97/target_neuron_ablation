@@ -27,7 +27,7 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments for step range."""
     parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
-    parser.add_argument("--interval", type=int, default=20, help="Checkpoint interval sampling")
+    parser.add_argument("--interval", type=int, default=1, help="Checkpoint interval sampling")
     parser.add_argument("--layer_num", type=int, default=1, help="Last n MLP layer")
     parser.add_argument(
         "--config_name",
@@ -83,12 +83,15 @@ def main():
                 logger.info(f"Files for step {step} already exist. Skip!")
                 continue
             logger.info(f"Processing step {step}")
+            abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
 
+            """
             try:
                 abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
             except Exception as e:
                 logger.error(f"Error processing step {step}: {e!s}")
                 continue
+            """
             cleanup()
 
 

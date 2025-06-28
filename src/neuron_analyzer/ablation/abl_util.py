@@ -803,6 +803,11 @@ def load_model_from_tl_name_single(model_name, device="cuda", cache_dir=None, hf
     return model, tokenizer
 
 
+def get_model_dtype():
+    """Get model data type."""
+    return
+
+
 def load_pythia_steps(
     model_name, device="cuda", step=None, cache_dir=None, hf_token=None
 ) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:
@@ -825,7 +830,7 @@ def load_pythia_steps(
             tokenizer=tokenizer,
             device=device,
             cache_dir=cache_dir / model_name / f"step{step}",
-            torch_dtype=torch.float16,
+            # torch_dtype=torch.float16,
         )
         logger.info(f"import hooked model from {cache_dir}/{model_name}/step{step}")
         return model, tokenizer
@@ -838,9 +843,6 @@ def load_model_from_tl_name(model_name, device="cuda", step=None, cache_dir=None
         return load_pythia_steps(model_name, device=device, step=step, cache_dir=cache_dir, hf_token=hf_token)
 
     return load_model_from_tl_name_single(model_name, device=device, cache_dir=cache_dir, hf_token=hf_token)
-
-
-# Induction functions
 
 
 def generate_induction_examples(
@@ -940,7 +942,11 @@ def get_induction_data_and_token_df(
 
 # get pile unigram count - specifically for Pythia
 def get_pile_unigram_distribution(
-    file_path="datasets/pythia-unigrams.npy", pad_to_match_W_U=True, device="cuda", model_name="pythia-410m"
+    file_path="datasets/pythia-unigrams.npy",
+    pad_to_match_W_U=True,
+    device="cuda",
+    model_name="pythia-410m",
+    dtype=torch.float32,
 ):
     unigram_count = np.load(file_path)
 
@@ -956,7 +962,7 @@ def get_pile_unigram_distribution(
 
     unigram_distrib = unigram_count + 1
     unigram_distrib = unigram_distrib / unigram_distrib.sum()
-    unigram_distrib = torch.tensor(unigram_distrib, dtype=torch.float32).to(device)
+    unigram_distrib = torch.tensor(unigram_distrib, dtype=dtype).to(device)
 
     return unigram_distrib, unigram_count
 

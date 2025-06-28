@@ -4,9 +4,9 @@
 #SBATCH --partition=gpu
 #SBATCH --mem=100G
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=10
-#SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/pythia.log
+#SBATCH --cpus-per-task=4
+#SBATCH --time=6:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/pythia%a.log
 #SBATCH --array=0-1
 
 # Script and config paths
@@ -14,8 +14,8 @@ SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/
 
 # Define the configuration files
 CONFIG_NAMES=(
-  "config_unigram_ablations_1B.yaml"
-  "config_unigram_ablations_2.8B.yaml"
+  "config_unigram_ablations_70M.yaml"
+  "config_unigram_ablations_410M.yaml"
 )
 
 # Map array task ID to configuration file

@@ -228,6 +228,9 @@ class ModelAblationAnalyzer:
         """Initialize the ModelAblationAnalyzer."""
         self.model = model
         self.unigram_distrib = unigram_distrib
+        # change precision if necessary
+        # model_dtype = next(model.parameters()).dtype
+        # self.unigram_distrib = unigram_distrib.to(dtype=model_dtype)
         self.tokenized_data = tokenized_data
         self.entropy_df = entropy_df
         self.device = device
@@ -508,31 +511,6 @@ class ModelAblationAnalyzer:
         activation_mean_values = torch.tensor(
             self.entropy_df[[f"{component_name}_activation" for component_name in self.components_to_ablate]].mean()
         )
-
-        """
-        # Add diagnostic logging for first few batches
-        for batch_idx, batch_n in enumerate(list(filtered_entropy_df.batch.unique())[:3]):
-            batch_df = filtered_entropy_df[filtered_entropy_df.batch == batch_n]
-            tok_seq = self.tokenized_data["tokens"][batch_n]
-            positions = sorted(batch_df["pos"].unique())
-            
-            logger.info(f"Diagnostic for batch {batch_n}:")
-            logger.info(f"  DataFrame rows: {len(batch_df)}")
-            logger.info(f"  Unique positions: {len(positions)}")
-            logger.info(f"  Token sequence length: {len(tok_seq)}")
-            
-            if positions:
-                logger.info(f"  Position range: {min(positions)} to {max(positions)}")
-
-                # Check for position gaps
-                if len(positions) > 1:
-                    gaps = [positions[i + 1] - positions[i] for i in range(len(positions) - 1)]
-                    all_sequential = all(gap == 1 for gap in gaps)
-                    logger.info(f"  Positions are sequential: {all_sequential}")
-                    if not all_sequential:
-                        gap_counts = sum(1 for gap in gaps if gap > 1)
-                        logger.info(f"  Number of gaps: {gap_counts}")
-        """
 
         # Build frequency vectors
         self.build_vector()

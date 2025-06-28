@@ -312,19 +312,19 @@ def sel_eval(results_df: pd.DataFrame, eval_path: Path, result_dir: Path, filena
 # load freq-related file
 
 
-def load_unigram(model_name, device) -> torch.Tensor:
+def load_unigram(model_name, device, dtype=torch.float32) -> torch.Tensor:
     """Load unigram distribution based on model type."""
     # Load unigram distribution
     if "pythia" in model_name:
         file_path = settings.PATH.unigram_dir / "pythia-unigrams.npy"
         unigram_distrib, unigram_count = get_pile_unigram_distribution(
-            device=device, pad_to_match_W_U=True, file_path=file_path
+            device=device, pad_to_match_W_U=True, file_path=file_path, dtype=dtype
         )
         logger.info(f"Loaded unigram freq from {file_path}")
     elif "gpt" in model_name:
         file_path = settings.PATH.unigram_dir / "gpt2-small-unigrams_openwebtext-2M_rows_500000.npy"
         unigram_distrib, unigram_count = get_pile_unigram_distribution(
-            device=device, pad_to_match_W_U=False, file_path=file_path
+            device=device, pad_to_match_W_U=False, file_path=file_path, dtype=dtype
         )
         logger.info(f"Loading unigram freq from {file_path}")
     else:
