@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 
 from neuron_analyzer import settings
-from neuron_analyzer.analysis.a_graph import AnalysisConfig, run_all_analyses
+from neuron_analyzer.analysis.a_modularity import AnalysisConfig, run_all_analyses
 from neuron_analyzer.analysis.geometry_util import get_device, get_group_name, load_activation_indices
 from neuron_analyzer.load_util import JsonProcessor
 
@@ -78,7 +78,7 @@ def configure_path(args):
     else:
         edge_dir = f"{args.edge_type}_{args.edge_threshold}"
     save_path = (
-        settings.PATH.direction_dir / group_name / "graph" / args.vector / args.model / save_heuristic / edge_dir
+        settings.PATH.direction_dir / group_name / "modularity" / args.vector / args.model / save_heuristic / edge_dir
     )
     save_path.mkdir(parents=True, exist_ok=True)
 

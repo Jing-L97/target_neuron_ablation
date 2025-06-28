@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 #######################################################
-# Analyze Network
+# Centrality analyzer
 
 
 class CentralityAnalyzer:
@@ -184,6 +184,10 @@ class CentralityAnalyzer:
         for i, j, data in G_abs.edges(data=True):
             data["weight"] = abs(data.get("weight", 1.0))
         return G_abs
+
+
+#######################################################
+# Modularity analyzer
 
 
 class CommunityAnalyzer:
@@ -406,6 +410,10 @@ class CommunityAnalyzer:
         for i, j, data in G_abs.edges(data=True):
             data["weight"] = abs(data.get("weight", 1.0))
         return G_abs
+
+
+#######################################################
+# Topology analyzer
 
 
 class TopologyAnalyzer:
@@ -635,6 +643,10 @@ class TopologyAnalyzer:
         for i, j, data in G_abs.edges(data=True):
             data["weight"] = abs(data.get("weight", 1.0))
         return G_abs
+
+
+#######################################################
+# Network analyzer
 
 
 class NetworkAnalyzer:

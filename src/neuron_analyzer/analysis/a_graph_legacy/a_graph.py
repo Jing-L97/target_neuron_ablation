@@ -6,12 +6,12 @@ import numpy as np
 import pandas as pd
 
 # Import all the restructured classes
-from neuron_analyzer.analysis.a_graph_util.DataLoader import DataManager
-from neuron_analyzer.analysis.a_graph_util.GraphConstructer import GraphBuilder, GraphConfig
-from neuron_analyzer.analysis.a_graph_util.HypothesisTester import HypothesisTestSuite
-from neuron_analyzer.analysis.a_graph_util.NetworkAnalyzer import NetworkAnalyzer
-from neuron_analyzer.analysis.a_graph_util.ResultManager import ResultsManager
-from neuron_analyzer.analysis.a_graph_util.StatValidator import StatisticalValidator
+from neuron_analyzer.analysis.modularity_util.DataLoader import DataManager
+from neuron_analyzer.analysis.modularity_util.GraphConstructer import GraphBuilder, GraphConfig
+from neuron_analyzer.analysis.modularity_util.HypothesisTester import HypothesisTestSuite
+from neuron_analyzer.analysis.modularity_util.NetworkAnalyzer import NetworkAnalyzer
+from neuron_analyzer.analysis.modularity_util.ResultManager import ResultsManager
+from neuron_analyzer.analysis.modularity_util.StatValidator import StatisticalValidator
 
 # Configure logging
 logging.basicConfig(

@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=graph_gpt2
+#SBATCH --job-name=modularity_gpt2
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
 #SBATCH --mem=70G
-#SBATCH --time=10:00:00
-#SBATCH --cpus-per-task=6
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/graph_gpt2_%a.log
+#SBATCH --time=2:00:00
+#SBATCH --cpus-per-task=2
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/analysis/modularity_gpt2_%a.log
 #SBATCH --array=0-8  # Update if number of combinations changes
 
 # Define constants
@@ -66,7 +66,7 @@ echo " Group Type: $GROUP_TYPE"
 echo " Combination Index: $SLURM_ARRAY_TASK_ID of $TOTAL_COMBINATIONS"
 
 # Run the analysis script
-python "$SCRIPT_ROOT/activation_graph.py" \
+python "$SCRIPT_ROOT/activation_modularity.py" \
   -m "$MODEL" \
   --vector "$VECTOR" \
   --group_type "$GROUP_TYPE" \
