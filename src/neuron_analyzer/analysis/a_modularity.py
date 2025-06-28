@@ -15,6 +15,9 @@ from neuron_analyzer.analysis.modularity_util.NetworkAnalyzer import CommunityAn
 from neuron_analyzer.analysis.modularity_util.ResultManager import ResultsManager  # noqa: E402
 from neuron_analyzer.analysis.modularity_util.StatValidator import StatisticalValidator  # noqa: E402
 
+#######################################################################################################
+# Analysis setting
+
 
 @dataclass
 class AnalysisConfig:
@@ -39,9 +42,13 @@ class AnalysisConfig:
     random_state: int = 42
 
     # Analysis parameters
-    num_random_groups: int = 3
+    num_random_groups: int = 2
     significance_level: float = 0.05
     n_permutations: int = 1000
+
+
+#######################################################################################################
+# Fucntions applied in the main scripts
 
 
 def run_all_analyses(
