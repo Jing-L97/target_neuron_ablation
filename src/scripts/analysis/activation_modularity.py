@@ -3,6 +3,8 @@ import argparse
 import logging
 from pathlib import Path
 
+import yaml
+
 from neuron_analyzer import settings
 from neuron_analyzer.analysis.a_modularity import AnalysisConfig, run_all_analyses
 from neuron_analyzer.analysis.geometry_util import get_device, get_group_name, load_activation_indices
@@ -35,9 +37,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step_mode", type=str, choices=["single", "multi"], default="single", help="whether to compute multi steps"
     )
-    parser.add_argument("--edge_type", type=str, choices=["correlation", "mi", "hybrid"], default="correlation")
-    parser.add_argument("--edge_threshold", type=float, default=0.1)
-    parser.add_argument("--apply_abs", action="store_true", help="whether to use absoluta value threshold")
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--load_stat", action="store_true", help="Whether to load from existing index")
@@ -49,15 +48,33 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
+
+    # New argument for config file path
+    parser.add_argument(
+        "--config_file", type=str, default=None, help="Path to YAML config file for AnalysisConfig parameters"
+    )
+
     return parser.parse_args()
 
 
+def load_analysis_config_from_yaml(config_file_path: str) -> dict:
+    """Load AnalysisConfig parameters from YAML file."""
+    if not config_file_path or not Path(config_file_path).exists():
+        logger.warning(f"Config file {config_file_path} not found, using default AnalysisConfig")
+        return {}
+
+    with open(config_file_path) as file:
+        config_data = yaml.safe_load(file)
+        logger.info(f"Loaded AnalysisConfig parameters from {config_file_path}")
+        return config_data.get("analysis_config", {})
+
+
 #######################################################################################################
-# Fucntions applied in the main scripts
+# Functions applied in the main scripts
 #######################################################################################################
 
 
-def configure_path(args):
+def configure_path(args, config_params):
     """Configure save path based on the setting."""
     save_heuristic = f"{args.heuristic}_med" if args.sel_by_med else args.heuristic
     filename_suffix = ".debug" if args.debug else ".json"
@@ -72,13 +89,29 @@ def configure_path(args):
         if args.exclude_random
         else f"{args.data_range_end}_{args.top_n}_threshold{filename_suffix}"
     )
-    # TODO: we revise this part for baseline experiment
-    if args.apply_abs:
-        edge_dir = f"{args.edge_type}_{args.edge_threshold}_abs"
+
+    # Use config parameters for edge configuration
+    edge_type = config_params.get("edge_construction_method", "mi")
+    alg = config_params.get("algorithm", "spectral")
+
+    # Determine threshold based on edge type
+    if edge_type == "correlation":
+        edge_threshold = config_params.get("correlation_threshold", float("-inf"))
+    elif edge_type == "mi":
+        edge_threshold = config_params.get("mi_threshold", float("-inf"))
     else:
-        edge_dir = f"{args.edge_type}_{args.edge_threshold}"
+        edge_threshold = float("-inf")  # default
+
+    logger.info(f"The threshold is {edge_threshold}")
+
     save_path = (
-        settings.PATH.direction_dir / group_name / "modularity" / args.vector / args.model / save_heuristic / edge_dir
+        settings.PATH.direction_dir
+        / group_name
+        / "modularity"
+        / args.vector
+        / args.model
+        / save_heuristic
+        / f"{edge_type}_{alg}"
     )
     save_path.mkdir(parents=True, exist_ok=True)
 
@@ -96,17 +129,19 @@ def configure_path(args):
     return save_stat_path, save_threshold_path, abl_path, neuron_dir, threshold_path
 
 
-def overdrive_class(args) -> AnalysisConfig:
-    """Overdrive the class with new parameters."""
-    if args.edge_type == "correlation":
-        return AnalysisConfig(
-            edge_construction_method=args.edge_type, correlation_threshold=args.edge_threshold, apply_abs=args.apply_abs
-        )
-    if args.edge_type == "mi":
-        return AnalysisConfig(
-            edge_construction_method=args.edge_type, mi_threshold=args.edge_threshold, apply_abs=args.apply_abs
-        )
-    return AnalysisConfig
+def create_analysis_config(config_params: dict) -> AnalysisConfig:
+    """Create AnalysisConfig instance with parameters from config file."""
+    analysis_config = AnalysisConfig()
+
+    # Override with parameters from config file
+    for key, value in config_params.items():
+        if hasattr(analysis_config, key):
+            setattr(analysis_config, key, value)
+            logger.info(f"Set AnalysisConfig.{key} = {value}")
+        else:
+            logger.warning(f"Unknown AnalysisConfig parameter: {key}")
+
+    return analysis_config
 
 
 def analyze_single(
@@ -116,9 +151,10 @@ def analyze_single(
     neuron_dir: Path,
     threshold_path: Path,
     device: str,
+    analysis_config: AnalysisConfig,
     **kwargs,
 ) -> None:
-    """Analze the activation space of the single step."""
+    """Analyze the activation space of the single step."""
     activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
         load_activation_indices(
             args=args,
@@ -130,11 +166,8 @@ def analyze_single(
         )
     )
 
-    analysis_config = overdrive_class(args)
-
     if do_analysis:
-        # initilize the class
-        # Override with any provided kwargs
+        # Override with any additional provided kwargs
         for key, value in kwargs.items():
             if hasattr(analysis_config, key):
                 setattr(analysis_config, key, value)
@@ -161,9 +194,10 @@ def analyze_multi(
     neuron_dir: Path,
     threshold_path: Path,
     device: str,
+    analysis_config: AnalysisConfig,
     **kwargs,
 ) -> None:
-    """Analze the activation space of the single step."""
+    """Analyze the activation space of the multi step."""
     activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
         load_activation_indices(
             args=args,
@@ -175,11 +209,8 @@ def analyze_multi(
         )
     )
 
-    analysis_config = overdrive_class(args)
-
     if do_analysis:
-        # initilize the class
-        # Override with any provided kwargs
+        # Override with any additional provided kwargs
         for key, value in kwargs.items():
             if hasattr(analysis_config, key):
                 setattr(analysis_config, key, value)
@@ -208,33 +239,36 @@ def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
     device, use_mixed_precision = get_device()
+
     if args.exclude_random:
         logger.info("Exclude the existing random neurons")
-    # loop over different steps
-    save_stat_path, save_threshold_path, abl_path, neuron_dir, threshold_path = configure_path(args)
-    analysis_config = AnalysisConfig()
+
+    # Load AnalysisConfig parameters from YAML file
+    config_params = load_analysis_config_from_yaml(args.config_file)
+    analysis_config = create_analysis_config(config_params)
+
+    # Configure paths
+    save_stat_path, save_threshold_path, abl_path, neuron_dir, threshold_path = configure_path(args, config_params)
 
     if args.step_mode == "single":
         analyze_single(
             args=args,
             abl_path=abl_path,
             save_stat_path=save_stat_path,
-            save_threshold_path=save_threshold_path,
             neuron_dir=neuron_dir,
             threshold_path=threshold_path,
             device=device,
             analysis_config=analysis_config,
         )
-    if args.step_mode == "multi":
+    elif args.step_mode == "multi":
         analyze_multi(
             args=args,
             abl_path=abl_path,
             save_stat_path=save_stat_path,
-            save_threshold_path=save_threshold_path,
             neuron_dir=neuron_dir,
             threshold_path=threshold_path,
             device=device,
-            use_mixed_precision=use_mixed_precision,
+            analysis_config=analysis_config,
         )
 
 

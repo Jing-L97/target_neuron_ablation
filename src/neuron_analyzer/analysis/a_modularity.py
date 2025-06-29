@@ -7,13 +7,13 @@ import logging
 import numpy as np
 import pandas as pd
 
-# Import all the restructured classes
 from neuron_analyzer.analysis.modularity_util.DataLoader import DataManager  # noqa: E402
 from neuron_analyzer.analysis.modularity_util.GraphConstructer import GraphBuilder, GraphConfig  # noqa: E402
 from neuron_analyzer.analysis.modularity_util.HypothesisTester import HypothesisTestSuite  # noqa: E402
 from neuron_analyzer.analysis.modularity_util.NetworkAnalyzer import CommunityAnalyzer  # noqa: E402
 from neuron_analyzer.analysis.modularity_util.ResultManager import ResultsManager  # noqa: E402
 from neuron_analyzer.analysis.modularity_util.StatValidator import StatisticalValidator  # noqa: E402
+from neuron_analyzer.analysis.modularity_util.ThresholdSelector import StatisticalThresholdSelector
 
 #######################################################################################################
 # Analysis setting
@@ -31,13 +31,13 @@ class AnalysisConfig:
 
     # Graph construction
     edge_construction_method: str = "correlation"  # "correlation", "mi", "hybrid"
-    correlation_threshold: float = 0.3
-    mi_threshold: float = 0.1
+    correlation_threshold: float = float("-inf")
+    mi_threshold: float = float("-inf")
     preserve_edge_signs: bool = True
-    apply_abs: bool = True
+    apply_abs: bool = False
 
     # Community detection
-    algorithm: str = "louvain"
+    algorithm: str = "spectral"
     resolution: float = 1.0
     random_state: int = 42
 
@@ -146,8 +146,13 @@ def run_all_analyses(
     logger.info("\nSTEP 2: Graph Construction")
     logger.info("-" * 50)
 
+    # TODO: configure threshold
+    threshold_selector = StatisticalThresholdSelector()
+
     # Configure graph builder
     graph_config = GraphConfig(
+        # correlation_threshold=config.correlation_threshold,
+        # mi_threshold=config.mi_threshold,
         correlation_threshold=config.correlation_threshold,
         mi_threshold=config.mi_threshold,
         preserve_edge_signs=config.preserve_edge_signs,

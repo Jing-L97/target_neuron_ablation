@@ -1,0 +1,22 @@
+# Data parameters
+activation_column: str = "activation"
+token_column: str = "str_tokens"
+context_column: str = "context"
+component_column: str = "component_name"
+
+# Graph construction
+edge_construction_method: str = "correlation"  # "correlation", "mi", "hybrid"
+correlation_threshold: float = 0.3
+mi_threshold: float = 0.1
+preserve_edge_signs: bool = True
+apply_abs: bool = True
+
+# Community detection
+algorithm: str = "louvain"
+resolution: float = 1.0
+random_state: int = 42
+
+# Analysis parameters
+num_random_groups: int = 2
+significance_level: float = 0.05
+n_permutations: int = 1000

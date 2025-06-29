@@ -26,7 +26,7 @@ class GraphConfig:
     correlation_threshold: float = 0.3
     mi_threshold: float = 0.1
     preserve_edge_signs: bool = True
-    apply_abs: bool = True
+    apply_abs: bool = False
     min_edge_weight: float = 0.0
     max_edges_per_node: int | None = None
 

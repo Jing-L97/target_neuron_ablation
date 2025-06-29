@@ -8,8 +8,6 @@ from statsmodels.stats.multitest import multipletests
 
 logger = logging.getLogger(__name__)
 
-# TODO:
-
 
 @dataclass
 class ThresholdResult:
