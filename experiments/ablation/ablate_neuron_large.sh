@@ -4,8 +4,8 @@
 #SBATCH --partition=erc-dupoux
 #SBATCH --mem=100G
 #SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --time=6:00:00
+#SBATCH --cpus-per-task=8
+#SBATCH --time=48:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/pythia_L%a.log
 #SBATCH --array=0-1
 
@@ -19,7 +19,7 @@ CONFIG_NAMES=(
 )
 
 INTERVAL=20
-
+START=141
 # Map array task ID to configuration file
 CONFIG_IDX=$SLURM_ARRAY_TASK_ID
 CONFIG_NAME="${CONFIG_NAMES[$CONFIG_IDX]}"
@@ -27,4 +27,4 @@ CONFIG_NAME="${CONFIG_NAMES[$CONFIG_IDX]}"
 echo "Running job array task $SLURM_ARRAY_TASK_ID with configuration: $CONFIG_NAME"
 
 # Run the script with the appropriate configuration
-python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --resume 
+python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --start $START --resume 

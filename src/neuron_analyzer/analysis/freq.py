@@ -9,6 +9,7 @@ from scipy import stats
 from transformers import AutoTokenizer
 
 from neuron_analyzer.load_util import load_unigram
+from neuron_analyzer.settings import get_dtype
 
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # Only show errors, not warnings
 # Setup logging
@@ -364,7 +365,9 @@ class UnigramAnalyzer:
         self.model_name = model_name
         self.device = device
         if unigram_distrib is None:
-            self.unigram_distrib, self.unigram_count = load_unigram(self.model_name, self.device)
+            self.unigram_distrib, self.unigram_count = load_unigram(
+                self.model_name, self.device, dtype=get_dtype(model_name)
+            )
         else:
             self.unigram_distrib, self.unigram_count = unigram_distrib, unigram_count
 

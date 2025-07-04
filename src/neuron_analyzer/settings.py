@@ -3,6 +3,27 @@ import os as _os
 import warnings as _warnings
 from pathlib import Path as _Path
 
+import torch
+
+#######################################################
+# precision setting
+dtype_dict = {
+    torch.float32: ["EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-410m-deduped"],
+    torch.float16: ["EleutherAI/pythia-6.9B-deduped", "EleutherAI/pythia-2.8B-deduped"],
+}
+
+
+def get_dtype(model_name=None, dtype_dict=dtype_dict, default=torch.float32):
+    """Get precision (dtype) for a given model name using a reverse search."""
+    for dtype, model_list in dtype_dict.items():
+        if model_name in model_list:
+            return dtype
+    return default
+
+
+#######################################################
+# directory setting
+
 
 def cache_dir() -> _Path:
     """Return a directory to use as cache."""
@@ -19,6 +40,10 @@ def _assert_dir(dir_location: _Path) -> None:
             f"Using non-existent directory: {dir_location}\nCheck your settings & env variables.",
             stacklevel=1,
         )
+
+
+#######################################################
+# Path Settings
 
 
 @_dataclasses.dataclass
@@ -87,4 +112,5 @@ class _MyPathSettings:
 
 #######################################################
 # Instance of Settings
+
 PATH = _MyPathSettings()

@@ -218,7 +218,9 @@ def main():
         # intialize the process class
         ablation_processor = NeuronAblationProcessor(args=hydra_args, device=device, debug=cli_args.debug)
         base_save_dir = ablation_processor.get_save_dir()
-        unigram_distrib, _ = load_unigram(model_name=hydra_args.model, device=device)
+        unigram_distrib, _ = load_unigram(
+            model_name=hydra_args.model, device=device, dtype=settings.get_dtype(hydra_args.model)
+        )
         longtail_threshold = ablation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
 
         # Process each step in range

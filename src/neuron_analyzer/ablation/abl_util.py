@@ -25,6 +25,8 @@ from torch.nn.functional import kl_div
 from transformer_lens import ActivationCache, HookedTransformer
 from transformers import AutoModelForCausalLM, AutoTokenizer, GPTNeoXForCausalLM
 
+from neuron_analyzer import settings
+
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
@@ -803,11 +805,6 @@ def load_model_from_tl_name_single(model_name, device="cuda", cache_dir=None, hf
     return model, tokenizer
 
 
-def get_model_dtype():
-    """Get model data type."""
-    return
-
-
 def load_pythia_steps(
     model_name, device="cuda", step=None, cache_dir=None, hf_token=None
 ) -> tuple[GPTNeoXForCausalLM, AutoTokenizer]:
@@ -821,7 +818,7 @@ def load_pythia_steps(
             model_name,
             revision=f"step{step}",
             cache_dir=cache_dir / model_name / f"step{step}",
-            torch_dtype=torch.float16,
+            torch_dtype=settings.get_dtype(model_name),
         )
         logger.info(f"import HF model from {cache_dir}/{model_name}/step{step}")
         model = HookedTransformer.from_pretrained(
@@ -830,7 +827,7 @@ def load_pythia_steps(
             tokenizer=tokenizer,
             device=device,
             cache_dir=cache_dir / model_name / f"step{step}",
-            # torch_dtype=torch.float16,
+            torch_dtype=settings.get_dtype(model_name),
         )
         logger.info(f"import hooked model from {cache_dir}/{model_name}/step{step}")
         return model, tokenizer
