@@ -1,11 +1,11 @@
 #!/bin/bash
 #SBATCH --job-name=abl_pythia
 #SBATCH --export=ALL
-#SBATCH --partition=gpu
+#SBATCH --partition=erc-cristia
 #SBATCH --mem=80G
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
-#SBATCH --time=48:00:00
+#SBATCH --time=15:00:00
 #SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/pythia%a.log
 #SBATCH --array=0-1
 

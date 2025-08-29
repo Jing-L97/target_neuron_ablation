@@ -157,6 +157,7 @@ class NeuronAblationProcessor:
             tokenized_data=self.tokenized_data,
             entropy_df=self.entropy_df,
             k=self.args.k,
+            dtype=settings.get_dtype(self.args.model),
             ablation_mode=self.args.ablation_mode,
             longtail_threshold=longtail_threshold,
         )
@@ -220,6 +221,7 @@ class ModelAblationAnalyzer:
         entropy_df,
         components_to_ablate,
         device: str,
+        dtype=torch.float32,
         k: int = 10,
         chunk_size: int = 20,
         ablation_mode: str = "mean",  # "mean" or "longtail"
@@ -228,13 +230,11 @@ class ModelAblationAnalyzer:
         """Initialize the ModelAblationAnalyzer."""
         self.model = model
         self.unigram_distrib = unigram_distrib
-        # change precision if necessary
-        # model_dtype = next(model.parameters()).dtype
-        # self.unigram_distrib = unigram_distrib.to(dtype=model_dtype)
         self.tokenized_data = tokenized_data
         self.entropy_df = entropy_df
         self.device = device
         self.k = k
+        self.dtype = dtype
         self.chunk_size = chunk_size
         self.ablation_mode = ablation_mode
         self.longtail_threshold = longtail_threshold
@@ -264,6 +264,8 @@ class ModelAblationAnalyzer:
             self.unigram_direction_vocab = self.unigram_distrib.log() - self.unigram_distrib.log().mean()
             self.unigram_direction_vocab /= self.unigram_direction_vocab.norm()
             self.longtail_mask = None
+        # set the dtype based on the model name
+        self.unigram_vocab = self.unigram_direction_vocab.to(dtype=self.dtype)
 
     def project_logits(self, logits: torch.Tensor) -> torch.Tensor:
         """Get the value of logits projected onto the unigram direction."""

@@ -2,37 +2,34 @@
 #SBATCH --job-name=sel_tail
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=6
+#SBATCH --cpus-per-task=1
 #SBATCH --mem=60G
-#SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_tail_%a.log
-#SBATCH --array=0-15
+#SBATCH --time=8:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_elbow_%a.log
+#SBATCH --array=0-3
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
-SEL_FREQ="longtail_50"
-STEP_MODE="single"
+SEL_FREQ="longtail_elbow"
+STEP_MODE="multi"
 # Define the input arrays
 EFFECTS=(
-    "suppress"
     "boost"
 )
 
 VECTORS=(
-    "longtail_50"
+    "longtail_elbow"
     
 )
 
 TOP_NS=(
-    10
-    50
     100
     -1
 )
 
 MODELS=(
-    "gpt2-large"
-    "gpt2-xl"
+    "EleutherAI/pythia-70m-deduped"
+    "EleutherAI/pythia-410m-deduped"
 )
 
 # Calculate total combinations for validation

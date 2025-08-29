@@ -9,7 +9,7 @@ import torch
 # precision setting
 dtype_dict = {
     torch.float32: ["EleutherAI/pythia-70m-deduped", "EleutherAI/pythia-410m-deduped"],
-    torch.float16: ["EleutherAI/pythia-6.9B-deduped", "EleutherAI/pythia-2.8B-deduped"],
+    torch.float16: ["EleutherAI/pythia-6.9B-deduped", "EleutherAI/pythia-2.8B-deduped", "EleutherAI/pythia-1B-deduped"],
 }
 
 

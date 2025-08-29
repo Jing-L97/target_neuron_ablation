@@ -23,7 +23,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--vector",
         type=str,
-        default="longtail_50",
+        default="longtail_elbow",
         choices=["mean", "longtail_elbow", "longtail_50"],
         help="boost or suppress long-tail prob",
     )
@@ -36,8 +36,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--sel_freq",
         type=str,
-        choices=["longtail_50", "common", None],
-        default="longtail_50",
+        choices=["longtail_50", "common", "longtail_elbow", None],
+        default="longtail_elbow",
         help="freq by common or not",
     )
     parser.add_argument(
@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
-    parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
+    parser.add_argument("--top_n", type=int, default=-1, help="The top n neurons to be selected")
     parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
     parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
