@@ -1,6 +1,6 @@
 # Phase 1: Revised Attention Routing Influence Measurement
 # Adapting existing attention ablation infrastructure for gradient-free influence scoring
-
+import argparse
 import logging
 import pickle
 import re
@@ -20,6 +20,16 @@ logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
 
+def parse_args() -> argparse.Namespace:
+    """Parse command line arguments for step range."""
+    parser = argparse.ArgumentParser(description="Extract word surprisal across different training steps.")
+    parser.add_argument("--token_type", type=str, default="longtail", help="Relative dir to config file")
+    parser.add_argument("--model_name", type=str, default="EleutherAI/pythia-410m-deduped")
+    parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
+    parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
+    return parser.parse_args()
+
+
 class AttentionRoutingInfluenceAnalyzer:
     """Measures attention head influence on plateau neurons using longtail token filtering
     Adapts existing attention ablation code for routing analysis
@@ -32,6 +42,7 @@ class AttentionRoutingInfluenceAnalyzer:
         tokenized_data,
         plateau_neuron_data,
         unigram_distrib,
+        token_type,
         longtail_threshold=0.001,
         device="cuda",
     ):
@@ -41,7 +52,7 @@ class AttentionRoutingInfluenceAnalyzer:
         self.unigram_distrib = unigram_distrib
         self.longtail_threshold = longtail_threshold
         self.device = device
-
+        self.token_type = token_type
         # Parse plateau neurons from CSV format ('5.1326' -> layer=5, neuron=1326)
         self.plateau_neurons = self._parse_plateau_neurons(plateau_neuron_data)
 
@@ -70,27 +81,39 @@ class AttentionRoutingInfluenceAnalyzer:
     def _generate_target_heads(self):
         """Generate attention head names for layers 3-5 (Pythia-70M)"""
         target_heads = []
-        for layer in range(3, min(6, self.model.cfg.n_layers)):
+        for layer in range(self.model.cfg.n_layers - 2, self.model.cfg.n_layers):
             for head in range(self.model.cfg.n_heads):
                 target_heads.append(f"L{layer}H{head}")
         return target_heads
 
-    def _filter_to_longtail_contexts(self):
-        """Filter entropy_df to only include contexts with longtail tokens using mask approach"""
-        print("Filtering entropy_df to longtail contexts using mask approach...")
+    def _filter_to_longtail_contexts(self, sample_size: int = 50000):
+        """Sample entropy_df first, then filter to longtail tokens"""
+        print(f"Sampling {sample_size} rows from entropy_df, then filtering to longtail contexts...")
+
+        # First, sample a manageable subset of entropy_df
+        if len(self.entropy_df) > sample_size:
+            sampled_df = self.entropy_df.sample(n=sample_size, random_state=42)
+            print(f"Sampled {len(sampled_df)} rows from {len(self.entropy_df)} total rows")
+        else:
+            sampled_df = self.entropy_df.copy()
+            print(f"Using all {len(sampled_df)} rows (less than sample_size)")
 
         # Create longtail mask (same as neuron ablation code)
-        self.longtail_mask = (self.unigram_distrib < self.longtail_threshold).float()
+        if self.token_type == "longtail":
+            self.longtail_mask = (self.unigram_distrib < self.longtail_threshold).float()
+        else:
+            self.longtail_mask = (self.unigram_distrib > self.longtail_threshold).float()
         longtail_token_ids = torch.nonzero(self.longtail_mask, as_tuple=True)[0]
         longtail_token_set = set(longtail_token_ids.cpu().numpy())
 
         print(f"Total longtail tokens identified: {len(longtail_token_set)}")
         print(f"Longtail threshold: {self.longtail_threshold}")
 
+        # Now filter the sampled data (much smaller, so row-by-row is acceptable)
         longtail_indices = []
-        special_tokens = {0, 1, 2, 3}  # Common special token IDs
+        special_tokens = {0, 1, 2, 3}
 
-        for idx, row in self.entropy_df.iterrows():
+        for idx, row in sampled_df.iterrows():
             try:
                 # Get token at the measured position
                 token_at_position = self.tokenized_data["tokens"][row.batch][row.pos]
@@ -109,38 +132,18 @@ class AttentionRoutingInfluenceAnalyzer:
                 if token_id in longtail_token_set:
                     longtail_indices.append(idx)
 
-            except (IndexError, KeyError, RuntimeError) as e:
-                # Skip malformed entries
-                if idx < 10:  # Only print first few errors to avoid spam
-                    print(f"Warning: Error processing row {idx}: {e}")
+            except (IndexError, KeyError, RuntimeError):
                 continue
 
-        filtered_df = self.entropy_df.loc[longtail_indices].copy()
+        filtered_df = sampled_df.loc[longtail_indices].copy()
 
         print(f"Longtail contexts found: {len(filtered_df)}")
-        print(f"Filtering ratio: {len(filtered_df) / len(self.entropy_df):.3f}")
+        print(f"Filtering ratio: {len(filtered_df) / len(sampled_df):.3f}")
+        print(f"Final dataset size for experiments: {len(filtered_df)}")
 
-        # Debug information if very few contexts found
-        if len(filtered_df) < 100:
-            print(f"Warning: Very few longtail contexts found ({len(filtered_df)})")
-            print("Sample token analysis:")
-            sample_longtail_ids = list(longtail_token_set)[:10]
-            print(f"First 10 longtail token IDs: {sample_longtail_ids}")
-
-            # Check a few sample rows
-            for idx, row in self.entropy_df.head(20).iterrows():
-                try:
-                    token_id = self.tokenized_data["tokens"][row.batch][row.pos].item()
-                    is_longtail = token_id in longtail_token_set
-                    freq = self.unigram_distrib[token_id].item() if token_id < len(self.unigram_distrib) else -1
-                    print(f"  Row {idx}: token_id={token_id}, freq={freq:.6f}, longtail={is_longtail}")
-                    if idx > 10 and any(
-                        self.tokenized_data["tokens"][row.batch][row.pos].item() in longtail_token_set
-                        for _, row in self.entropy_df.head(20).iterrows()
-                    ):
-                        break
-                except Exception as e:
-                    print(f"  Row {idx}: Error - {e}")
+        if len(filtered_df) < 1000:
+            print(f"Warning: Only {len(filtered_df)} longtail contexts available")
+            print("Consider increasing sample_size or lowering longtail_threshold")
 
         return filtered_df
 
@@ -333,24 +336,18 @@ class Phase1DataPipeline:
         logger.info("Finished tokenizing data")
 
         # 2. Load entropy_df (preprocessed activations and contexts)
-        entropy_df_path = (
-            settings.PATH.ablation_dir / "longtail_50/EleutherAI/pythia-70m-deduped/143000/500/entropy_df.csv"
-        )
+        entropy_df_path = settings.PATH.ablation_dir / f"longtail_50/{self.model_name}/143000/500/entropy_df.csv"
 
         entropy_df = pd.read_csv(entropy_df_path)
 
         logger.info("Finished loading entropy df")
         # 4. Load plateau neuron data (from your CSV)
-        neuron_path = (
-            settings.PATH.neuron_dir / "neuron/longtail_50/EleutherAI/pythia-70m-deduped/prob/boost/500_10.csv"
-        )
+        neuron_path = settings.PATH.neuron_dir / f"neuron/longtail_50/{self.model_name}/prob/boost/500_10.csv"
 
         plateau_df = pd.read_csv(neuron_path)  # Your provided data
         logger.info("Finished loading neuron df")
         # 5. load longtail threshold
-        threshold_path = (
-            settings.PATH.ablation_dir / "longtail_50/EleutherAI/pythia-70m-deduped/zipf_threshold_stats.json"
-        )
+        threshold_path = settings.PATH.ablation_dir / f"longtail_50/{self.model_name}/zipf_threshold_stats.json"
         longtail_threshold = load_tail_threshold_stat(threshold_path)
         logger.info(f"Loaded longtail threshold: {longtail_threshold}")
 
@@ -368,12 +365,12 @@ class Phase1DataPipeline:
         }
 
 
-def run_phase1_longtail_screening():
+def run_phase1_longtail_screening(token_type, model_name="EleutherAI/pythia-70m-deduped"):
     """Execute Phase 1: Attention Head Influence Screening (Longtail contexts only)"""
     # Load all required data
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     logger.info(f"Use device: {device}")
-    pipeline = Phase1DataPipeline(model_name="EleutherAI/pythia-70m-deduped", device=device)  # Adjust model name
+    pipeline = Phase1DataPipeline(model_name=model_name, device=device)  # Adjust model name
     data_bundle = pipeline.load_required_data()
 
     # Initialize influence analyzer with longtail filtering
@@ -384,6 +381,7 @@ def run_phase1_longtail_screening():
         plateau_neuron_data=data_bundle["plateau_data"],
         unigram_distrib=data_bundle["unigram_distrib"],
         longtail_threshold=data_bundle["longtail_threshold"],  # Same threshold as neuron ablation
+        token_type=token_type,
         device=device,
     )
 
@@ -422,24 +420,24 @@ def run_phase1_longtail_screening():
         },
     }
 
-    out_dir = settings.PATH.attention_dir / "longtail_50/EleutherAI/pythia-70m-deduped/143000/500"
+    out_dir = settings.PATH.attention_dir / f"longtail_50/{model_name}/143000/500"
     out_dir.mkdir(parents=True, exist_ok=True)
     # Save for Phase 2
-    with open(out_dir / "head.pkl", "wb") as f:
+    with open(out_dir / f"head_{token_type}.pkl", "wb") as f:
         pickle.dump(results, f)
 
-    logger.info("\nPhase 1 complete. Results saved to phase1_longtail_attention_routing_results.pkl")
+    logger.info(f"\nPhase 1 complete. Results saved to {out_dir}")
     logger.info(f"Top routing heads (longtail-specific): {top_candidates}")
 
     return results
 
 
-run_phase1_longtail_screening()
+def main():
+    """Main entry point that handles both CLI args and Hydra config."""
+    # Parse command line arguments
+    args = parse_args()
+    run_phase1_longtail_screening(token_type=args.token_type, model_name=args.model_name)
 
-# Expected computational profile:
-# - Contexts per head: 500
-# - Heads to screen: ~80 (layers 20-30, assuming 8 heads per layer)
-# - Total forward passes: ~40,000
-# - Forward pass time: ~50ms per pass with ablation
-# - Total compute time: ~30-40 minutes
-# - Memory requirement: Minimal (processing one context at a time)
+
+if __name__ == "__main__":
+    main()
