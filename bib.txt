@@ -1,0 +1,387 @@
+% Use this file for citations not found in the ACL Anthology (contained in "anthology.bib").
+
+
+% Please download the latest anthology.bib from
+%
+% http://aclweb.org/anthology/anthology.bib.gz
+mendoza2021quantifying% -----------------------------------------------------------------------
+% File: CogSci_Template.bib
+% -----------------------------------------------------------------------
+
+% Modified : Eli M. Silk (esilk at pitt.edu)            05/24/2005
+% Modified : David Noelle (dnoelle at ucmerced.edu)     11/19/2014
+
+
+@inproceedings{kandpal2023large,
+  title={Large language models struggle to learn long-tail knowledge},
+  author={Kandpal, Nikhil and Deng, Haikang and Roberts, Adam and Wallace, Eric and Raffel, Colin},
+  booktitle={International Conference on Machine Learning},
+  pages={15696--15707},
+  year={2023},
+  organization={PMLR}
+}
+
+@article{zhang2025systematic,
+  title={A systematic review on long-tailed learning},
+  author={Zhang, Chongsheng and Almpanidis, George and Fan, Gaojuan and Deng, Binquan and Zhang, Yanbo and Liu, Ji and Kamel, Aouaidjia and Soda, Paolo and Gama, Jo{\~a}o},
+  journal={IEEE Transactions on Neural Networks and Learning Systems},
+  year={2025},
+  publisher={IEEE}
+}
+
+@article{mallen2023not,
+  title={Not all knowledge is created equal: Tracking the impact of memorization across pre-training and fine-tuning},
+  author={Mallen, Stella and Hou, Jennifer and Wallace, Eric and Dredze, Mark and Hegde, Nadia},
+  journal={arXiv preprint arXiv:2310.02173},
+  year={2023}
+}
+
+@book{zipf1949human,
+  title={Human behavior and the principle of least effort},
+  author={Zipf, George Kingsley},
+  year={1949},
+  publisher={Addison-Wesley Press}
+}
+
+@article{wyllys1981empirical,
+  title={Empirical and theoretical bases of Zipf's law},
+  author={Wyllys, Ronald E},
+  journal={Library Trends},
+  volume={30},
+  number={1},
+  pages={53--64},
+  year={1981}
+}
+
+@article{gpt3,
+  title={Language models are few-shot learners},
+  author={Brown, Tom B and Mann, Benjamin and Ryder, Nick and Subbiah, Melanie and Kaplan, Jared and Dhariwal, Prafulla and Neelakantan, Arvind and Shyam, Pranav and Sastry, Girish and Askell, Amanda and others},
+  journal={Advances in Neural Information Processing Systems},
+  volume={33},
+  pages={1877--1901},
+  year={2020}
+}
+
+@article{hoffmann2022training,
+  title={Training compute-optimal large language models},
+  author={Hoffmann, Jordan and Borgeaud, Sebastian and Mensch, Arthur and Buchatskaya, Elena and Cai, Trevor and Rutherford, Eliza and Casas, Diego de Las and Hendricks, Lisa Anne and Welbl, Johannes and Clark, Aidan and others},
+  journal={arXiv preprint arXiv:2203.15556},
+  year={2022}
+}
+
+@article{dohmatob2024tale,
+  title={A tale of tails: Model collapse as a change of scaling laws},
+  author={Dohmatob, Elvis and Feng, Yunzhen and Yang, Pu and Charton, Francois and Kempe, Julia},
+  journal={arXiv preprint arXiv:2402.07043},
+  year={2024}
+}
+
+@inproceedings{hataya2023will,
+  title={Will large-scale generative models corrupt future datasets?},
+  author={Hataya, Ryuichiro and Bao, Han and Arai, Hiromi},
+  booktitle={Proceedings of the IEEE/CVF International Conference on Computer Vision},
+  pages={20555--20565},
+  year={2023}
+}
+
+@inproceedings{bohacek2025nepotistically,
+  title={Nepotistically Trained Generative Image Models Collapse},
+  author={Bohacek, Maty and Farid, Hany},
+  booktitle={ICLR 2025 Workshop on Navigating and Addressing Data Problems for Foundation Models},
+  year={2023}
+}
+
+@inproceedings{lewis2020retrieval,
+  title={Retrieval-augmented generation for knowledge-intensive NLP tasks},
+  author={Lewis, Patrick and Perez, Ethan and Piktus, Aleksandra and Petroni, Fabio and Karpukhin, Vladimir and Goyal, Naman and K{\"u}ttler, Heinrich and Lewis, Mike and Yih, Wen-tau and Rockt{\"a}schel, Tim and others},
+  booktitle={Advances in Neural Information Processing Systems},
+  volume={33},
+  pages={9459--9474},
+  year={2020}
+}
+
+@article{dong2022survey,
+  title={A survey of in-context learning},
+  author={Dong, Qingxiu and Li, Lei and Dai, Damai and Zheng, Ce and Wu, Zhiyong and Chang, Baobao and Sun, Xu and Sui, Zhifang and Liu, Wangbo and Yang, Yiming and others},
+  journal={arXiv preprint arXiv:2301.00234},
+  year={2022}
+}
+
+@inproceedings{borgeaud2022improving,
+  title={Improving language models by retrieving from trillions of tokens},
+  author={Borgeaud, Sebastian and Mensch, Arthur and Hoffmann, Jordan and Cai, Trevor and Rutherford, Eliza and Millican, Katie and Van Den Driessche, George Breviglieri and Lespiau, Jean-Baptiste and Damoc, Bogdan and Clark, Aidan and others},
+  booktitle={International Conference on Machine Learning},
+  pages={2206--2240},
+  organization={PMLR},
+  year={2022}
+}
+
+@article{carey1978acquiring,
+  title={Acquiring a single new word},
+  author={Carey, Susan and Bartlett, Elsa},
+  journal={Papers and Reports on Child Language Development},
+  volume={15},
+  pages={17--29},
+  year={1978}
+}
+
+@article{markson1997children,
+  title={Children's fast mapping of word meaning},
+  author={Markson, Lori and Bloom, Paul},
+  journal={Cognitive Psychology},
+  volume={33},
+  number={1},
+  pages={73--110},
+  year={1997}
+}
+
+@article{mcclelland1995there,
+  title={Why there are complementary learning systems in the hippocampus and neocortex: insights from the successes and failures of connectionist models of learning and memory},
+  author={McClelland, James L and McNaughton, Bruce L and O'Reilly, Randall C},
+  journal={Psychological Review},
+  volume={102},
+  number={3},
+  pages={419},
+  year={1995}
+}
+
+@article{o2014complementary,
+  title={Complementary learning systems},
+  author={O'Reilly, Randall C and Bhattacharyya, Rajan and Howard, Michael D and Ketz, Nicholas},
+  journal={Cognitive Science},
+  volume={38},
+  number={6},
+  pages={1229--1248},
+  year={2014}
+}
+
+@article{kumaran2016learning,
+  title={What learning systems do intelligent agents need? Complementary learning systems theory updated},
+  author={Kumaran, Dharshan and Hassabis, Demis and McClelland, James L},
+  journal={Trends in Cognitive Sciences},
+  volume={20},
+  number={7},
+  pages={512--534},
+  year={2016}
+}
+
+@article{schapiro2017complementary,
+  title={Complementary learning systems within the hippocampus: a neural network modelling approach to reconciling episodic memory with statistical learning},
+  author={Schapiro, Anna C and Turk-Browne, Nicholas B and Botvinick, Matthew M and Norman, Kenneth A},
+  journal={Philosophical Transactions of the Royal Society B: Biological Sciences},
+  volume={372},
+  number={1711},
+  pages={20160049},
+  year={2017}
+}
+
+@article{manning2020emergent,
+  title={Emergent linguistic structure in artificial neural networks trained by self-supervision},
+  author={Manning, Christopher D and Clark, Kevin and Hewitt, John and Khandelwal, Urvashi and Levy, Omer},
+  journal={Proceedings of the National Academy of Sciences},
+  volume={117},
+  number={48},
+  pages={30046--30054},
+  year={2020}
+}
+
+@article{finlayson2021causal,
+  title={Causal analysis of syntactic agreement mechanisms in neural language models},
+  author={Finlayson, Matthew and Levy, Aaron Mueller Omer and Suhr, Alane and Yamada, Ryutaro and Chen, Yasaman Bahri Jeff Z and Schwettmann, Sandra and Bau, David and Belinkov, Yonatan and Tenney, Ian and Tirumala, Kumar},
+  journal={arXiv preprint arXiv:2106.06087},
+  year={2021}
+}
+
+@article{gurnee2023finding,
+  title={Finding neurons in a haystack: Case studies with sparse probing},
+  author={Gurnee, Wes and Raghunathan, Aditi and Nanda, Neel},
+  journal={arXiv preprint arXiv:2305.01610},
+  year={2023}
+}
+
+@article{bricken2023monosemanticity,
+  title={Monosemanticity: Localized features in neural networks and brains},
+  author={Bricken, Trenton and Templeton, Catherine and Steinhardt, Jacob},
+  journal={arXiv preprint arXiv:2310.10999},
+  year={2023}
+}
+
+@inproceedings{geva2021transformer,
+  title={Transformer feed-forward layers are key-value memories},
+  author={Geva, Mor and Schuster, Roei and Berant, Jonathan and Levy, Omer},
+  booktitle={Proceedings of the 2021 Conference on Empirical Methods in Natural Language Processing},
+  pages={5484--5495},
+  year={2021}
+}
+
+@article{stolfo2024confidence,
+  title={Confidence regulation neurons in language models},
+  author={Stolfo, Alessandro and Wu, Ben and Gurnee, Wes and Belinkov, Yonatan and Song, Xingyi and Sachan, Mrinmaya and Nanda, Neel},
+  journal={Advances in Neural Information Processing Systems},
+  volume={37},
+  pages={125019--125049},
+  year={2024}
+}
+
+@article{anthropic2022transformer,
+  title={A mechanistic interpretability analysis of gated {LTF} networks},
+  author={Anthropic},
+  journal={arXiv preprint},
+  year={2022}
+}
+
+@article{wei2022emergent,
+  title={Emergent abilities of large language models},
+  author={Wei, Jason and Tay, Yi and Bommasani, Rishi and Raffel, Colin and Zoph, Barret and Borgeaud, Sebastian and Yogatama, Dani and Bosma, Maarten and Zhou, Denny and Metzler, Donald and others},
+  journal={arXiv preprint arXiv:2206.07682},
+  year={2022}
+}
+
+@article{olshausen1997sparse,
+  title={Sparse coding with an overcomplete basis set: A strategy employed by V1?},
+  author={Olshausen, Bruno A and Field, David J},
+  journal={Vision research},
+  volume={37},
+  number={23},
+  pages={3311--3325},
+  year={1997},
+  publisher={Elsevier}
+}
+
+@article{tishby2000information,
+  title={The information bottleneck method},
+  author={Tishby, Naftali and Pereira, Fernando C and Bialek, William},
+  journal={arXiv preprint physics/0004057},
+  year={2000}
+}
+
+@inproceedings{biderman2023pythia,
+  title={Pythia: A suite for analyzing large language models across training and scaling},
+  author={Biderman, Stella and Schoelkopf, Hailey and Anthony, Quentin Gregory and Bradley, Herbie and O'Brien, Kyle and Hallahan, Eric and Khan, Mohammad Aflah and Purohit, Shivanshu and Prashanth, USVSN Sai and Raff, Edward and others},
+  booktitle={International Conference on Machine Learning},
+  pages={2397--2430},
+  year={2023},
+  organization={PMLR}
+}
+
+@article{gao2020pile,
+  title={The pile: An 800gb dataset of diverse text for language modeling},
+  author={Gao, Leo and Biderman, Stella and Black, Sid and Golding, Laurence and Hoppe, Travis and Foster, Charles and Phang, Jason and He, Horace and Thite, Anish and Nabeshima, Noa and others},
+  journal={arXiv preprint arXiv:2101.00027},
+  year={2020}
+}
+
+@article{raffel2020exploring,
+  title={Exploring the limits of transfer learning with a unified text-to-text transformer},
+  author={Raffel, Colin and Shazeer, Noam and Roberts, Adam and Lee, Katherine and Narang, Sharan and Matena, Michael and Zhou, Yanqi and Li, Wei and Liu, Peter J},
+  journal={Journal of machine learning research},
+  volume={21},
+  number={140},
+  pages={1--67},
+  year={2020}
+}
+
+@article{park2024linearrepresentationhypothesisgeometry,
+  title={The Linear Representation Hypothesis and the Geometry of Large Language Models}, 
+  author={Kiho Park and Yo Joong Choe and Victor Veitch},
+  year={2024},
+  journal={arXiv:2311.03658v2}
+}
+
+@article{park2025the,
+  title={The Geometry of Categorical and Hierarchical Concepts in Large Language Models},
+  author={Kiho Park and Yo Joong Choe and Yibo Jiang and Victor Veitch},
+  year={2025},
+  journal={arXiv:2406.01506v3}
+}
+
+@article{martin2019traditional,
+  title={Traditional and heavy-tailed self regularization in neural network models},
+  author={Martin, Charles H and Mahoney, Michael W},
+  journal={arXiv preprint arXiv:1901.08276},
+  year={2019}
+}
+
+@article{martin2021implicit,
+  title={Implicit self-regularization in deep neural networks: Evidence from random matrix theory and implications for learning},
+  author={Martin, Charles H and Mahoney, Michael W},
+  journal={Journal of Machine Learning Research},
+  volume={22},
+  number={165},
+  pages={1--73},
+  year={2021}
+}
+
+@book{couillet2022random,
+  title={Random matrix methods for machine learning},
+  author={Couillet, Romain and Liao, Zhenyu},
+  year={2022},
+  publisher={Cambridge University Press}
+}
+
+@article{lu2024alphapruning,
+  title={Alphapruning: Using heavy-tailed self regularization theory for improved layer-wise pruning of large language models},
+  author={Lu, Haiquan and Zhou, Yefan and Liu, Shiwei and Wang, Zhangyang and Mahoney, Michael W and Yang, Yaoqing},
+  journal={Advances in Neural Information Processing Systems},
+  volume={37},
+  pages={9117--9152},
+  year={2024}
+}
+
+@inproceedings{yang2023test,
+  title={Test accuracy vs. generalization gap: Model selection in nlp without accessing training or testing data},
+  author={Yang, Yaoqing and Theisen, Ryan and Hodgkinson, Liam and Gonzalez, Joseph E and Ramchandran, Kannan and Martin, Charles H and Mahoney, Michael W},
+  booktitle={Proceedings of the 29th ACM SIGKDD Conference on Knowledge Discovery and Data Mining},
+  pages={3011--3021},
+  year={2023}
+}
+
+@article{bak1987self,
+  title={Self-organized criticality: An explanation of the 1/f noise},
+  author={Bak, Per and Tang, Chao and Wiesenfeld, Kurt},
+  journal={Phys. Rev. Lett.},
+  volume={59},
+  issue={4},
+  pages={381--384},
+  numpages={0},
+  year={1987}
+}
+
+@article{watkins2016power,
+  title={25 years of self-organized criticality: Concepts and controversies},
+  author={Watkins, Nicholas W and Pruessner, Gunnar and Chapman, Sandra C and Crosby, Norma B and Jensen, Henrik J},
+  journal={Space Science Reviews},
+  volume={198},
+  pages={3--44},
+  year={2016},
+  publisher={Springer}
+}
+
+@article{truong2020selective,
+  title={Selective review of offline change point detection methods},
+  journal={Signal Processing},
+  volume={167},
+  pages={107299},
+  year={2020},
+  author={Truong, Charles and Oudre, Laurent and Vayatis, Nicolas}
+}
+
+@article{roberts2022principles,
+  title={Principles of deep learning theory},
+  author={Roberts, Daniel A and Yaida, Sho and Hanin, Boris},
+  journal={Cambridge University Press},
+  year={2022}
+}
+
+@article{bahri2020statistical,
+  title={Statistical mechanics of deep learning},
+  author={Bahri, Yasaman and Kadmon, Jonathan and Pennington, Jeffrey and Schoenholz, Sam S and Sohl-Dickstein, Jascha and Ganguli, Surya},
+  journal={Annual Review of Condensed Matter Physics},
+  volume={11},
+  pages={501--528},
+  year={2020},
+  publisher={Annual Reviews}
+}
+
+
+

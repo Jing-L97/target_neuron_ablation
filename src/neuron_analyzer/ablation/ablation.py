@@ -45,9 +45,9 @@ class NeuronAblationProcessor:
 
         # Initialize parameters from args
         self.args = args
-        self.seed: int = args.seed
+        self.seed: int = args.seed if args.seed else 42
         self.device: str = device
-
+        self.ablation_mode: str = f"longtail_{self.args.min_freq}_{self.args.max_freq}"
         # Initialize random seeds
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
@@ -59,19 +59,17 @@ class NeuronAblationProcessor:
 
     def get_tail_threshold_stat(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
         """Calculate threshold for long-tail ablation mode."""
-        if "longtail" in self.args.ablation_mode:
-            analyzer = ZipfThresholdAnalyzer(
-                unigram_distrib=unigram_distrib,
-                window_size=self.args.window_size,
-                tail_threshold=self.args.tail_threshold,
-                apply_elbow=self.args.apply_elbow,
-            )
-            longtail_threshold, threshold_stats = analyzer.get_tail_threshold()
-            JsonProcessor.save_json(threshold_stats, save_path / "zipf_threshold_stats.json")
-            self.logger.info(f"Saved threshold statistics to {save_path}/zipf_threshold_stats.json")
-            return longtail_threshold
-        # Not in longtail mode, use default threshold
-        return None
+        window_size = self.args.window_size if self.args.window_size else 2000
+        analyzer = ZipfThresholdAnalyzer(
+            unigram_distrib=unigram_distrib,
+            window_size=window_size,
+            min_freq=self.args.min_freq,
+            max_freq=self.args.max_freq,
+        )
+        min_freq, max_freq, threshold_stats = analyzer.get_tail_threshold()
+        JsonProcessor.save_json(threshold_stats, save_path)
+        self.logger.info(f"Saved threshold statistics to {save_path}")
+        return min_freq, max_freq
 
     def load_entropy_df(self, step) -> pd.DataFrame:
         """Load entropy df if needed."""
@@ -96,10 +94,11 @@ class NeuronAblationProcessor:
         token_df.to_csv(h_path)
         return token_df
 
-    def process_single_step(self, step: int, unigram_distrib, longtail_threshold, save_path: Path) -> None:
+    def process_single_step(self, step: int, unigram_distrib, max_freq, min_freq, save_path: Path) -> None:
         """Process a single step with the given configuration."""
         save_path.parent.mkdir(parents=True, exist_ok=True)
         self.logger.info("Finished loading model and tokenizer")
+
         # initlize the model handler class
         model_handler = ModelHandler()
 
@@ -158,8 +157,9 @@ class NeuronAblationProcessor:
             entropy_df=self.entropy_df,
             k=self.args.k,
             dtype=settings.get_dtype(self.args.model),
-            ablation_mode=self.args.ablation_mode,
-            longtail_threshold=longtail_threshold,
+            ablation_mode=self.ablation_mode,
+            max_freq=max_freq,
+            min_freq=min_freq,
         )
 
         results = analyzer.mean_ablate_components()
@@ -188,19 +188,15 @@ class NeuronAblationProcessor:
 
     def get_save_dir(self):
         """Get the savepath based on current configurations."""
-        if "longtail" in self.args.ablation_mode and self.args.apply_elbow:
-            ablation_name = "longtail_elbow"
-        if "longtail" in self.args.ablation_mode and not self.args.apply_elbow:
-            ablation_name = f"longtail_{self.args.tail_threshold}"
-        else:
-            ablation_name = self.args.ablation_mode
+        ablation_name = f"longtail_{self.args.min_freq}_{self.args.max_freq}"
         base_save_dir = settings.PATH.result_dir / self.args.output_dir / ablation_name / self.args.model
         base_save_dir.mkdir(parents=True, exist_ok=True)
         return base_save_dir
 
     def _config_entropy_path(self, step) -> Path:
         """Configure entorpy df path based on current settings."""
-        path_prefix = settings.PATH.ablation_dir / self.args.ablation_mode / self.args.model
+        # path_prefix = settings.PATH.ablation_dir / self.ablation_mode / self.args.model
+        path_prefix = settings.PATH.ablation_dir / "longtail_50" / self.args.model
         if step is None:
             return path_prefix / str(self.args.data_range_end) / "entropy_df.csv"
         return path_prefix / str(step) / str(self.args.data_range_end) / "entropy_df.csv"
@@ -225,7 +221,8 @@ class ModelAblationAnalyzer:
         k: int = 10,
         chunk_size: int = 20,
         ablation_mode: str = "mean",  # "mean" or "longtail"
-        longtail_threshold: float = 0.001,  # Threshold for long-tail tokens
+        max_freq: float = 0.001,  # max freq
+        min_freq: float = 0.001,  # min freq
     ):
         """Initialize the ModelAblationAnalyzer."""
         self.model = model
@@ -237,7 +234,8 @@ class ModelAblationAnalyzer:
         self.dtype = dtype
         self.chunk_size = chunk_size
         self.ablation_mode = ablation_mode
-        self.longtail_threshold = longtail_threshold
+        self.max_freq = max_freq
+        self.min_freq = min_freq
         self.results = {}
         self.log_unigram_distrib = self.unigram_distrib.log()
         self.components_to_ablate = components_to_ablate
@@ -248,7 +246,9 @@ class ModelAblationAnalyzer:
         """Build frequency-related vectors for ablation analysis."""
         if "longtail" in self.ablation_mode:
             # Create long-tail token mask (1 for long-tail tokens, 0 for common tokens)
-            self.longtail_mask = (self.unigram_distrib < self.longtail_threshold).float()
+            self.longtail_mask = (
+                (self.unigram_distrib >= self.max_freq) & (self.unigram_distrib <= self.min_freq)
+            ).float()
             # Create token frequency vector focusing on long-tail tokens only
             # Original token frequency vector from the unigram distribution
             full_unigram_direction_vocab = self.unigram_distrib.log() - self.unigram_distrib.log().mean()
@@ -480,7 +480,8 @@ class ModelAblationAnalyzer:
             # Add ablation information
             df_to_append["ablation_mode"] = self.ablation_mode
             if "longtail" in self.ablation_mode and self.longtail_mask is not None:
-                df_to_append["longtail_threshold"] = self.longtail_threshold
+                df_to_append["max_freq"] = self.max_freq
+                df_to_append["min_freq"] = self.min_freq
                 df_to_append["num_longtail_tokens"] = self.longtail_mask.sum().item()
 
             # Append to our results
@@ -504,7 +505,9 @@ class ModelAblationAnalyzer:
             random_sequence_indices = self.entropy_df.batch.unique()
             logger.info(f"Using all available batches: {len(random_sequence_indices)}")
 
-        logger.info(f"ablate_components: ablate with k = {self.k}, long-tail threshold = {self.longtail_threshold}")
+        logger.info(
+            f"ablate_components: ablate with k = {self.k}, max freq = {self.max_freq}, min freq = {self.min_freq}"
+        )
 
         # Get entropy_df with only the random sequences
         filtered_entropy_df = self.entropy_df[self.entropy_df.batch.isin(random_sequence_indices)].copy()

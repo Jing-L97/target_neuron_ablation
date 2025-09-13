@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--config_name",
         type=str,
-        default="config_unigram_ablations_70.yaml",
+        default="config_unigram_ablations_70M.yaml",
         help="Name of the configuration file to use",
     )
     parser.add_argument("--config_path", type=str, default="conf", help="Relative dir to config file")
@@ -68,13 +68,13 @@ def main():
             start_idx=cli_args.start,
             end_idx=cli_args.end,
         )
-        # intialize the process class
+        # intialize the process class; compute this as it has not been saved yet
         abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
         base_save_dir = abalation_processor.get_save_dir()
         unigram_distrib, _ = load_unigram(
             model_name=hydra_args.model, device=device, dtype=settings.get_dtype(hydra_args.model)
         )
-        longtail_threshold = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
+        min_freq, max_freq = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
 
         # Process each step in range
         for step in steps_config.steps:
@@ -86,7 +86,7 @@ def main():
                 logger.info(f"Files for step {step} already exist. Skip!")
                 continue
             logger.info(f"Processing step {step}")
-            abalation_processor.process_single_step(step, unigram_distrib, longtail_threshold, save_path)
+            abalation_processor.process_single_step(step, unigram_distrib, min_freq, max_freq, save_path)
 
             """
             try:

@@ -369,26 +369,6 @@ def average_absolute_rank_change(list1, list2):
     return average_change
 
 
-def adjust_vector(v, u, target_value):
-    """Adjusts a vector v such that its projection along the unit vector u equals the target value.
-
-    Parameters
-    ----------
-    - v: A 1D tensor of shape (d,), representing the vector to be adjusted.
-    - u: A 1D unit tensor of shape (d,), representing the direction along which the adjustment is made.
-    - target_value: A scalar representing the desired projection value of v along u.
-
-    Returns
-    -------
-    - adjusted_v: The adjusted vector such that its projection along u is equal to the target value.
-
-    """
-    current_projection = v @ u  # Current projection of v onto u
-    delta = target_value - current_projection  # Difference needed to reach the target projection
-    adjusted_v = v + delta * u  # Adjust v by the delta along the direction of u
-    return adjusted_v
-
-
 def adjust_vectors(v, u, target_values):
     """Adjusts a batch of vectors v such that their projections along the unit vector u equal the target values.
 

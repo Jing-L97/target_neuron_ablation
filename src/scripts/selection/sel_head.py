@@ -34,13 +34,22 @@ def parse_args() -> argparse.Namespace:
         choices=["longtail", "common"],
         help="Token type to analyze: longtail or common",
     )
-    parser.add_argument(
-        "--model_name", type=str, default="EleutherAI/pythia-410m-deduped", help="Model name to analyze"
-    )
+    parser.add_argument("--model_name", type=str, default="EleutherAI/pythia-70m-deduped", help="Model name to analyze")
     parser.add_argument("--debug", action="store_true", help="Run in debug mode with limited data")
     parser.add_argument("--resume", action="store_true", help="Resume from existing checkpoint")
-    parser.add_argument("--sample_size", type=int, default=300, help="Sample size per attention head")
+    parser.add_argument(
+        "--effect", type=str, choices=["boost", "suppress"], default="suppress", help="boost or suppress long-tail prob"
+    )
+    parser.add_argument(
+        "--sample_size",
+        type=int,
+        default=100,
+        help="Sample size per attention head (only used if --use_sampling is True)",
+    )
     parser.add_argument("--step", type=int, default=143000, help="Training step to analyze")
+    parser.add_argument(
+        "--use_sampling", action="store_true", help="Whether to sample contexts (default: use all available data)"
+    )
     return parser.parse_args()
 
 
@@ -58,6 +67,7 @@ class AttentionRoutingInfluenceAnalyzer:
         unigram_distrib,
         token_type,
         longtail_threshold=0.001,
+        use_sampling=False,
         device="cuda",
     ):
         self.model = model
@@ -67,6 +77,7 @@ class AttentionRoutingInfluenceAnalyzer:
         self.longtail_threshold = longtail_threshold
         self.device = device
         self.token_type = token_type
+        self.use_sampling = use_sampling
 
         # Parse plateau neurons from CSV format
         self.plateau_neurons = self._parse_plateau_neurons(plateau_neuron_data)
@@ -94,6 +105,7 @@ class AttentionRoutingInfluenceAnalyzer:
         logger.info(f"Plateau neurons found: {len(self.plateau_neuron_names)}")
         logger.info(f"Target ({self.token_type}) contexts: {len(self.target_contexts)}")
         logger.info(f"Other contexts: {len(self.other_contexts)}")
+        logger.info(f"Sampling mode: {'enabled' if self.use_sampling else 'disabled - using all data'}")
 
     def _parse_plateau_neurons(self, plateau_data):
         """Parse plateau neuron data from CSV format to (layer, neuron) tuples"""
@@ -148,9 +160,9 @@ class AttentionRoutingInfluenceAnalyzer:
 
         # Adjust layer range based on model size
         if self.model.cfg.n_layers <= 6:  # Pythia-70M
-            layer_range = range(3, 6)
+            layer_range = range(5, 6)
         elif self.model.cfg.n_layers <= 24:  # Pythia-410M
-            layer_range = range(20, 24)  # Focus on final layers
+            layer_range = range(23, 24)  # Focus on final layers
         else:  # Larger models
             layer_range = range(self.model.cfg.n_layers - 6, self.model.cfg.n_layers)
 
@@ -161,9 +173,9 @@ class AttentionRoutingInfluenceAnalyzer:
         logger.info(f"Generated {len(target_heads)} target attention heads from layers {list(layer_range)}")
         return target_heads
 
-    def _separate_token_contexts(self, sample_size: int = 50000):
+    def _separate_token_contexts(self, max_sample_size: int = 50000):
         """Separate contexts into target vs other token contexts
-        Sample both groups for computational efficiency
+        Optionally sample for computational efficiency
         """
         logger.info(f"Separating {self.token_type} and other token contexts...")
 
@@ -171,16 +183,21 @@ class AttentionRoutingInfluenceAnalyzer:
         other_contexts = []
         special_tokens = {0, 1, 2, 3}  # BOS, EOS, PAD, UNK
 
-        # Get all unique contexts and sample if needed
+        # Get all unique contexts - optionally sample if use_sampling is True
         all_contexts = list(self.context_neuron_data.keys())
-        if len(all_contexts) > sample_size:
-            sampled_contexts = np.random.choice(all_contexts, size=sample_size, replace=False)
-            logger.info(f"Sampled {len(sampled_contexts)} contexts from {len(all_contexts)} total")
-        else:
-            sampled_contexts = all_contexts
-            logger.info(f"Using all {len(sampled_contexts)} contexts")
 
-        for context_key in sampled_contexts:
+        if self.use_sampling and len(all_contexts) > max_sample_size:
+            # Convert to indices for sampling, then map back to contexts
+            sampled_indices = np.random.choice(len(all_contexts), size=max_sample_size, replace=False)
+            contexts_to_process = [all_contexts[i] for i in sampled_indices]
+            logger.info(f"Sampling enabled: using {len(contexts_to_process)} contexts from {len(all_contexts)} total")
+        else:
+            contexts_to_process = all_contexts
+            logger.info(
+                f"Using all {len(contexts_to_process)} contexts (sampling {'disabled' if not self.use_sampling else 'not needed'})"
+            )
+
+        for context_key in contexts_to_process:
             context_info = self.context_neuron_data[context_key]["context_info"]
             token_id = context_info["token_id"]
 
@@ -206,7 +223,7 @@ class AttentionRoutingInfluenceAnalyzer:
         return target_contexts, other_contexts
 
     def measure_head_influence_on_plateaus(
-        self, head_name: str, context_type: str = "target", sample_size: int = 300
+        self, head_name: str, context_type: str = "target", sample_size: int = 100
     ) -> float:
         """Measure attention head's influence on plateau neuron activations
 
@@ -231,9 +248,23 @@ class AttentionRoutingInfluenceAnalyzer:
             logger.warning(f"No {context_type} contexts available for {head_name}")
             return 0.0
 
-        # Sample contexts for testing
-        available_contexts = min(sample_size, len(contexts))
-        sampled_context_keys = np.random.choice(contexts, size=available_contexts, replace=False)
+        # Use sampling only if explicitly enabled
+        if self.use_sampling:
+            # Sample contexts for testing
+            available_contexts = min(sample_size, len(contexts))
+            if available_contexts == 0:
+                logger.warning(f"No {context_type} contexts available for {head_name}")
+                return 0.0
+
+            # Use random.sample for sampling from list of tuples
+            import random
+
+            sampled_context_keys = random.sample(contexts, available_contexts)
+            logger.info(f"Sampling {available_contexts} contexts from {len(contexts)} available for {head_name}")
+        else:
+            # Use all available contexts
+            sampled_context_keys = contexts
+            logger.info(f"Using all {len(contexts)} {context_type} contexts for {head_name}")
 
         # Parse head info
         layer_idx, head_idx = self._parse_head_name(head_name)
@@ -337,7 +368,10 @@ class AttentionRoutingInfluenceAnalyzer:
         results = {}
 
         logger.info(f"Running comparative screening on {len(self.target_heads)} attention heads...")
-        logger.info(f"Sample size per head per token type: {sample_size}")
+        if self.use_sampling:
+            logger.info(f"Sampling mode: using up to {sample_size} contexts per head per token type")
+        else:
+            logger.info("Using all available contexts per head per token type")
 
         for head_name in self.target_heads:
             try:
@@ -409,6 +443,7 @@ class Phase1DataPipeline:
             hf_token_path=settings.PATH.unigram_dir / "hf_token.txt",
             device=self.device,
         )
+
         logger.info("Finished loading model and tokenizer")
 
         # Load and process dataset
@@ -434,7 +469,7 @@ class Phase1DataPipeline:
             raise ValueError(f"Missing required columns in feather file: {missing_cols}")
 
         # 3. Load plateau neuron data
-        neuron_path = settings.PATH.neuron_dir / f"neuron/longtail_50/{self.model_name}/prob/boost/500_10.csv"
+        neuron_path = settings.PATH.neuron_dir / f"neuron/longtail_50/{self.model_name}/prob/suppress/500_50.csv"
         plateau_df = pd.read_csv(neuron_path)
         logger.info("Finished loading neuron df")
 
@@ -459,7 +494,9 @@ class Phase1DataPipeline:
 
 
 # Main Phase 1 Execution with Control Experiment
-def run_phase1_comparative_screening(token_type, model_name, sample_size, step, debug=False, resume=False):
+def run_phase1_comparative_screening(
+    token_type, model_name, sample_size, step, effect, debug=False, resume=False, use_sampling=False
+):
     """Execute Phase 1: Comparative Attention Head Screening (Target vs Other tokens)
 
     Tests whether attention heads show selective influence on plateau neurons
@@ -469,8 +506,8 @@ def run_phase1_comparative_screening(token_type, model_name, sample_size, step, 
     logger.info(f"Using device: {device}")
 
     # Check for existing results if resume is requested
-    out_dir = settings.PATH.attention_dir / f"longtail_50/{model_name}/{step}/500"
-    result_file = out_dir / "head_comp.pkl"
+    out_dir = settings.PATH.attention_dir / f"longtail_50/{model_name}/{step}/500/{effect}"
+    result_file = out_dir / "head_comparative.pkl"
 
     if resume and result_file.exists():
         logger.info(f"Resuming from existing results: {result_file}")
@@ -496,6 +533,7 @@ def run_phase1_comparative_screening(token_type, model_name, sample_size, step, 
         unigram_distrib=data_bundle["unigram_distrib"],
         token_type=token_type,
         longtail_threshold=data_bundle["longtail_threshold"],
+        use_sampling=use_sampling,
         device=device,
     )
 
@@ -559,7 +597,8 @@ def run_phase1_comparative_screening(token_type, model_name, sample_size, step, 
             "other_contexts": len(analyzer.other_contexts),
             "model_checkpoint": step,
             "token_type": token_type,
-            "sample_size": sample_size,
+            "sample_size": sample_size if use_sampling else "all_data",
+            "use_sampling": use_sampling,
             "debug_mode": debug,
         },
     }
@@ -586,8 +625,10 @@ def main():
         model_name=args.model_name,
         sample_size=args.sample_size,
         step=args.step,
+        effect=args.effect,
         debug=args.debug,
         resume=args.resume,
+        use_sampling=args.use_sampling,
     )
 
     logger.info("Analysis completed successfully!")

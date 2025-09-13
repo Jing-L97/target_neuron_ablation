@@ -113,6 +113,10 @@ class _MyPathSettings:
     def classify_dir(self) -> _Path:
         return self.DATA_DIR / "results" / "classify"
 
+    @property
+    def freq_dir(self) -> _Path:
+        return self.DATA_DIR / "results" / "freq"
+
 
 #######################################################
 # Instance of Settings

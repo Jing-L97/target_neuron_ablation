@@ -335,8 +335,25 @@ def load_unigram(model_name, device, dtype=torch.float32) -> torch.Tensor:
 
 def load_tail_threshold_stat(longtail_path: Path) -> tuple[float | None, dict | None]:
     """Load longtail threshold from the jason file."""
+    logger.info(longtail_path)
     data = JsonProcessor.load_json(longtail_path)
-    return data["threshold_info"]["probability"]
+    return extract_tail_threshold(data)
+
+
+def extract_tail_threshold(stats: dict):
+    """Load longtail threshold from the jason file."""
+    info = stats["threshold_info"]
+    min_freq = (
+        info.get("min", {})
+        .get("proportion", {})
+        .get("frequency", info.get("min", {}).get("elbow", {}).get("probability", None))
+    )
+    max_freq = (
+        info.get("max", {})
+        .get("proportion", {})
+        .get("frequency", info.get("max", {}).get("elbow", {}).get("probability", None))
+    )
+    return min_freq, max_freq
 
 
 #######################################################
