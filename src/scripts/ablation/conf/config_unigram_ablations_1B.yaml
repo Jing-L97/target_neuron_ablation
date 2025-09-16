@@ -19,6 +19,8 @@ process_neurons_in_chunks: 50  # Process neurons in smaller groups
 # longtail thredhold parameters
 ablation_mode: longtail_50
 tail_threshold: 50   # proportion of tail in distribution
+min_freq: 0
+max_freq: 50
 vector: longtail_50
 window_size: 2000
 apply_elbow: False

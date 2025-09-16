@@ -38,7 +38,6 @@ class StepConfig:
         """Initialize step configuration."""
         # Generate the complete list of steps
         self.steps = self.generate_pythia_checkpoints()
-
         # Apply interval sampling while preserving start and end steps
         if interval > 1 or start_idx > 0 or end_idx is not None:
             self.steps = self._apply_interval_sampling(self.steps, interval, start_idx, end_idx)
@@ -48,6 +47,7 @@ class StepConfig:
             logger.info(
                 f"Applied interval sampling with n={interval} {range_info}, resulting in {len(self.steps)} steps"
             )
+
         if debug:
             self.steps = self.steps[:5]
             logger.info("Entering debugging mode, select first 5 steps.")
@@ -111,7 +111,6 @@ class StepConfig:
         """Generate complete list of Pythia checkpoint steps."""
         # Initial checkpoint
         checkpoints = [0]
-
         # Log-spaced checkpoints (2^0 to 2^9)
         log_spaced = [2**i for i in range(10)]  # 1, 2, 4, ..., 512
 

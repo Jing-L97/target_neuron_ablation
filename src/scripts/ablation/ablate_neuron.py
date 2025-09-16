@@ -37,8 +37,9 @@ def parse_args() -> argparse.Namespace:
         help="Name of the configuration file to use",
     )
     parser.add_argument("--config_path", type=str, default="conf", help="Relative dir to config file")
-    parser.add_argument("--start", type=int, default=14, help="Start index of step range")
-    parser.add_argument("--end", type=int, default=142, help="End index of step range")
+    parser.add_argument("--start", type=int, default=143, help="Start index of step range")
+    parser.add_argument("--end", type=int, default=143, help="End index of step range")
+    parser.add_argument("--last_N_step", type=int, default=0, help="whether to further select least n steps")
     parser.add_argument("--debug", action="store_true", help="Compute the first few 5 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Resume from the existing checkpoint")
     return parser.parse_args()
@@ -63,21 +64,24 @@ def main():
 
         # Initialize step configurations
         steps_config = StepConfig(
-            debug=cli_args.debug,
-            interval=cli_args.interval,
-            start_idx=cli_args.start,
-            end_idx=cli_args.end,
+            debug=cli_args.debug, interval=cli_args.interval, start_idx=cli_args.start, end_idx=cli_args.end
         )
+        # Process each step in range
+        step_lst = steps_config.steps[(-1 * cli_args.last_N_step) :]
+        logger.info(f"Further filtering results in {len(step_lst)} step(s)")
+
         # intialize the process class; compute this as it has not been saved yet
-        abalation_processor = NeuronAblationProcessor(args=hydra_args, device=device, logger=logger)
+        abalation_processor = NeuronAblationProcessor(
+            args=hydra_args, device=device, logger=logger, debug=cli_args.debug
+        )
         base_save_dir = abalation_processor.get_save_dir()
+
         unigram_distrib, _ = load_unigram(
             model_name=hydra_args.model, device=device, dtype=settings.get_dtype(hydra_args.model)
         )
-        min_freq, max_freq = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
+        min_freq, max_freq = abalation_processor.get_tail_threshold_stat(unigram_distrib)
 
-        # Process each step in range
-        for step in steps_config.steps:
+        for step in step_lst:
             # Create save_path as a directory
             save_path = base_save_dir / str(step) / str(hydra_args.data_range_end)
             save_path.mkdir(parents=True, exist_ok=True)

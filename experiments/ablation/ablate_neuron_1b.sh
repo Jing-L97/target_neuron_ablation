@@ -2,7 +2,7 @@
 #SBATCH --job-name=abl_1b
 #SBATCH --export=ALL
 #SBATCH --partition=erc-dupoux
-#SBATCH --mem=100G
+#SBATCH --mem=200G
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=48:00:00
@@ -16,8 +16,9 @@ SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/
 CONFIG_NAME="config_unigram_ablations_1B.yaml"
 
 
-INTERVAL=20
-START=141
+INTERVAL=1
+START=138
 
 # Run the script with the appropriate configuration
-python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --start $START --resume 
+python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --start $START --resume --last_N_step 3
+

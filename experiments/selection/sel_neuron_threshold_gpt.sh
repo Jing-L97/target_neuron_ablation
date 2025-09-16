@@ -19,7 +19,6 @@ VECTORS=("longtail_50")
 TOP_NS=(-1)
 MODELS=(
     "gpt2"
-    "gpt2-small"
     "gpt2-large"
     "gpt2-xl"
 

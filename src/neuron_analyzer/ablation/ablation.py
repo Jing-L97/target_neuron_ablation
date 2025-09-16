@@ -38,16 +38,19 @@ T = t.TypeVar("T")
 class NeuronAblationProcessor:
     """Class to handle neural network ablation processing."""
 
-    def __init__(self, args: DictConfig, device: str, logger: logging.Logger | None = None):
+    def __init__(self, args: DictConfig, device: str, logger: logging.Logger | None = None, debug=False):
         """Initialize the ablation processor with configuration."""
         # Set up logger
         self.logger = logger or logging.getLogger(__name__)
 
         # Initialize parameters from args
         self.args = args
+        self.debug = debug
+        self.seed: int = args.seed if args.seed else 42
         self.seed: int = args.seed if args.seed else 42
         self.device: str = device
         self.ablation_mode: str = f"longtail_{self.args.min_freq}_{self.args.max_freq}"
+        self.threshold_path: Path = self._config_freq_path()
         # Initialize random seeds
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
@@ -57,7 +60,7 @@ class NeuronAblationProcessor:
         if hasattr(args, "chdir") and args.chdir:
             os.chdir(args.chdir)
 
-    def get_tail_threshold_stat(self, unigram_distrib, save_path: Path) -> tuple[float | None, dict | None]:
+    def get_tail_threshold_stat(self, unigram_distrib) -> tuple[float | None, dict | None]:
         """Calculate threshold for long-tail ablation mode."""
         window_size = self.args.window_size if self.args.window_size else 2000
         analyzer = ZipfThresholdAnalyzer(
@@ -67,8 +70,8 @@ class NeuronAblationProcessor:
             max_freq=self.args.max_freq,
         )
         min_freq, max_freq, threshold_stats = analyzer.get_tail_threshold()
-        JsonProcessor.save_json(threshold_stats, save_path)
-        self.logger.info(f"Saved threshold statistics to {save_path}")
+        JsonProcessor.save_json(threshold_stats, self.threshold_path)
+        self.logger.info(f"Saved threshold statistics to {self.threshold_path}")
         return min_freq, max_freq
 
     def load_entropy_df(self, step) -> pd.DataFrame:
@@ -76,8 +79,17 @@ class NeuronAblationProcessor:
         h_path = self._config_entropy_path(step)
         # load hte exisitng file
         if h_path.is_file():
-            return pd.read_csv(h_path)
+            logger.info(f"Loading existing entropy df from {h_path}")
+            if self.debug:
+                token_df = pd.read_csv(h_path, nrows=100)
+                logger.info("Debugging mode, loaded first 100 rows")
+                return token_df
 
+            token_df = pd.read_csv(h_path)
+            logger.info("Finished loading file")
+            return token_df
+
+        logger.info("Generating the entropy df")
         token_df = get_entropy_activation_df(
             self.all_neurons,
             self.tokenized_data,
@@ -91,7 +103,9 @@ class NeuronAblationProcessor:
             residuals_layer=self.entropy_dim_layer,
             residuals_dict={},
         )
+
         token_df.to_csv(h_path)
+        logger.info(f"Save the generated entropy df to {h_path}")
         return token_df
 
     def process_single_step(self, step: int, unigram_distrib, max_freq, min_freq, save_path: Path) -> None:
@@ -193,13 +207,23 @@ class NeuronAblationProcessor:
         base_save_dir.mkdir(parents=True, exist_ok=True)
         return base_save_dir
 
+    def _config_freq_path(self):
+        """Get the savepath based on current configurations."""
+        threshold_path = settings.PATH.freq_dir / self.args.model / f"{self.args.min_freq}_{self.args.max_freq}.json"
+        threshold_path.parent.mkdir(parents=True, exist_ok=True)
+        return threshold_path
+
     def _config_entropy_path(self, step) -> Path:
         """Configure entorpy df path based on current settings."""
         # path_prefix = settings.PATH.ablation_dir / self.ablation_mode / self.args.model
         path_prefix = settings.PATH.ablation_dir / "longtail_50" / self.args.model
         if step is None:
-            return path_prefix / str(self.args.data_range_end) / "entropy_df.csv"
-        return path_prefix / str(step) / str(self.args.data_range_end) / "entropy_df.csv"
+            h_path = path_prefix / str(self.args.data_range_end) / "entropy_df.csv"
+            h_path.parent.mkdir(parents=True, exist_ok=True)
+            return h_path
+        h_path = path_prefix / str(step) / str(self.args.data_range_end) / "entropy_df.csv"
+        h_path.parent.mkdir(parents=True, exist_ok=True)
+        return h_path
 
 
 ######################################################
@@ -265,7 +289,7 @@ class ModelAblationAnalyzer:
             self.unigram_direction_vocab /= self.unigram_direction_vocab.norm()
             self.longtail_mask = None
         # set the dtype based on the model name
-        self.unigram_vocab = self.unigram_direction_vocab.to(dtype=self.dtype)
+        self.unigram_direction_vocab = self.unigram_direction_vocab.to(dtype=self.dtype)
 
     def project_logits(self, logits: torch.Tensor) -> torch.Tensor:
         """Get the value of logits projected onto the unigram direction."""
@@ -279,6 +303,10 @@ class ModelAblationAnalyzer:
         u: A 1D unit tensor of shape (d,), representing the direction along which the adjustment is made
         target_values: A 2D tensor of shape (n, m), representing the desired projection values of the vectors in v along u
         """
+        v = v.to(self.dtype)
+        u = u.to(self.dtype)
+        target_values = target_values.to(self.dtype)
+
         current_projections = (v @ u.unsqueeze(-1)).squeeze(-1)  # Current projections of v onto u
         delta = target_values - current_projections  # Differences needed to reach the target projections
         adjusted_v = v + delta.unsqueeze(-1) * u  # Adjust v by the deltas along the direction of u
@@ -426,6 +454,7 @@ class ModelAblationAnalyzer:
             pos_to_idx = {pos: i for i, pos in enumerate(positions)}
 
         for i, component_name in enumerate(self.components_to_ablate):
+            logger.debug(f"Ablating component {component_name}")
             # Start with a copy of batch data
             df_to_append = batch_df.copy()
 
@@ -487,6 +516,7 @@ class ModelAblationAnalyzer:
             # Append to our results
             final_df = df_to_append if final_df is None else pd.concat([final_df, df_to_append])
 
+            logger.debug(f"Finished ablating component {component_name}")
         # Handle case where we couldn't process any results
         if final_df is None:
             logger.warning(f"No valid results for batch {batch_n}, returning empty DataFrame")
@@ -524,8 +554,11 @@ class ModelAblationAnalyzer:
         # Get layer indices
         layer_indices = [int(neuron_name.split(".")[0]) for neuron_name in self.components_to_ablate]
         self.layer_idx = layer_indices[0]
+        logger.info("Finish building the vector")
 
         for batch_n in filtered_entropy_df.batch.unique():
+            logger.info("--------------------------------")
+            logger.info(f"Enter batch {batch_n}")
             # Get token sequence
             tok_seq = self.tokenized_data["tokens"][batch_n]
 
@@ -573,6 +606,7 @@ class ModelAblationAnalyzer:
             # Get neuron activations for our positions
             previous_activation_full = cache[utils.get_act_name("post", self.layer_idx)][0]
             previous_activation = previous_activation_full[positions][:, self.neuron_indices]
+            logger.info("Get neuron activation for the current position")
 
             del cache
 
@@ -601,9 +635,11 @@ class ModelAblationAnalyzer:
                 .cpu()
                 .numpy()
             )
-
+            logger.info("Compute KL divergence")
             # Process in chunks to manage memory
             for i in range(0, res_deltas.shape[0], self.chunk_size):
+                n = 0
+
                 res_deltas_chunk = res_deltas[i : i + self.chunk_size]
                 updated_res_stream_chunk = res_stream.repeat(res_deltas_chunk.shape[0], 1, 1) + res_deltas_chunk
 
@@ -669,6 +705,9 @@ class ModelAblationAnalyzer:
                     kl_divergence_after_frozen_unigram,
                 )
 
+                n += 1
+
+            logger.info("Finished processing all chunks")
             # Concatenate results
             loss_post_ablation = np.concatenate(loss_post_ablation, axis=0)
             entropy_post_ablation = np.concatenate(entropy_post_ablation, axis=0)
@@ -697,5 +736,6 @@ class ModelAblationAnalyzer:
             )
 
             self.results[batch_n] = batch_results
+            logger.info(f"Finihsed processing batch {batch_n}")
 
         return self.results
