@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=pythia
+#SBATCH --job-name=pythia_elbow
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=40G
 #SBATCH --time=24:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/pythia_%a.log
-#SBATCH --array=0-19  # adjust depending on total combinations
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/pythia_elbow_%a.log
+#SBATCH --array=0-1  # adjust depending on total combinations
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
@@ -14,7 +14,7 @@ SEL_FREQ="longtail"
 STEP_MODE="multi"
 
 # Define the input arrays
-EFFECTS=("boost")
+EFFECTS=("boost" "suppress")
 VECTORS=("longtail_0_50")
 TOP_NS=(-1)
 MODELS=(
@@ -22,7 +22,7 @@ MODELS=(
     "EleutherAI/pythia-2.8B-deduped"
 
 )
-MAX_FREQS=(50 45 40 35 30 25 20 15 10 5)
+MAX_FREQS=("elbow")
 MIN_FREQ=0
 # Total combinations
 TOTAL_COMBINATIONS=$((${#EFFECTS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#MODELS[@]} * ${#MAX_FREQS[@]}))

@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Analyze geometric features in activation space.")
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
-    parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
+    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-1B-deduped", help="Target model name")
+    parser.add_argument("--vector", type=str, default="longtail_0_50")
     parser.add_argument("--heuristic", type=str, choices=["KL", "prob"], default="prob", help="selection heuristic")
     parser.add_argument(
         "--sel_freq",
@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
         "--group_size", type=str, choices=["best", "target_size"], default="best", help="different group size"
     )
     parser.add_argument(
-        "--step_mode", type=str, choices=["single", "multi"], default="single", help="whether to compute multi steps"
+        "--step_mode", type=str, choices=["single", "multi"], default="multi", help="whether to compute multi steps"
     )
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
@@ -41,9 +41,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude_random", action="store_true", help="Whether to exclude existing random")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Check existing file and resume when setting this")
-    parser.add_argument("--top_n", type=int, default=40, help="The top n neurons to be selected")
-    parser.add_argument("--max_freq", default=50, help="the proportion of selected max freq")
-    parser.add_argument("--min_freq", default="elbow", help="the proportion of selected min freq")
+    parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
+    parser.add_argument("--max_freq", default=15, help="the proportion of selected max freq")
+    parser.add_argument("--min_freq", default=0, help="the proportion of selected min freq")
     parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
@@ -147,33 +147,34 @@ def analyze_multi(
     final_results, step_dirs = step_processor.resume_results(args.resume, save_path, neuron_dir)
 
     for step in step_dirs:
-        try:
-            activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
-                load_activation_indices(args, abl_path, str(step[1]), neuron_dir, threshold_path, device)
-            )
-            if do_analysis:
-                # initilize the class
-                geometry_analyzer = ActivationGeometricAnalyzer(
-                    activation_data=activation_data,
-                    boost_neuron_indices=boost_neuron_indices,
-                    suppress_neuron_indices=suppress_neuron_indices,
-                    excluded_neuron_indices=random_indices,
-                    activation_column="activation",
-                    token_column="str_tokens",
-                    context_column="context",
-                    component_column="component_name",
-                    num_random_groups=2,
-                    device=device,
-                    use_mixed_precision=use_mixed_precision,
-                )
-                results = geometry_analyzer.run_all_analyses()
-                final_results[str(step[1])] = results
-                # assign col headers
-                JsonProcessor.save_json(final_results, save_path)
-                logger.info(f"Save file to {save_path}")
+        # try:
+        activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
+            load_activation_indices(args, abl_path, str(step[1]), neuron_dir, threshold_path, device)
+        )
 
-        except:
-            logger.info(f"Something wrong with {step[1]}")
+        if do_analysis:
+            # initilize the class
+            geometry_analyzer = ActivationGeometricAnalyzer(
+                activation_data=activation_data,
+                boost_neuron_indices=boost_neuron_indices,
+                suppress_neuron_indices=suppress_neuron_indices,
+                excluded_neuron_indices=random_indices,
+                activation_column="activation",
+                token_column="str_tokens",
+                context_column="context",
+                component_column="component_name",
+                num_random_groups=2,
+                device=device,
+                use_mixed_precision=use_mixed_precision,
+            )
+            results = geometry_analyzer.run_all_analyses()
+            final_results[str(step[1])] = results
+            # assign col headers
+            JsonProcessor.save_json(final_results, save_path)
+            logger.info(f"Save file to {save_path}")
+
+    # except:
+    #     logger.info(f"Something wrong with {step[1]}")
 
 
 #######################################################################################################

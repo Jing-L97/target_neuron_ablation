@@ -1,12 +1,12 @@
 #!/bin/bash
-#SBATCH --job-name=gpt2
+#SBATCH --job-name=gpt2_elbow
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=20G
 #SBATCH --time=30:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/gpt2_%a.log
-#SBATCH --array=0-79%10  # adjust depending on total combinations
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/gpt2_elbow_%a.log
+#SBATCH --array=0-5%10  # adjust depending on total combinations
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 HEURISTIC="prob"
@@ -23,7 +23,7 @@ MODELS=(
     "gpt2-xl"
 
 )
-MAX_FREQS=(50 45 40 35 30 25 20 15 10 5)
+MAX_FREQS=("elbow")
 MIN_FREQ=0
 
 # Total combinations

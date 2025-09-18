@@ -18,7 +18,8 @@ CONFIG_NAME="config_unigram_ablations_1B.yaml"
 
 INTERVAL=20
 START=14
+END=130
 
 # Run the script with the appropriate configuration
-python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --start $START --resume 
+python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --start $START --end $END --resume 
 
