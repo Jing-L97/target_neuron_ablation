@@ -1,11 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=thre70
+#SBATCH --job-name=pythia
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
-#SBATCH --cpus-per-task=2
-#SBATCH --mem=20G
-#SBATCH --time=30:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/thre70_%a.log
+#SBATCH --cpus-per-task=4
+#SBATCH --mem=40G
+#SBATCH --time=24:00:00
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/pythia_%a.log
 #SBATCH --array=0-19  # adjust depending on total combinations
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
@@ -14,14 +14,16 @@ SEL_FREQ="longtail"
 STEP_MODE="multi"
 
 # Define the input arrays
-EFFECTS=("boost" "suppress")
-VECTORS=("longtail_50")
+EFFECTS=("boost")
+VECTORS=("longtail_0_50")
 TOP_NS=(-1)
 MODELS=(
-    "EleutherAI/pythia-70m-deduped"
+    "EleutherAI/pythia-1B-deduped"
+    "EleutherAI/pythia-2.8B-deduped"
+
 )
 MAX_FREQS=(50 45 40 35 30 25 20 15 10 5)
-
+MIN_FREQ=0
 # Total combinations
 TOTAL_COMBINATIONS=$((${#EFFECTS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#MODELS[@]} * ${#MAX_FREQS[@]}))
 
@@ -61,4 +63,5 @@ python $SCRIPT_ROOT/sel_neuron.py \
     --sel_freq "$SEL_FREQ" \
     --step_mode "$STEP_MODE" \
     --max_freq "$MAX_FREQ" \
+    --min_freq "$MIN_FREQ" \
     --heuristic "$HEURISTIC"

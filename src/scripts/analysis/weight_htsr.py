@@ -70,7 +70,6 @@ def configure_path(args):
     # only set the path when loading the group neurons
     neuron_dir = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic
     sel_dir = settings.PATH.neuron_dir / "neuron" / args.vector / args.model / args.heuristic / "boost"
-    logger.info(sel_dir)
     threshold_path = settings.PATH.ablation_dir / "longtail_50" / args.model
     return save_path, abl_path, neuron_dir, sel_dir, threshold_path
 

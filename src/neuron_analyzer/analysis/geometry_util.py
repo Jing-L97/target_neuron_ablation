@@ -7,6 +7,7 @@ import pandas as pd
 import torch
 
 from neuron_analyzer import settings
+from neuron_analyzer.analysis.freq import load_unigram_analyzer
 from neuron_analyzer.load_util import JsonProcessor
 from neuron_analyzer.model_util import NeuronLoader
 from neuron_analyzer.selection.neuron import NeuronSelector
@@ -38,7 +39,6 @@ class NeuronGroupAnalyzer:
         self,
         args,
         device: str,
-        unigram_analyzer=None,
         step_num: str = None,
         feather_path: Path = None,
         abl_path: Path = None,
@@ -47,7 +47,6 @@ class NeuronGroupAnalyzer:
     ):
         self.args = args
         self.device = device
-        self.unigram_analyzer = unigram_analyzer
         self.feather_path = feather_path
         self.step = step_num
         self.abl_path = abl_path
@@ -58,8 +57,8 @@ class NeuronGroupAnalyzer:
             debug=self.args.debug,
             top_n=self.args.top_n,
             step=self.step,
-            unigram_analyzer=self.unigram_analyzer,
-            threshold_path=Path(self.threshold_path) / self.args.stat_file,
+            unigram_analyzer=load_unigram_analyzer(args),
+            threshold_path=Path(self.threshold_path),
             sel_by_med=self.args.sel_by_med,
             sel_freq=self.args.sel_freq,
         )
@@ -93,19 +92,6 @@ class NeuronGroupAnalyzer:
 
     def load_activation_df(self) -> pd.DataFrame:
         """Filter neuron index for different interventions and return the grouped data."""
-        # load selector
-        """
-        self.neuron_selector = NeuronSelector(
-            feather_path=self.feather_path,
-            debug=self.args.debug,
-            top_n=self.args.top_n,
-            step=self.step,
-            unigram_analyzer=self.unigram_analyzer,
-            threshold_path=Path(self.threshold_path) / self.args.stat_file,
-            sel_by_med=self.args.sel_by_med,
-            sel_freq=self.args.sel_freq,
-        )
-        """
         # load feather dataframe
         activation_data = self.neuron_selector.load_and_filter_df()
         # intilize neuron loader

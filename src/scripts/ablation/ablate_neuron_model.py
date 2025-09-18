@@ -63,8 +63,8 @@ def main():
         unigram_distrib, _ = load_unigram(
             model_name=hydra_args.model, device=device, dtype=settings.get_dtype(hydra_args.model)
         )
-        longtail_threshold = ablation_processor.get_tail_threshold_stat(unigram_distrib, save_path=base_save_dir)
 
+        min_freq, max_freq = ablation_processor.get_tail_threshold_stat(unigram_distrib)
         # Process each step in range
         # Create save_path as a directory
         save_path = base_save_dir / str(hydra_args.data_range_end)
@@ -76,7 +76,7 @@ def main():
 
         else:
             ablation_processor.process_single_step(
-                step=None, unigram_distrib=unigram_distrib, longtail_threshold=longtail_threshold, save_path=save_path
+                step=None, unigram_distrib=unigram_distrib, min_freq=min_freq, max_freq=max_freq, save_path=save_path
             )
 
 

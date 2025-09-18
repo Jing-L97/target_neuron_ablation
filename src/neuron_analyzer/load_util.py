@@ -335,7 +335,6 @@ def load_unigram(model_name, device, dtype=torch.float32) -> torch.Tensor:
 
 def load_tail_threshold_stat(longtail_path: Path) -> tuple[float | None, dict | None]:
     """Load longtail threshold from the jason file."""
-    logger.info(longtail_path)
     data = JsonProcessor.load_json(longtail_path)
     return extract_tail_threshold(data)
 

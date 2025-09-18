@@ -8,7 +8,7 @@ import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.ablation.ablation import NeuronAblationProcessor
-from neuron_analyzer.analysis.freq import UnigramAnalyzer
+from neuron_analyzer.analysis.freq import load_unigram_analyzer
 from neuron_analyzer.load_util import load_unigram
 from neuron_analyzer.selection.neuron import NeuronSelector
 
@@ -23,12 +23,11 @@ def parse_args() -> argparse.Namespace:
         description="Select neurons based on single neuron heuristics only on ceonverged step."
     )
 
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-70m-deduped", help="Target model name")
+    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-1B-deduped", help="Target model name")
     parser.add_argument(
         "--vector",
         type=str,
-        default="longtail_50",
-        choices=["mean", "longtail_elbow", "longtail_50", "longtail_elbow_20"],
+        default="longtail_0_50",
         help="boost or suppress long-tail prob",
     )
     parser.add_argument(
@@ -97,13 +96,6 @@ def set_path(args) -> Path:
     return save_path, threshold_path
 
 
-def load_unigram_analyzer(args):
-    """Load the target unigram analyzer based on whether filtering by freq."""
-    if not args.sel_freq:
-        return None
-    return UnigramAnalyzer(device="cpu", model_name=args.model)
-
-
 def filter_single(args, abl_path: Path, save_path: Path, threshold_path: Path) -> None:
     """Sort results of single ckpt."""
     feather_path = abl_path / str(args.data_range_end) / f"k{args.k}.feather"
@@ -163,7 +155,7 @@ def main() -> None:
     # generate freq file
     abalation_processor = NeuronAblationProcessor(args=args, device=device, logger=logger)
     unigram_distrib, _ = load_unigram(model_name=args.model, device=device, dtype=settings.get_dtype(args.model))
-    min_freq, max_freq = abalation_processor.get_tail_threshold_stat(unigram_distrib, save_path=threshold_path)
+    min_freq, max_freq = abalation_processor.get_tail_threshold_stat(unigram_distrib)
 
     if args.step_mode == "single":
         filter_single(args, abl_path, save_path, threshold_path)

@@ -1,6 +1,6 @@
 device: cuda
 dry_run: false
-seed: 42
+seed: 50
 chdir: "."
 model: EleutherAI/pythia-1B-deduped
 dataset: stas/c4-en-10k

@@ -1,23 +1,23 @@
 #!/bin/bash
-#SBATCH --job-name=abl_1b
+#SBATCH --job-name=abl_2.8b
 #SBATCH --export=ALL
 #SBATCH --partition=erc-dupoux
 #SBATCH --mem=200G
 #SBATCH --gres=gpu:1
 #SBATCH --cpus-per-task=8
 #SBATCH --time=48:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/pythia_1b_step.log
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/ablation/pythia_2.8b.log
 
 
 # Script and config paths
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/ablation"
 
 # Define the configuration files
-CONFIG_NAME="config_unigram_ablations_1B.yaml"
+CONFIG_NAME="config_unigram_ablations_2.8B.yaml"
 
 
-INTERVAL=20
-START=14
+INTERVAL=1
+START=1
 
 # Run the script with the appropriate configuration
 python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --start $START --resume 

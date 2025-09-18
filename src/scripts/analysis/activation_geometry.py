@@ -33,7 +33,7 @@ def parse_args() -> argparse.Namespace:
         "--group_size", type=str, choices=["best", "target_size"], default="best", help="different group size"
     )
     parser.add_argument(
-        "--step_mode", type=str, choices=["single", "multi"], default="multi", help="whether to compute multi steps"
+        "--step_mode", type=str, choices=["single", "multi"], default="single", help="whether to compute multi steps"
     )
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
@@ -41,8 +41,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude_random", action="store_true", help="Whether to exclude existing random")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Check existing file and resume when setting this")
-    parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
-    parser.add_argument("--stat_file", type=str, default="zipf_threshold_stats.json", help="stat filename")
+    parser.add_argument("--top_n", type=int, default=40, help="The top n neurons to be selected")
+    parser.add_argument("--max_freq", default=50, help="the proportion of selected max freq")
+    parser.add_argument("--min_freq", default="elbow", help="the proportion of selected min freq")
     parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
@@ -70,13 +71,18 @@ def configure_path(args):
         settings.PATH.direction_dir / group_name / "activation" / args.vector / args.model / save_heuristic / filename
     )
     save_path.parent.mkdir(parents=True, exist_ok=True)
+    abl_path = settings.PATH.ablation_dir / args.vector / args.model
 
-    if args.sel_freq == "common":  # select from all of the tokens
-        threshold_path = settings.PATH.ablation_dir / "longtail_50" / args.model
-        abl_path = settings.PATH.ablation_dir / "mean" / args.model
-    else:
-        threshold_path = None
-        abl_path = settings.PATH.ablation_dir / args.vector / args.model
+    # if args.sel_freq == "common":  # select from all of the tokens
+    #     threshold_path = settings.PATH.ablation_dir / "longtail_50" / args.model
+    #     abl_path = settings.PATH.ablation_dir / "mean" / args.model
+    # else:
+    #     threshold_path = None
+    #     abl_path = settings.PATH.ablation_dir / args.vector / args.model
+
+    threshold_path = settings.PATH.freq_dir / args.model / f"{args.min_freq}_{args.max_freq}.json"
+    threshold_path.parent.mkdir(parents=True, exist_ok=True)
+
     # only set the path when loading the group neurons
     neuron_dir = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic
     return save_path, abl_path, neuron_dir, threshold_path

@@ -241,3 +241,10 @@ class UnigramAnalyzer:
         if 0 <= token_id < len(self.unigram_count):
             return int(self.unigram_count[token_id]), float(self.unigram_distrib[token_id].cpu().item())
         return 0, 0.0
+
+
+def load_unigram_analyzer(args):
+    """Load the target unigram analyzer based on whether filtering by freq."""
+    if not args.sel_freq:
+        return None
+    return UnigramAnalyzer(device="cpu", model_name=args.model)

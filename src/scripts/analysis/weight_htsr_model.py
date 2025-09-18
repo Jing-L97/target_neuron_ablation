@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 def parse_args() -> argparse.Namespace:
     """Parse command line arguments."""
     parser = argparse.ArgumentParser(description="Analyze geometric features in activation space.")
-    parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-410m-deduped", help="Target model name")
+    parser.add_argument("-m", "--model", type=str, default="gpt2-xl", help="Target model name")
     parser.add_argument("--vector", type=str, default="longtail_50", choices=["mean", "longtail_elbow", "longtail_50"])
     parser.add_argument("--heuristic", type=str, choices=["KL", "prob"], default="prob", help="selection heuristic")
     parser.add_argument(
@@ -46,7 +46,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--exclude_random", action="store_true", help="Whether to exclude existing random")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Check existing file and resume when setting this")
-    parser.add_argument("--top_n", type=int, default=10, help="The top n neurons to be selected")
+    parser.add_argument("--top_n", type=int, default=40, help="The top n neurons to be selected")
+    parser.add_argument("--max_freq", default=50, help="the proportion of selected max freq")
+    parser.add_argument("--min_freq", default="elbow", help="the proportion of selected min freq")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
     return parser.parse_args()
@@ -74,8 +76,11 @@ def configure_path(args):
     # only set the path when loading the group neurons
     neuron_dir = settings.PATH.neuron_dir / "group" / args.vector / args.model / args.heuristic
     sel_dir = settings.PATH.neuron_dir / "neuron" / args.vector / args.model / args.heuristic / "boost"
-    logger.info(sel_dir)
-    threshold_path = settings.PATH.ablation_dir / "longtail_50" / args.model
+    # threshold_path = settings.PATH.ablation_dir / "longtail_50" / args.model / f"{args.min_freq}_{args.max_freq}.json"
+
+    threshold_path = settings.PATH.freq_dir / args.model / f"{args.min_freq}_{args.max_freq}.json"
+    threshold_path.parent.mkdir(parents=True, exist_ok=True)
+
     return save_path, abl_path, neuron_dir, sel_dir, threshold_path
 
 
