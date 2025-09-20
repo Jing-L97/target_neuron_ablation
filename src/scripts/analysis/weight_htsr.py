@@ -72,7 +72,7 @@ def configure_path(args):
         else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
     )
 
-    save_path = settings.PATH.direction_dir / "htsr" / group_name / args.vector / args.model / save_heuristic / filename
+    save_path = settings.PATH.direction_dir / group_name / "htsr" / args.vector / args.model / save_heuristic / filename
     save_path.parent.mkdir(parents=True, exist_ok=True)
     abl_path = settings.PATH.ablation_dir / args.vector / args.model
     # only set the path when loading the group neurons
