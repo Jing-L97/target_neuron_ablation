@@ -28,8 +28,7 @@ TOP_NS=(
 )
 
 MODELS=(
-    "EleutherAI/pythia-70m-deduped"
-    "EleutherAI/pythia-410m-deduped"
+    "EleutherAI/pythia-160m-deduped"
 )
 
 # Calculate total combinations for validation

@@ -15,12 +15,10 @@ STEP_MODE="single"
 
 # Define the input arrays
 EFFECTS=("boost" "suppress")
-VECTORS=("longtail_50")
+VECTORS=("longtail_0_50")
 TOP_NS=(-1)
 MODELS=(
-    "gpt2"
-    "gpt2-large"
-    "gpt2-xl"
+    "gpt2-medium"
 
 )
 MAX_FREQS=(50 45 40 35 30 25 20 15 10 5)

@@ -108,7 +108,7 @@ def analyze_single(
             device=device,
         )
     )
-
+    logger.info(f"Finished loading neuron indices {boost_neuron_indices}")
     if do_analysis:
         # initilize the class
         geometry_analyzer = ActivationGeometricAnalyzer(
@@ -151,6 +151,8 @@ def analyze_multi(
         activation_data, boost_neuron_indices, suppress_neuron_indices, random_indices, do_analysis = (
             load_activation_indices(args, abl_path, str(step[1]), neuron_dir, threshold_path, device)
         )
+        logger.info(f"Finished loading boost neuron indices {boost_neuron_indices}")
+        logger.info(f"Finished loading suppress neuron indices {suppress_neuron_indices}")
 
         if do_analysis:
             # initilize the class
