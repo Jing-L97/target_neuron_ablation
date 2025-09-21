@@ -13,6 +13,7 @@ import transformer_lens.utils as tl_utils
 from tqdm import tqdm
 
 from neuron_analyzer import settings
+from neuron_analyzer.analysis.att_head import compute_gini
 from neuron_analyzer.load_util import load_tail_threshold_stat, load_unigram
 from neuron_analyzer.model_util import ModelHandler
 
@@ -292,6 +293,49 @@ class AttentionRoutingInfluenceAnalyzer:
                 influence_scores[head_name] = 0.0
 
         return influence_scores
+
+    def compute_attention_gini(self, layer_idx: int) -> dict[str, float]:
+        """Compute Gini coefficients for attention distributions in a specific layer.
+        Returns average Gini for target (rare) vs other (common) tokens.
+        """
+        target_ginis = []
+        other_ginis = []
+
+        for context_key in self.context_neuron_data:
+            context_info = self.context_neuron_data[context_key]["context_info"]
+            token_id = context_info["token_id"]
+
+            # Skip special tokens
+            if token_id in {0, 1, 2, 3}:
+                continue
+
+            # Extract attention pattern for this layer (post-softmax)
+            try:
+                # Assuming you can access attention from the model cache
+                inp = self.tokenized_data["tokens"][context_info["batch"]].to(self.device)
+                self.model.reset_hooks()
+                _, cache = self.model.run_with_cache(inp.unsqueeze(0))
+                attn = cache[f"pattern_{layer_idx}"][0].detach().cpu().numpy()  # [seq_len, n_heads, seq_len]
+            except Exception:
+                continue
+
+            # Compute Gini per head
+            gini_values = []
+            for head in range(attn.shape[1]):
+                gini_values.append(compute_gini(attn[:, head, :].flatten()))
+
+            avg_gini = float(np.mean(gini_values))
+
+            # Separate target vs other
+            if token_id in self.target_token_ids:
+                target_ginis.append(avg_gini)
+            else:
+                other_ginis.append(avg_gini)
+
+        return {
+            "target_avg_gini": float(np.mean(target_ginis)) if target_ginis else 0.0,
+            "other_avg_gini": float(np.mean(other_ginis)) if other_ginis else 0.0,
+        }
 
 
 # Data Pipeline for Phase 1
