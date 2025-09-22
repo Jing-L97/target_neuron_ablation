@@ -2,7 +2,6 @@
 # Adapting existing attention ablation infrastructure for gradient-free influence scoring
 import argparse
 import logging
-import pickle
 import re
 from functools import partial
 
@@ -408,79 +407,67 @@ class Phase1DataPipeline:
             "unigram_distrib": unigram_distrib,
         }
 
+    def run_phase1_longtail_screening(self):
+        """Phase 1: Long-tail screening of plateau neurons.
+        Identifies rare vs. common token activations and computes
+        attention concentration (via Gini coefficients).
+        """
+        # ---------------------------
+        # 1. Collect activations
+        # ---------------------------
+        print("Collecting plateau neuron activations...")
+        plateau_neurons = self.collect_plateau_neurons()
+        rare_tokens, common_tokens = self.split_tokens_by_frequency()
 
-def run_phase1_longtail_screening(token_type, model_name="EleutherAI/pythia-70m-deduped"):
-    """Execute Phase 1: Attention Head Influence Screening (Longtail contexts only)"""
-    # Load all required data
-    device: str = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.info(f"Use device: {device}")
-    pipeline = Phase1DataPipeline(model_name=model_name, device=device)  # Adjust model name
-    data_bundle = pipeline.load_required_data()
+        # ---------------------------
+        # 2. Compute activation distributions
+        # ---------------------------
+        print("Computing activation distributions...")
+        rare_acts = self.get_activation_distribution(rare_tokens, plateau_neurons)
+        common_acts = self.get_activation_distribution(common_tokens, plateau_neurons)
 
-    # Initialize influence analyzer with longtail filtering
-    analyzer = AttentionRoutingInfluenceAnalyzer(
-        model=data_bundle["model"],
-        entropy_df=data_bundle["entropy_df"],
-        tokenized_data=data_bundle["tokenized_data"],
-        plateau_neuron_data=data_bundle["plateau_data"],
-        unigram_distrib=data_bundle["unigram_distrib"],
-        longtail_threshold=data_bundle["longtail_threshold"],  # Same threshold as neuron ablation
-        token_type=token_type,
-        device=device,
-    )
+        # ---------------------------
+        # 3. Compute correlations
+        # ---------------------------
+        print("Computing correlations between rare and common activations...")
+        correlation = self.compute_activation_correlation(rare_acts, common_acts)
 
-    # Run screening experiment on longtail contexts only
-    influence_scores = analyzer.run_full_screening(sample_size=300)
+        # ---------------------------
+        # 4. Compute attention concentration (NEW: Gini coefficient)
+        # ---------------------------
+        print("Computing attention concentration via Gini coefficients...")
+        gini_rare = self.compute_gini(rare_acts)
+        gini_common = self.compute_gini(common_acts)
 
-    # Rank and select top candidates
-    sorted_heads = sorted(influence_scores.items(), key=lambda x: x[1], reverse=True)
-    top_candidates = [head for head, score in sorted_heads[:8]]
+        # Save stats
+        self.results["phase1"] = {
+            "rare_tokens": rare_tokens,
+            "common_tokens": common_tokens,
+            "activation_correlation": correlation,
+            "gini_rare": gini_rare,
+            "gini_common": gini_common,
+        }
 
-    # Print results summary
-    logger.info("\n=== LONGTAIL SCREENING RESULTS ===")
-    logger.info("Top 8 routing heads (longtail contexts):")
-    for i, (head, score) in enumerate(sorted_heads[:8]):
-        logger.info(f"{i + 1:2d}. {head}: {score:.6f}")
+        # ---------------------------
+        # 5. Statistical test (NEW)
+        # ---------------------------
+        print("Running statistical test on Gini coefficients...")
+        gini_pval = self.run_ttest(gini_rare, gini_common)
+        self.results["phase1"]["gini_pval"] = gini_pval
 
-    logger.info("\nBottom 3 heads for comparison:")
-    for head, score in sorted_heads[-3:]:
-        logger.info(f"    {head}: {score:.6f}")
-
-    # Prepare results
-    results = {
-        "head_influence_scores": influence_scores,
-        "top_candidates": top_candidates,
-        "screening_metadata": {
-            "n_heads_screened": len(analyzer.target_heads),
-            "n_plateau_neurons": len(analyzer.plateau_neurons),
-            "sample_size_per_head": 300,
-            "total_contexts_processed": len(analyzer.target_heads) * 300,
-            "longtail_threshold": 0.001,
-            "longtail_contexts_available": len(analyzer.filtered_entropy_df),
-            "original_contexts_total": len(data_bundle["entropy_df"]),
-            "longtail_filtering_ratio": len(analyzer.filtered_entropy_df) / len(data_bundle["entropy_df"]),
-            "model_checkpoint": 143000,
-            "target_layers": [3, 4, 5],
-        },
-    }
-
-    out_dir = settings.PATH.attention_dir / f"longtail_50/{model_name}/143000/500"
-    out_dir.mkdir(parents=True, exist_ok=True)
-    # Save for Phase 2
-    with open(out_dir / f"head_{token_type}.pkl", "wb") as f:
-        pickle.dump(results, f)
-
-    logger.info(f"\nPhase 1 complete. Results saved to {out_dir}")
-    logger.info(f"Top routing heads (longtail-specific): {top_candidates}")
-
-    return results
+        # ---------------------------
+        # 6. Report summary
+        # ---------------------------
+        print("Phase 1 completed.")
+        print(f"Activation correlation: {correlation:.3f}")
+        print(f"Gini (rare): {gini_rare:.3f}, Gini (common): {gini_common:.3f}, p = {gini_pval:.3f}")
 
 
 def main():
     """Main entry point that handles both CLI args and Hydra config."""
     # Parse command line arguments
     args = parse_args()
-    run_phase1_longtail_screening(token_type=args.token_type, model_name=args.model_name)
+    run_phase1_longtail_screening()
 
 
 if __name__ == "__main__":

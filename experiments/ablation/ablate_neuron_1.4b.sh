@@ -20,5 +20,5 @@ INTERVAL=1
 START=138
 
 # Run the script with the appropriate configuration
-python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --start $START --resume --last_N_step 3
+python $SCRIPT_ROOT/ablate_neuron.py --interval $INTERVAL --config_name $CONFIG_NAME --start $START --resume --last_N_step 1
 

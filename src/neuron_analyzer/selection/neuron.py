@@ -91,7 +91,7 @@ class NeuronSelector:
                 final_df = final_df[(final_df["freq"] <= max_freq) & (final_df["freq"] >= min_freq)]
             if "common" in self.sel_freq:
                 logger.info("Filtering by common token freq")
-                final_df = final_df[final_df["freq"] > (max_freq * 0.99)]
+                final_df = final_df[final_df["freq"] > max_freq]
             logger.info(f"{final_df.shape[0]} rows after filtering.")
         return final_df
 
