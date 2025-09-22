@@ -344,12 +344,12 @@ def extract_tail_threshold(stats: dict):
     info = stats["threshold_info"]
     min_freq = (
         info.get("min", {})
-        .get("proportion", {})
+        .get("percentile", {})
         .get("frequency", info.get("min", {}).get("elbow", {}).get("probability", None))
     )
     max_freq = (
         info.get("max", {})
-        .get("proportion", {})
+        .get("percentile", {})
         .get("frequency", info.get("max", {}).get("elbow", {}).get("probability", None))
     )
     return min_freq, max_freq

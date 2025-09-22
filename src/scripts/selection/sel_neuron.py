@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 import argparse
 import logging
+import sys
 from pathlib import Path
 
 import pandas as pd
@@ -8,7 +9,7 @@ import torch
 
 from neuron_analyzer import settings
 from neuron_analyzer.ablation.ablation import NeuronAblationProcessor
-from neuron_analyzer.analysis.freq import load_unigram_analyzer
+from neuron_analyzer.analysis.freq import config_freq_path, load_unigram_analyzer
 from neuron_analyzer.load_util import load_unigram
 from neuron_analyzer.manual_label import ModelConfig
 from neuron_analyzer.selection.neuron import NeuronSelector
@@ -19,56 +20,43 @@ logger = logging.getLogger(__name__)
 
 
 def parse_args() -> argparse.Namespace:
-    """Parse command line arguments."""
+    """Parse command line arguments for neuron selection pipeline."""
     parser = argparse.ArgumentParser(
-        description="Select neurons based on single neuron heuristics only on ceonverged step."
+        description="Select neurons based on single neuron heuristics at a converged step."
     )
 
+    # Model and tokenizer
     parser.add_argument("-m", "--model", type=str, default="EleutherAI/pythia-1B-deduped", help="Target model name")
+    # Neuron selection heuristics
+    parser.add_argument("--vector", type=str, default="longtail_0_50", help="boost or suppress long-tail probability")
     parser.add_argument(
-        "--vector",
-        type=str,
-        default="longtail_0_50",
-        help="boost or suppress long-tail prob",
+        "--effect", type=str, choices=["boost", "suppress"], default="boost", help="Effect on long-tail probability"
     )
     parser.add_argument(
-        "--effect", type=str, choices=["boost", "suppress"], default="boost", help="boost or suppress long-tail prob"
+        "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="Heuristic besides mediation effect"
     )
-    parser.add_argument(
-        "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
-    )
-    parser.add_argument(
-        "--sel_freq",
-        type=str,
-        choices=["longtail", "common", None],
-        default="longtail",
-        help="freq by common or not",
-    )
+    parser.add_argument("--sel_freq", type=bool, default=True, help="Whether to filter by frequency")
 
-    parser.add_argument(
-        "--max_freq",
-        default=15,
-        help="the proportion of selected max freq",
-    )
-    parser.add_argument(
-        "--min_freq",
-        default=100,
-        help="the proportion of selected min freq",
-    )
+    # Frequency / percentile thresholds
+    parser.add_argument("--max_rank_pct", default=85, type=int, help="Upper bound of selected rank percentile (0-100)")
+    parser.add_argument("--min_rank_pct", default=100, type=int, help="Lower bound of selected rank percentile (0-100)")
 
+    # Step mode and selection options
     parser.add_argument(
-        "--step_mode", type=str, choices=["single", "multi"], default="multi", help="whether to compute multi steps"
+        "--step_mode", type=str, choices=["single", "multi"], default="multi", help="Whether to compute multi steps"
     )
-    parser.add_argument("--sel_by_med", action="store_true", help="whether to select by mediation effect")
-    parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
-    parser.add_argument("--top_n", type=int, default=-1, help="The top n neurons to be selected")
-    parser.add_argument(
-        "--tokenizer_name", type=str, default="EleutherAI/pythia-410m-deduped", help="Unigram tokenizer name"
-    )
-    parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
-    parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
-    parser.add_argument("--seed", type=int, default=42, help="use_bos_only if enabled")
-    parser.add_argument("--window_size", type=int, default=2000, help="use_bos_only if enabled")
+    parser.add_argument("--sel_by_med", action="store_true", help="Whether to select by mediation effect")
+    parser.add_argument("--top_n", type=int, default=-1, help="The top N neurons to select")
+
+    # Debug and data options
+    parser.add_argument("--debug", action="store_true", help="Compute only the first 500 lines if enabled")
+    parser.add_argument("--data_range_end", type=int, default=500, help="End of the selected data range")
+
+    # Miscellaneous
+    parser.add_argument("--k", type=int, default=10, help="Number of neighbors (used in some computations)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
+    parser.add_argument("--window_size", type=int, default=2000, help="Window size for Zipf analysis")
+
     return parser.parse_args()
 
 
@@ -82,20 +70,17 @@ def set_path(args) -> Path:
     top_n_name = "all" if args.top_n == -1 else args.top_n
     filename = f"{args.data_range_end}_{top_n_name}.debug" if args.debug else f"{args.data_range_end}_{top_n_name}.csv"
     save_path = (
-        settings.PATH.result_dir
-        / "selection"
+        settings.PATH.neuron_dir
         / "neuron"
-        / f"{args.min_freq}_{args.max_freq}"
+        / f"{args.max_rank_pct}_{args.min_rank_pct}"
         / args.model
         / args.heuristic
-        / args.sel_freq
         / args.effect
         / filename
     )
     save_path.parent.mkdir(parents=True, exist_ok=True)
 
-    threshold_path = settings.PATH.freq_dir / args.model / f"{args.min_freq}_{args.max_freq}.json"
-    threshold_path.parent.mkdir(parents=True, exist_ok=True)
+    threshold_path = config_freq_path(args)
     return save_path, threshold_path
 
 
@@ -158,11 +143,12 @@ def main() -> None:
     save_path, threshold_path = set_path(args)
     if save_path.is_file():
         logger.info(f"{save_path} already exists, skip!")
+        sys.exit(0)
 
     # generate freq file
     abalation_processor = NeuronAblationProcessor(args=args, device=device, logger=logger)
     unigram_distrib, _ = load_unigram(model_name=args.model, device=device, dtype=settings.get_dtype(args.model))
-    min_freq, max_freq = abalation_processor.get_tail_threshold_stat(unigram_distrib)
+    abalation_processor.get_tail_threshold_stat(unigram_distrib)
 
     if args.step_mode == "single":
         filter_single(args, abl_path, save_path, threshold_path)

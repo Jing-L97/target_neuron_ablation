@@ -5,9 +5,13 @@ class ModelConfig:
     def __init__(self):
         # Manual step mode config
         self.step_dict = {
+            "gpt2": "single",
             "gpt2-medium": "single",
             "gpt2-large": "single",
             "gpt2-xl": "single",
+            "EleutherAI/pythia-70m-deduped": "multi",
+            "EleutherAI/pythia-160m-deduped": "multi",
+            "EleutherAI/pythia-410m-deduped": "multi",
             "EleutherAI/pythia-1B-deduped": "multi",
             "EleutherAI/pythia-1.4B-deduped": "multi",
             "EleutherAI/pythia-2.8B-deduped": "multi",
@@ -27,9 +31,13 @@ class ModelConfig:
 
         # Manual vector annotation
         self.vector_dict = {
+            "gpt2": "longtail_50",
             "gpt2-medium": "longtail_0_50",
             "gpt2-large": "longtail_50",
             "gpt2-xl": "longtail_50",
+            "EleutherAI/pythia-70m-deduped": "longtail_50",
+            "EleutherAI/pythia-160m-deduped": "longtail_0_50",
+            "EleutherAI/pythia-410m-deduped": "longtail_50",
             "EleutherAI/pythia-1B-deduped": "longtail_0_50",
             "EleutherAI/pythia-1.4B-deduped": "longtail_0_50",
             "EleutherAI/pythia-2.8B-deduped": "longtail_0_50",

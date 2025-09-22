@@ -18,7 +18,7 @@ from neuron_analyzer.ablation.abl_util import (
     filter_entropy_activation_df,
     get_entropy_activation_df,
 )
-from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer
+from neuron_analyzer.analysis.freq import ZipfThresholdAnalyzer, config_freq_path
 from neuron_analyzer.load_util import JsonProcessor
 from neuron_analyzer.model_util import ModelHandler
 
@@ -49,8 +49,8 @@ class NeuronAblationProcessor:
         self.seed: int = args.seed if args.seed else 42
         self.seed: int = args.seed if args.seed else 42
         self.device: str = device
-        self.ablation_mode: str = f"longtail_{self.args.min_freq}_{self.args.max_freq}"
-        self.threshold_path: Path = self._config_freq_path()
+        self.ablation_mode: str = f"longtail_{self.args.min_rank_pct}_{self.args.max_rank_pct}"
+        self.threshold_path: Path = config_freq_path(args)
         # Initialize random seeds
         torch.manual_seed(self.seed)
         np.random.seed(self.seed)
@@ -66,13 +66,13 @@ class NeuronAblationProcessor:
         analyzer = ZipfThresholdAnalyzer(
             unigram_distrib=unigram_distrib,
             window_size=window_size,
-            min_freq=self.args.min_freq,
-            max_freq=self.args.max_freq,
+            min_rank_pct=self.args.min_rank_pct,
+            max_rank_pct=self.args.max_rank_pct,
         )
-        min_freq, max_freq, threshold_stats = analyzer.get_tail_threshold()
+        min_rank_pct, max_rank_pct, threshold_stats = analyzer.get_tail_threshold()
         JsonProcessor.save_json(threshold_stats, self.threshold_path)
         self.logger.info(f"Saved threshold statistics to {self.threshold_path}")
-        return min_freq, max_freq
+        return min_rank_pct, max_rank_pct
 
     def load_entropy_df(self, step) -> pd.DataFrame:
         """Load entropy df if needed."""
@@ -202,16 +202,10 @@ class NeuronAblationProcessor:
 
     def get_save_dir(self):
         """Get the savepath based on current configurations."""
-        ablation_name = f"longtail_{self.args.min_freq}_{self.args.max_freq}"
+        ablation_name = f"longtail_{self.args.min_rank_pct}_{self.args.max_rank_pct}"
         base_save_dir = settings.PATH.result_dir / self.args.output_dir / ablation_name / self.args.model
         base_save_dir.mkdir(parents=True, exist_ok=True)
         return base_save_dir
-
-    def _config_freq_path(self):
-        """Get the savepath based on current configurations."""
-        threshold_path = settings.PATH.freq_dir / self.args.model / f"{self.args.min_freq}_{self.args.max_freq}.json"
-        threshold_path.parent.mkdir(parents=True, exist_ok=True)
-        return threshold_path
 
     def _config_entropy_path(self, step) -> Path:
         """Configure entorpy df path based on current settings."""

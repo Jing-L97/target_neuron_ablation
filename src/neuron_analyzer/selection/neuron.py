@@ -85,14 +85,9 @@ class NeuronSelector:
             min_freq, max_freq = load_tail_threshold_stat(self.threshold_path)
             logger.info(f"df stats: min: {final_df['freq'].min()}, max: {final_df['freq'].max()}")
             logger.info(f"min_freq: {min_freq}, max_freq: {max_freq}")
-
-            if "longtail" in self.sel_freq:
-                logger.info("Filtering by longtail freq")
-                final_df = final_df[(final_df["freq"] <= max_freq) & (final_df["freq"] >= min_freq)]
-            if "common" in self.sel_freq:
-                logger.info("Filtering by common token freq")
-                final_df = final_df[final_df["freq"] > max_freq]
+            final_df = final_df[(final_df["freq"] <= max_freq) & (final_df["freq"] >= min_freq)]
             logger.info(f"{final_df.shape[0]} rows after filtering.")
+
         return final_df
 
     def _get_freq(self, token_id: int) -> float:
@@ -180,7 +175,7 @@ class NeuronSelector:
                 "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
             }
         else:
-            ranked_neurons = final_df.sort_values(by="abs_delta_loss_post_ablation", ascending=False)
+            ranked_neurons = final_df.sort_values(by="delta_loss_post_ablation", ascending=False)
             # Define header dictionary
             header_dict = {
                 "component_name": "top_neurons",

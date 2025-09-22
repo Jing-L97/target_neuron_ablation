@@ -8,7 +8,8 @@ import torch
 from scipy import stats
 from transformers import AutoTokenizer
 
-from neuron_analyzer.load_util import extract_tail_threshold, load_unigram
+from neuron_analyzer import settings
+from neuron_analyzer.load_util import load_unigram
 from neuron_analyzer.settings import get_dtype
 
 os.environ["TRANSFORMERS_VERBOSITY"] = "error"  # Only show errors, not warnings
@@ -27,8 +28,8 @@ class ZipfThresholdAnalyzer:
         unigram_distrib,
         window_size: int = 2000,
         head_portion: float = 0.2,
-        min_freq: t.Any = None,  # percentage or "elbow"
-        max_freq: t.Any = None,  # percentage or "elbow"
+        min_rank_pct: t.Any = None,  # percentage (0-100) or "elbow"
+        max_rank_pct: t.Any = None,  # percentage (0-100) or "elbow"
         residual_significance_threshold: float = 1.5,
         min_tokens_threshold: int = 10,
     ):
@@ -44,8 +45,8 @@ class ZipfThresholdAnalyzer:
 
         self.unigram_distrib = unigram_distrib
         self.head_portion = head_portion
-        self.min_freq_input = parse_value(min_freq)
-        self.max_freq_input = parse_value(max_freq)
+        self.min_rank_pct_input = parse_value(min_rank_pct)
+        self.max_rank_pct_input = parse_value(max_rank_pct)
         self.residual_significance_threshold = residual_significance_threshold
         self.min_tokens_threshold = min_tokens_threshold
         self.window_size = window_size
@@ -64,7 +65,7 @@ class ZipfThresholdAnalyzer:
             unigram_probs = np.asarray(self.unigram_distrib)
 
         unigram_probs = unigram_probs / unigram_probs.sum()
-        sorted_indices = np.argsort(-unigram_probs)
+        sorted_indices = np.argsort(-unigram_probs)  # descending order
         sorted_probs = unigram_probs[sorted_indices]
         ranks = np.arange(1, len(sorted_probs) + 1)
 
@@ -79,7 +80,7 @@ class ZipfThresholdAnalyzer:
         log_ranks: np.ndarray,
         log_probs: np.ndarray,
         threshold_multiplier: float = 3.0,
-        min_rank_percentile: float = 0.5,
+        min_rank_pct: float = 0.5,
     ) -> dict[str, t.Any]:
         """Find the elbow point in the log-log Zipf distribution."""
         if len(log_ranks) < self.window_size * 3:
@@ -87,7 +88,7 @@ class ZipfThresholdAnalyzer:
 
         derivatives = []
         indices = []
-        min_rank_idx = max(int(len(log_ranks) * min_rank_percentile), self.window_size * 2)
+        min_rank_idx = max(int(len(log_ranks) * min_rank_pct), self.window_size * 2)
 
         for i in range(min_rank_idx, len(log_ranks) - self.window_size):
             window_fit = stats.linregress(log_ranks[i : i + self.window_size], log_probs[i : i + self.window_size])
@@ -131,7 +132,7 @@ class ZipfThresholdAnalyzer:
         return {"frequency": freq, "rank": ranks[idx], "index": sorted_indices[idx]}
 
     def analyze_zipf_anomalies(self, verbose: bool = False) -> dict[str, t.Any]:
-        """Analyze Zipf distribution and handle both proportion and elbow inputs."""
+        """Analyze Zipf distribution and handle both percentile and elbow thresholds."""
         sorted_probs, ranks, sorted_indices = self._preprocess_distribution()
 
         if len(sorted_probs) < self.min_tokens_threshold:
@@ -139,6 +140,7 @@ class ZipfThresholdAnalyzer:
                 f"Insufficient tokens. Need at least {self.min_tokens_threshold}, found {len(sorted_probs)}"
             )
 
+        # Fit the head of the Zipf distribution
         head_cutoff = max(2, int(len(sorted_probs) * self.head_portion))
         log_ranks = np.log(ranks)
         log_probs = np.log(sorted_probs)
@@ -150,35 +152,21 @@ class ZipfThresholdAnalyzer:
         # Compute elbow once for integration
         elbow_info = self.find_elbow_point(log_ranks, log_probs)
 
-        def build_threshold_data(freq_input):
-            """Build a threshold dict containing both proportion and elbow info if applicable."""
+        def build_threshold_data(threshold_input):
+            """Return a dictionary containing either percentile or elbow info."""
             data = {}
-            if freq_input == "elbow":
+            if threshold_input == "elbow":
                 data["elbow"] = elbow_info
-            elif freq_input is not None:
-                prop = float(freq_input) / 100.0
-                data["proportion"] = self.find_prop_point(prop)
+            elif threshold_input is not None:
+                prop = float(threshold_input) / 100.0
+                data["percentile"] = self.find_prop_point(prop)
             else:
-                logger.info("Wrong freq info! Existing")
+                logger.info("Threshold input missing!")
                 sys.exit()
             return data
 
-        min_data = build_threshold_data(self.min_freq_input)
-        max_data = build_threshold_data(self.max_freq_input)
-
-        # Ensure min <= max based on main frequency value (proportion if exists, else elbow)
-        def get_main_value(d):
-            if "proportion" in d:
-                return d["proportion"]["frequency"]
-            if "elbow" in d:
-                return d["elbow"]["probability"]
-            return None
-
-        min_val = get_main_value(min_data)
-        max_val = get_main_value(max_data)
-        if min_val is not None and max_val is not None and min_val > max_val:
-            logger.info(f"Reversing max {max_data} with min {min_data}")
-            min_data, max_data = max_data, min_data
+        min_data = build_threshold_data(self.min_rank_pct_input)
+        max_data = build_threshold_data(self.max_rank_pct_input)
 
         threshold_info["min"] = min_data
         threshold_info["max"] = max_data
@@ -188,8 +176,29 @@ class ZipfThresholdAnalyzer:
 
     def get_tail_threshold(self) -> tuple[float | None, float | None, dict | None]:
         stats = self.analyze_zipf_anomalies(verbose=False)
-        min_freq, max_freq = extract_tail_threshold(stats)
+        min_freq, max_freq = self.extract_tail_threshold(stats)
         return min_freq, max_freq, stats
+
+    def extract_tail_threshold(self, stats: dict) -> tuple[float | None, float | None]:
+        """Helper to get numeric frequency thresholds from analyze_zipf_anomalies output."""
+
+        def get_value(d):
+            if "percentile" in d:
+                return d["percentile"]["frequency"]
+            if "elbow" in d:
+                return d["elbow"]["probability"]
+            return None
+
+        min_val = get_value(stats["threshold_info"]["min"])
+        max_val = get_value(stats["threshold_info"]["max"])
+        return min_val, max_val
+
+
+def config_freq_path(args):
+    """Get the savepath based on current configurations."""
+    threshold_path = settings.PATH.freq_dir / args.model / f"{args.max_rank_pct}_{args.min_rank_pct}.json"
+    threshold_path.parent.mkdir(parents=True, exist_ok=True)
+    return threshold_path
 
 
 #######################################################
