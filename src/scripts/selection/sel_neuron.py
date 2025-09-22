@@ -30,7 +30,11 @@ def parse_args() -> argparse.Namespace:
     # Neuron selection heuristics
     parser.add_argument("--vector", type=str, default="longtail_0_50", help="boost or suppress long-tail probability")
     parser.add_argument(
-        "--effect", type=str, choices=["boost", "suppress"], default="boost", help="Effect on long-tail probability"
+        "--effect",
+        type=str,
+        choices=["boost", "suppress", "all"],
+        default="all",
+        help="Effect on long-tail probability",
     )
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="Heuristic besides mediation effect"

@@ -100,35 +100,16 @@ class NeuronSelector:
 
     def _prepare_dataframe(self, final_df: pd.DataFrame) -> pd.DataFrame | None:
         """Common preprocessing for the DataFrame."""
-        # Add aligned deltas
-        final_df["aligned_boost_delta_loss"] = final_df["delta_loss_post_ablation"].where(
-            final_df["delta_loss_post_ablation"] > 0, np.nan
-        )
-        final_df["aligned_suppress_delta_loss"] = final_df["delta_loss_post_ablation"].where(
-            final_df["delta_loss_post_ablation"] < 0, np.nan
-        )
-
-        # Group by neuron idx and compute averages
-        agg_df = (
-            final_df.groupby("component_name")
-            .agg(
-                {
-                    "delta_loss_post_ablation": "mean",
-                    "delta_loss_post_ablation_with_frozen_unigram": "mean",
-                    "abs_delta_loss_post_ablation": "mean",
-                    "abs_delta_loss_post_ablation_with_frozen_unigram": "mean",
-                    "aligned_boost_delta_loss": "mean",
-                    "aligned_suppress_delta_loss": "mean",
-                }
-            )
-            .reset_index()
-        )
-
+        # Group by neuron idx
+        final_df = final_df.groupby("component_name").mean(numeric_only=True).reset_index()
+        # Calculate the mediation effect if required
         if self.sel_by_med:
-            agg_df["mediation_effect"] = (
-                1 - agg_df["abs_delta_loss_post_ablation_with_frozen_unigram"] / agg_df["abs_delta_loss_post_ablation"]
+            final_df["mediation_effect"] = (
+                1
+                - final_df["abs_delta_loss_post_ablation_with_frozen_unigram"]
+                / final_df["abs_delta_loss_post_ablation"]
             )
-        return agg_df
+        return final_df
 
     def select_by_KL(self, effect: str, final_df: pd.DataFrame) -> pd.DataFrame | None:
         """Select neurons by mediation effect and KL."""
@@ -173,30 +154,34 @@ class NeuronSelector:
 
     def select_by_prob(self, effect: str, final_df: pd.DataFrame) -> pd.DataFrame | None:
         """Select neurons by mediation effect and prob variations."""
+        # Apply effect filtering
         if effect == "suppress":
+            # Filter the neurons that push towards the unigram freq
             final_df = final_df[final_df["delta_loss_post_ablation"] < 0]
-            score_col = "aligned_suppress_delta_loss"
         elif effect == "boost":
+            # Filter the neurons that push away from the unigram freq
             final_df = final_df[final_df["delta_loss_post_ablation"] > 0]
-            score_col = "aligned_boost_delta_loss"
-        else:
-            return None
-
+        elif effect == "all":
+            pass
+        # Rank neurons
         if self.sel_by_med:
-            ranked_neurons = final_df.sort_values(by=["mediation_effect", score_col], ascending=[False, False])
+            ranked_neurons = final_df.sort_values(
+                by=["mediation_effect", "abs_delta_loss_post_ablation_with_frozen_unigram"], ascending=[False, False]
+            )
+            # Define header dictionary
             header_dict = {
                 "component_name": "top_neurons",
                 "mediation_effect": "med_effect",
-                score_col: "aligned_delta_loss",
+                "delta_loss_post_ablation": "delta_loss_post",
                 "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
             }
         else:
-            ranked_neurons = final_df.sort_values(by=score_col, ascending=False)
+            ranked_neurons = final_df.sort_values(by="abs_delta_loss_post_ablation", ascending=False)
+            # Define header dictionary
             header_dict = {
                 "component_name": "top_neurons",
-                score_col: "aligned_delta_loss",
-                "delta_loss_post_ablation": "raw_delta_loss",
-                "abs_delta_loss_post_ablation": "abs_delta_loss",
+                "delta_loss_post_ablation": "delta_loss_post",
+                "abs_delta_loss_post_ablation": "abs_delta_loss_post_ablation",
                 "delta_loss_post_ablation_with_frozen_unigram": "delta_loss_post_frozen",
             }
 
