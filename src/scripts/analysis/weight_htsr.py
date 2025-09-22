@@ -15,6 +15,7 @@ from neuron_analyzer.analysis.geometry_util import (
 from neuron_analyzer.analysis.htsr import WeightSpaceHeavyTailedAnalyzer
 from neuron_analyzer.eval.surprisal import StepSurprisalExtractor
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
+from neuron_analyzer.manual_label import ModelConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -43,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step_mode", type=str, choices=["single", "multi"], default="multi", help="whether to compute multi steps"
     )
+    parser.add_argument("--regime", action="store_true", help="whether to provide regime")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--load_stat", action="store_true", help="Whether to load from existing index")
     parser.add_argument("--exclude_random", action="store_true", help="Whether to exclude existing random")
@@ -197,6 +199,10 @@ def analyze_single(args, abl_path, save_path, neuron_dir, sel_dir, device, use_m
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
+    # get the top_n name
+    configurator = ModelConfig()
+    args = configurator.config_args(args)
+
     device, use_mixed_precision = get_device()
     if args.exclude_random:
         logger.info("Exclude the existing random neurons")

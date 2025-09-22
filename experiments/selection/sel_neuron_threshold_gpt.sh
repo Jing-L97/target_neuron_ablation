@@ -21,8 +21,8 @@ MODELS=(
     "gpt2-medium"
 
 )
-MAX_FREQS=(50 45 40 35 30 25 20 15 10 5)
-MIN_FREQ=0
+MAX_FREQS=(15)
+MIN_FREQ=100
 
 # Total combinations
 TOTAL_COMBINATIONS=$((${#EFFECTS[@]} * ${#VECTORS[@]} * ${#TOP_NS[@]} * ${#MODELS[@]} * ${#MAX_FREQS[@]}))

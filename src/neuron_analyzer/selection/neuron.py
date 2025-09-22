@@ -83,11 +83,15 @@ class NeuronSelector:
             logger.info(f"{final_df.shape[0]} rows before filtering")
             # filter by the threshold
             min_freq, max_freq = load_tail_threshold_stat(self.threshold_path)
+            logger.info(f"df stats: min: {final_df['freq'].min()}, max: {final_df['freq'].max()}")
+            logger.info(f"min_freq: {min_freq}, max_freq: {max_freq}")
 
             if "longtail" in self.sel_freq:
+                logger.info("Filtering by longtail freq")
                 final_df = final_df[(final_df["freq"] <= max_freq) & (final_df["freq"] >= min_freq)]
-            else:
-                final_df = final_df[final_df["freq"] > max_freq]
+            if "common" in self.sel_freq:
+                logger.info("Filtering by common token freq")
+                final_df = final_df[final_df["freq"] > (max_freq * 0.99)]
             logger.info(f"{final_df.shape[0]} rows after filtering.")
         return final_df
 

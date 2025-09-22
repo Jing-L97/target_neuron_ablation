@@ -9,6 +9,7 @@ from neuron_analyzer import settings
 from neuron_analyzer.analysis.a_modularity import AnalysisConfig, run_all_analyses
 from neuron_analyzer.analysis.geometry_util import get_device, get_group_name, load_activation_indices
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
+from neuron_analyzer.manual_label import ModelConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -39,6 +40,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--step_mode", type=str, choices=["single", "multi"], default="single", help="whether to compute multi steps"
     )
+    parser.add_argument("--regime", action="store_true", help="whether to provide regime")
     parser.add_argument("--sel_longtail", type=bool, default=True, help="whether to filter by longtail token")
     parser.add_argument("--sel_by_med", type=bool, default=False, help="whether to select by mediation effect")
     parser.add_argument("--load_stat", action="store_true", help="Whether to load from existing index")
@@ -244,6 +246,10 @@ def analyze_multi(
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
+    # get the top_n name
+    configurator = ModelConfig()
+    args = configurator.config_args(args)
+
     device, use_mixed_precision = get_device()
 
     if args.exclude_random:

@@ -7,7 +7,7 @@ from neuron_analyzer import settings
 from neuron_analyzer.analysis.a_geometry import ActivationGeometricAnalyzer
 from neuron_analyzer.analysis.geometry_util import get_device, get_group_name, load_activation_indices
 from neuron_analyzer.load_util import JsonProcessor, StepPathProcessor
-from neuron_analyzer.manual_label import get_plateau
+from neuron_analyzer.manual_label import ModelConfig
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -44,7 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--resume", action="store_true", help="Check existing file and resume when setting this")
     parser.add_argument("--top_n", type=int, default=50, help="The top n neurons to be selected")
-    parser.add_argument("--max_freq", default=15, help="the proportion of selected max freq")
+    parser.add_argument("--max_freq", default=1, help="the proportion of selected max freq")
     parser.add_argument("--min_freq", default=0, help="the proportion of selected min freq")
     parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
@@ -67,20 +67,13 @@ def configure_path(args):
         if args.exclude_random
         else f"{args.data_range_end}_{args.top_n}{filename_suffix}"
     )
-    # TODO: we revise this part for baseline experiment
 
     save_path = (
-        settings.PATH.direction_dir / group_name / "activation" / args.vector / args.model / save_heuristic / filename
+        settings.PATH.direction_dir / group_name / "activation" / args.sel_freq / args.model / save_heuristic / filename
     )
+
     save_path.parent.mkdir(parents=True, exist_ok=True)
     abl_path = settings.PATH.ablation_dir / args.vector / args.model
-
-    # if args.sel_freq == "common":  # select from all of the tokens
-    #     threshold_path = settings.PATH.ablation_dir / "longtail_50" / args.model
-    #     abl_path = settings.PATH.ablation_dir / "mean" / args.model
-    # else:
-    #     threshold_path = None
-    #     abl_path = settings.PATH.ablation_dir / args.vector / args.model
 
     threshold_path = settings.PATH.freq_dir / args.model / f"{args.min_freq}_{args.max_freq}.json"
     threshold_path.parent.mkdir(parents=True, exist_ok=True)
@@ -190,7 +183,8 @@ def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
     # get the top_n name
-    args = get_plateau(args)
+    configurator = ModelConfig()
+    args = configurator.config_args(args)
 
     device, use_mixed_precision = get_device()
     if args.exclude_random:

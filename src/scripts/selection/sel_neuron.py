@@ -10,6 +10,7 @@ from neuron_analyzer import settings
 from neuron_analyzer.ablation.ablation import NeuronAblationProcessor
 from neuron_analyzer.analysis.freq import load_unigram_analyzer
 from neuron_analyzer.load_util import load_unigram
+from neuron_analyzer.manual_label import ModelConfig
 from neuron_analyzer.selection.neuron import NeuronSelector
 
 # Setup logging
@@ -31,7 +32,7 @@ def parse_args() -> argparse.Namespace:
         help="boost or suppress long-tail prob",
     )
     parser.add_argument(
-        "--effect", type=str, choices=["boost", "suppress"], default="suppress", help="boost or suppress long-tail prob"
+        "--effect", type=str, choices=["boost", "suppress"], default="boost", help="boost or suppress long-tail prob"
     )
     parser.add_argument(
         "--heuristic", type=str, choices=["KL", "prob"], default="prob", help="heuristic besides mediation effect"
@@ -46,12 +47,12 @@ def parse_args() -> argparse.Namespace:
 
     parser.add_argument(
         "--max_freq",
-        default=20,
+        default=15,
         help="the proportion of selected max freq",
     )
     parser.add_argument(
         "--min_freq",
-        default="elbow",
+        default=100,
         help="the proportion of selected min freq",
     )
 
@@ -61,7 +62,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sel_by_med", action="store_true", help="whether to select by mediation effect")
     parser.add_argument("--debug", action="store_true", help="Compute the first 500 lines if enabled")
     parser.add_argument("--top_n", type=int, default=-1, help="The top n neurons to be selected")
-    parser.add_argument("--tokenizer_name", type=str, default="EleutherAI/pythia-410m", help="Unigram tokenizer name")
+    parser.add_argument(
+        "--tokenizer_name", type=str, default="EleutherAI/pythia-410m-deduped", help="Unigram tokenizer name"
+    )
     parser.add_argument("--data_range_end", type=int, default=500, help="the selected datarange")
     parser.add_argument("--k", type=int, default=10, help="use_bos_only if enabled")
     parser.add_argument("--seed", type=int, default=42, help="use_bos_only if enabled")
@@ -145,6 +148,10 @@ def filter_multi(args, neuron_df: pd.DataFrame, step: Path, abl_path: Path, thre
 def main() -> None:
     """Main function demonstrating usage."""
     args = parse_args()
+    # get the top_n name
+    configurator = ModelConfig()
+    args = configurator.config_args(args, top_n=False)
+
     # loop over different steps
     device: str = "cuda" if torch.cuda.is_available() else "cpu"
     abl_path = settings.PATH.result_dir / "ablations" / args.vector / args.model
