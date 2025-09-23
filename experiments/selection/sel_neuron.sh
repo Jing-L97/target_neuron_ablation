@@ -1,17 +1,17 @@
 #!/bin/bash
-#SBATCH --job-name=sel
+#SBATCH --job-name=sel_group
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=20G
 #SBATCH --time=30:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_%a.log
-#SBATCH --array=0-139%24  # adjust depending on total combinations
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_group_%a.log
+#SBATCH --array=0-279%24  # adjust depending on total combinations
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 
 # Define arrays
-EFFECTS=("boost")
+EFFECTS=("boost","suppress")
 
 TOP_NS=(-1)
 MODELS=("gpt2" 

@@ -27,7 +27,9 @@ class ModelConfig:
             "EleutherAI/pythia-2.8B-deduped": 50,
         }
 
-        self.regime_dict = {}
+        self.regime_dict = {
+            "gpt2-medium": 2.5,  # example structure
+        }
 
         # Manual vector annotation
         self.vector_dict = {

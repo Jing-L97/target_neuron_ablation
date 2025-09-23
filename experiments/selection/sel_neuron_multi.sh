@@ -1,45 +1,47 @@
 #!/bin/bash
-#SBATCH --job-name=sel_new
+#SBATCH --job-name=sel_multi
 #SBATCH --export=ALL
 #SBATCH --partition=cpu
 #SBATCH --cpus-per-task=2
 #SBATCH --mem=20G
 #SBATCH --time=30:00:00
-#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_new_%a.log
-#SBATCH --array=0-69%24  # adjust depending on total combinations
+#SBATCH --output=/scratch2/jliu/Generative_replay/neuron/logs/selection/sel_multi_%a.log
+#SBATCH --array=0-59%24  # adjust depending on total combinations
 
 SCRIPT_ROOT="/scratch2/jliu/Generative_replay/neuron/target_neuron_ablation/src/scripts/selection"
 
 # Define arrays
-EFFECTS=("boost")
+EFFECTS=("all")
 
 TOP_NS=(-1)
-MODELS=("gpt2" 
-        "gpt2-medium" 
-        "gpt2-large" 
-        "gpt2-xl"
-        "EleutherAI/pythia-1B-deduped"
-        "EleutherAI/pythia-1.4B-deduped"
-        "EleutherAI/pythia-2.8B-deduped"
+MODELS=(
+        "EleutherAI/pythia-70m-deduped"
+        "EleutherAI/pythia-160m-deduped"
+        "EleutherAI/pythia-410m-deduped"
 
         )
 
 
 # Define min/max percentile pairs as "MAX,MIN"
 PCT_PAIRS=(
-    
+    "0,5" 
+    "95,100"
     "0,10" 
     "90,100"
-    
+    "0,15" 
+    "85,100"
     "0,20" 
     "80,100"
-    
+    "0,25" 
+    "75,100"
     "0,30" 
     "70,100"
-    
+    "0,35" 
+    "65,100"
     "0,40" 
     "60,100"
-    
+    "0,45" 
+    "55,100"
     "0,50" 
     "50,100"
     )  # format: max_percentile,min_percentile
